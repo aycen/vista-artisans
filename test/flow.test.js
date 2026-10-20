@@ -254,7 +254,8 @@ test('full workflow', async () => {
   assert.equal(stat(page, 'payments'), '$2,500.25');
   assert.equal(stat(page, 'balance'), '$2,052.25');
   assert.equal(stat(page, 'profit'), '$2,552.50');
-  assert.match((await getPage('/')).body, /id="total-outstanding">\$2,052\.25</);
+  // Outstanding only counts completed jobs, so nothing yet
+  assert.match((await getPage('/')).body, /id="total-outstanding">\$0\.00</);
 
   // 8. Complete job (with start and end dates and notes); the end can't come before the start
   r = await post(`/jobs/${jobId}`, { status: 'completed', start_date: '2026-11-03', end_date: '2026-11-01', notes: 'Gate code 1234' });
@@ -354,17 +355,21 @@ test('full workflow', async () => {
   as('carol');
   page = (await getPage(`/jobs/${jobId}`)).body;
   assert.equal(stat(page, 'contract'), '$4,552.50');
-  // Home shows this month's revenue: payments dated in the current month (Pacific time by default).
+  // Home shows this month's revenue: contract value of jobs completed this month (Pacific time by default); payments don't change it.
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
   const monthRevenue = async () => (await getPage('/')).body.match(/id="month-revenue">([^<]+)</)[1];
   const expectedRevenue = async () => fmt(Number((await dbClient.query(
-    'SELECT coalesce(sum(amount_cents), 0) AS c FROM payments WHERE to_char(paid_on, \'YYYY-MM\') = $1', [today.slice(0, 7)])).rows[0].c));
+    `SELECT coalesce(sum(contract_cents), 0) AS c FROM jobs WHERE org_id = (SELECT org_id FROM jobs WHERE id = $2) AND status = 'completed'
+      AND to_char(completed_at AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM') = $1`, [today.slice(0, 7), jobId])).rows[0].c));
   assert.equal(await monthRevenue(), await expectedRevenue());
+  assert.match(await monthRevenue(), /^\$4,5/);
   const before = await monthRevenue();
   r = await post(`/jobs/${jobId}/payments`, { payment_amount: '52.25', paid_on: today }); assert.equal(r.status, 303);
   assert.equal(stat((await getPage(`/jobs/${jobId}`)).body, 'balance'), '$2,000.00');
-  assert.notEqual(await monthRevenue(), before); assert.equal(await monthRevenue(), await expectedRevenue());
-  assert.match(await monthRevenue(), /^\$\d/);
+  assert.equal(await monthRevenue(), before);
+  page = (await getPage('/')).body;
+  assert.match(page, /id="total-outstanding">\$2,000\.00</);
+  assert.match(page, /id="revenue-chart"/); assert.match(page, /aria-label="[A-Z][a-z]+ \d{4}: \$4,5/);
 
   assert.match((await getPage('/')).body, /id="revenue-growth"/);
 
@@ -920,7 +925,7 @@ test('estimate address and appointment on the calendar, job address, client tota
   const base = [['client_id', String(jane)], ['status', 'approved'], ['deposit_percent', '0'],
     ['item_desc', 'Door'], ['item_qty', '1'], ['item_price', '1800']];
   let r = await post('/estimates', [...base, ['visit_time', '09:30']]);
-  assert.equal(r.status, 422); assert.match(r.body, /Add a date for the appointment time/);
+  assert.equal(r.status, 422); assert.match(r.body, /Add a date for the estimate time/);
   r = await post('/estimates', [...base, ['visit_date', '2026-12-03'], ['visit_time', '25:00']]);
   assert.equal(r.status, 422); assert.match(r.body, /valid time/);
   // No address given: the client's address is used
@@ -935,7 +940,7 @@ test('estimate address and appointment on the calendar, job address, client tota
   page = (await getPage('/jobs?day=2026-12-03')).body;
   assert.match(page, /9:30 AM · Estimate: 77 Lake Rd, Round Rock TX[\s\S]*2:30 PM · Estimate: 12 Oak St, Austin TX/);
   assert.equal((await dbClient.query('SELECT project_name FROM estimates WHERE id = $1', [est])).rows[0].project_name, '77 Lake Rd, Round Rock TX', 'the address is the project name');
-  assert.match(page, /class="visit"/); assert.match(page, /Estimate appointment/);
+  assert.match(page, /class="visit"/); assert.match(page, />Estimate<\/span>/);
   assert.match((await getPage('/estimates/new?date=2026-12-03')).body, /value="2026-12-03"/);
   // The job takes the estimate's address, and it can be changed on the job
   const job = idFrom((await post(`/estimates/${est}/convert`, {})).location);

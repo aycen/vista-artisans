@@ -95,9 +95,9 @@ async function validateEstimate(db, org, params) {
     estimated_cost: f.estimated_cost ?? '', status: v.ESTIMATE_STATUS[f.status] ? f.status : 'draft',
     deposit_percent: f.deposit_percent ?? '0', address: f.address ?? '', visit_date: str(f.visit_date, 20), visit_time: str(f.visit_time, 10),
   };
-  if (values.visit_date && !isDate(values.visit_date)) errors.visit_date = 'Appointment date must be a valid date.';
-  if (values.visit_time && !/^([01]\d|2[0-3]):[0-5]\d(:00)?$/.test(values.visit_time)) errors.visit_time = 'Appointment time must be a valid time.';
-  else if (values.visit_time && !values.visit_date) errors.visit_date = 'Add a date for the appointment time.';
+  if (values.visit_date && !isDate(values.visit_date)) errors.visit_date = 'Estimate date must be a valid date.';
+  if (values.visit_time && !/^([01]\d|2[0-3]):[0-5]\d(:00)?$/.test(values.visit_time)) errors.visit_time = 'Estimate time must be a valid time.';
+  else if (values.visit_time && !values.visit_date) errors.visit_date = 'Add a date for the estimate time.';
   let newClient = null;
   if (values.client_id === 'new') {
     const c = validateClient(f, 'new_');
@@ -285,25 +285,33 @@ route('GET', '/', async (ctx) => {
   const activeJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.status IN ('not_started', 'in_progress')
     ORDER BY jobs.start_date NULLS LAST, jobs.id`, o)).map(withJobMath);
   const allJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ?`, o)).map(withJobMath);
-  const outstandingCents = allJobs.reduce((s, j) => s + Math.max(0, j.balance_cents), 0);
-  // Revenue this month = payments dated in the current calendar month (APP_TIMEZONE).
-  // Growth compares it with the same days of last month (1st through today's day number), so early-month numbers are fair.
+  // Revenue = the contract value of completed jobs, counted in the month each was completed (APP_TIMEZONE).
+  // Outstanding = what's still owed on completed jobs: their revenue minus payments received on them.
+  const outstandingCents = allJobs.filter((j) => j.status === 'completed').reduce((s, j) => s + Math.max(0, j.balance_cents), 0);
+  // Growth compares this month with the same days of last month (1st through today's day number), so early-month numbers are fair.
   // Gross profit this month = contract - expenses - payouts of jobs completed this month.
   const m = await db.get(`WITH d AS (SELECT (now() AT TIME ZONE ?)::date AS today),
-      m AS (SELECT today, date_trunc('month', today)::date AS start, (date_trunc('month', today) - interval '1 month')::date AS prev FROM d)
+      m AS (SELECT today, date_trunc('month', today)::date AS start, (date_trunc('month', today) - interval '1 month')::date AS prev FROM d),
+      c AS (SELECT t.contract_cents, t.contract_cents - t.expenses_cents - t.payouts_cents AS profit, (j.completed_at AT TIME ZONE ?)::date AS day
+        FROM job_totals t JOIN jobs j ON j.id = t.job_id WHERE j.org_id = ? AND j.status = 'completed' AND j.completed_at IS NOT NULL)
     SELECT to_char(m.start, 'FMMonth YYYY') AS label, to_char(m.prev, 'FMMonth') AS prev_label,
-      (SELECT coalesce(sum(amount_cents), 0) FROM payments WHERE org_id = ? AND paid_on >= m.start AND paid_on <= m.today) AS revenue,
-      (SELECT coalesce(sum(amount_cents), 0) FROM payments WHERE org_id = ? AND paid_on >= m.prev
-        AND paid_on <= least(m.prev + (m.today - m.start), m.start - 1)) AS prev_revenue,
-      (SELECT count(*) FROM jobs WHERE org_id = ? AND status = 'completed'
-        AND (completed_at AT TIME ZONE ?)::date >= m.start AND (completed_at AT TIME ZONE ?)::date <= m.today) AS completed_jobs,
-      (SELECT coalesce(sum(t.contract_cents - t.expenses_cents - t.payouts_cents), 0) FROM job_totals t JOIN jobs j ON j.id = t.job_id
-        WHERE j.org_id = ? AND j.status = 'completed'
-        AND (j.completed_at AT TIME ZONE ?)::date >= m.start AND (j.completed_at AT TIME ZONE ?)::date <= m.today) AS profit
-    FROM m`, APP_TIMEZONE, o, o, o, APP_TIMEZONE, APP_TIMEZONE, o, APP_TIMEZONE, APP_TIMEZONE);
+      (SELECT coalesce(sum(contract_cents), 0) FROM c WHERE day >= m.start AND day <= m.today) AS revenue,
+      (SELECT coalesce(sum(contract_cents), 0) FROM c WHERE day >= m.prev AND day <= least(m.prev + (m.today - m.start), m.start - 1)) AS prev_revenue,
+      (SELECT count(*) FROM c WHERE day >= m.start AND day <= m.today) AS completed_jobs,
+      (SELECT coalesce(sum(profit), 0) FROM c WHERE day >= m.start AND day <= m.today) AS profit
+    FROM m`, APP_TIMEZONE, APP_TIMEZONE, o);
   const month = { label: m.label, prevLabel: `same days of ${m.prev_label}`, revenueCents: m.revenue, prevCents: m.prev_revenue,
     completedJobs: Number(m.completed_jobs), profitCents: m.profit };
-  return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, month, flash: url.searchParams.get('msg') }));
+  // Revenue by month for the last 12 months; leading empty months are dropped (but at least 6 are shown).
+  const series = await db.all(`WITH d AS (SELECT date_trunc('month', (now() AT TIME ZONE ?)::date)::date AS cur),
+      ms AS (SELECT generate_series(cur - interval '11 months', cur, interval '1 month')::date AS start FROM d)
+    SELECT to_char(ms.start, 'Mon') AS label, to_char(ms.start, 'FMMonth YYYY') AS long_label, coalesce(sum(j.contract_cents), 0) AS cents
+    FROM ms LEFT JOIN jobs j ON j.org_id = ? AND j.status = 'completed'
+      AND date_trunc('month', j.completed_at AT TIME ZONE ?)::date = ms.start
+    GROUP BY ms.start ORDER BY ms.start`, APP_TIMEZONE, o, APP_TIMEZONE);
+  const first = series.findIndex((r) => Number(r.cents) > 0);
+  const revenueByMonth = series.slice(Math.min(first < 0 ? 6 : first, 6)).map((r) => ({ ...r, cents: Number(r.cents) }));
+  return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, month, revenueByMonth, flash: url.searchParams.get('msg') }));
 }, { worker: true });
 
 // Clients

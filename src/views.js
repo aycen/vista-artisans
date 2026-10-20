@@ -160,9 +160,10 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 
 input.invalid,select.invalid,textarea.invalid{border-color:var(--red)}
 .field-error{color:var(--red);font-size:13px;margin:6px 2px 0}
 .hint{color:var(--text-3);font-size:13px;margin:6px 2px 0}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 12px}
 .two>div{min-width:0}
-input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:block}
+.two>div{min-width:0}
+input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:none;appearance:none;display:block}
 @media (max-width:520px){.two.stack{grid-template-columns:1fr}}
 .form-actions{display:flex;gap:10px;margin:18px 0}
 .form-actions>*{flex:1}
@@ -188,6 +189,20 @@ input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:blo
 .totalbar .btn.ghost{color:var(--text-2);padding:0 8px}
 
 /* Growth badge */
+.chart{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 14px 10px;margin:14px 0}
+.chart-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px}
+.chart-head h2{margin:0;font-size:16px}
+.chart-read{text-align:right;line-height:1.2}.chart-read strong{display:block;font-size:17px;font-variant-numeric:tabular-nums}.chart-read span{font-size:12px;color:var(--text-3)}
+.chart-plot{position:relative;padding-left:40px}
+.chart-max,.chart-mid{position:absolute;left:0;font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums;transform:translateY(-50%)}
+.chart-max{top:0}.chart-mid{top:70px}
+.bars{display:flex;align-items:stretch;gap:2px;height:161px;background:linear-gradient(var(--line),var(--line)) 0 0/100% 1px no-repeat,linear-gradient(var(--line),var(--line)) 0 70px/100% 1px no-repeat}
+.bar-col{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:0;padding:0;border:0;background:transparent;box-shadow:none;min-height:0;cursor:pointer;color:var(--text-3)}
+.bar-col .bar{display:block;width:100%;max-width:28px;border-radius:4px 4px 0 0;background:var(--accent);opacity:.45;transition:opacity .15s}
+.bar-area{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
+.bar-col.on .bar,.bar-col:hover .bar{opacity:1}.bar-col.on .bar-l{color:var(--text);font-weight:700}
+.bar-l{font-size:11px;height:14px;line-height:14px;white-space:nowrap;border-top:1px solid var(--line);width:100%;text-align:center;padding-top:6px;box-sizing:content-box}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .delta{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:13px;font-weight:700;background:rgba(255,255,255,.2);color:#fff;margin-top:8px}
 .stat .delta{background:var(--gray-soft);color:var(--text-2);margin-top:6px;font-size:12px}
 .stat .delta.up{background:var(--green-soft);color:var(--green)} .stat .delta.down{background:var(--red-soft);color:var(--red)}
@@ -273,7 +288,7 @@ details.decline{margin:16px 2px}details.decline summary{color:var(--text-2);curs
 .opt-input{margin-top:8px;font-size:15px !important;padding:9px 12px !important}
 .plan-strip{display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none;padding:14px 16px}
 .plan-strip .main-t{flex:1;min-width:0}.plan-strip .t{font-weight:600}.plan-strip .s{color:var(--text-2);font-size:14px}
-.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;margin:6px 0 14px;max-width:340px}
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;margin:6px 0 14px}
 .seg a{flex:1;text-align:center;padding:9px 10px;border-radius:9px;color:var(--text-2);font-weight:600;text-decoration:none;font-size:15px}
 .seg a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 .seg .save{color:var(--green);font-size:12px;margin-left:4px}
@@ -854,26 +869,58 @@ function scheduleJobPage({ job }) {
 // Revenue growth: this month so far vs the same days of last month.
 function growthBadge(m) {
   if (!m.prevCents) {
-    return html`<span class="delta" id="revenue-growth">${m.revenueCents ? 'No payments by this point last month' : 'No payments yet'}</span>`;
+    return html`<span class="delta" id="revenue-growth">${m.revenueCents ? 'No jobs completed by this point last month' : 'No jobs completed yet'}</span>`;
   }
   const pct = ((m.revenueCents - m.prevCents) / m.prevCents) * 100;
   const shown = `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(Math.abs(pct) < 10 ? 1 : 0)}%`;
   return html`<span class="delta" id="revenue-growth">${pct >= 0 ? '▲' : '▼'} ${shown} vs ${m.prevLabel}</span>`;
 }
 
-function homePage({ openEstimates, activeJobs, outstandingCents, month, flash }) {
+// Bar chart of revenue per month (one series, so no legend). Tap or hover a bar to read its value.
+function revenueChart(rows) {
+  const max = Math.max(...rows.map((r) => r.cents));
+  const top = max > 0 ? niceCeil(max) : 100000;
+  const last = rows[rows.length - 1];
+  return html`<section class="chart" id="revenue-chart">
+    <div class="chart-head"><h2>Revenue by month</h2>
+      <div class="chart-read" aria-live="polite"><strong>${fmt(last.cents)}</strong><span>${last.long_label}</span></div></div>
+    <div class="chart-plot">
+      <span class="chart-max">${fmtShort(top)}</span><span class="chart-mid">${fmtShort(top / 2)}</span>
+      <div class="bars">${rows.map((r, i) => html`<button type="button" class="bar-col${i === rows.length - 1 ? ' on' : ''}" data-v="${fmt(r.cents)}" data-l="${r.long_label}" aria-label="${r.long_label}: ${fmt(r.cents)}">
+        <span class="bar-area"><span class="bar" style="height:${r.cents ? Math.max(2, (r.cents / top) * 100).toFixed(1) : 0}%"></span></span><span class="bar-l">${r.label}</span></button>`)}</div>
+    </div>
+    <table class="sr-only"><caption>Revenue by month</caption><tbody>${rows.map((r) => html`<tr><th scope="row">${r.long_label}</th><td>${fmt(r.cents)}</td></tr>`)}</tbody></table>
+    <script>${raw(`(function(){var c=document.getElementById('revenue-chart');var s=c.querySelector('.chart-read');
+      function show(b){c.querySelectorAll('.bar-col.on').forEach(function(x){x.classList.remove('on')});b.classList.add('on');
+        s.querySelector('strong').textContent=b.dataset.v;s.querySelector('span').textContent=b.dataset.l;}
+      c.querySelectorAll('.bar-col').forEach(function(b){b.addEventListener('click',function(){show(b)});b.addEventListener('mouseenter',function(){show(b)});b.addEventListener('focus',function(){show(b)});});})();`)}</script>
+  </section>`;
+}
+// Rounds up to 1, 2, 2.5 or 5 times a power of ten, so the gridlines land on round dollars.
+function niceCeil(cents) {
+  const p = 10 ** Math.floor(Math.log10(cents));
+  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((k) => k * p).find((v) => v >= cents);
+}
+function fmtShort(cents) {
+  const d = cents / 100;
+  if (d >= 1e6) return `$${+(d / 1e6).toFixed(1)}M`;
+  if (d >= 1e3) return `$${+(d / 1e3).toFixed(d >= 1e4 ? 0 : 1)}k`;
+  return `$${Math.round(d)}`;
+}
+
+function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueByMonth, flash }) {
   const profitClass = month.profitCents > 0 ? 'good' : month.profitCents < 0 ? 'bad' : '';
   return layout('Home', html`
   <div class="hero">
     <div class="k">Revenue · ${month.label}</div>
     <div class="v" id="month-revenue">${fmt(month.revenueCents)}</div>
-    <div class="s">Payments received this month</div>
+    <div class="s">Value of jobs completed this month</div>
     ${growthBadge(month)}
   </div>
   <div class="stats four">
     <div class="stat wide-sm ${profitClass}"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
       <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div></div>
-    <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Owed across all jobs</div></div>
+    <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Completed jobs, minus payments received</div></div>
     <div class="stat"><div class="k">Active jobs</div><div class="v">${activeJobs.length}</div></div>
     <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
   </div>
@@ -881,6 +928,7 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, flash })
     <a class="btn secondary" href="/clients/new">${icon('plus')}New Client</a>
     <a class="btn" href="/estimates/new">${icon('plus')}New Estimate</a>
   </div>
+  ${revenueByMonth?.length ? revenueChart(revenueByMonth) : ''}
   <h2>Active jobs</h2>${jobList(activeJobs, 'No active jobs.')}
   <h2>Open estimates</h2>${estimateList(openEstimates, 'No open estimates.')}`, { flash, pageTitle: 'Overview' });
 }
@@ -997,10 +1045,10 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
     <div class="form-card">
       ${input('address', 'Job address', values, errors, { autocomplete: 'street-address', hint: "This is also the project's name. Leave blank to use the client's address." })}
       <div class="two">
-        <div>${input('visit_date', 'Appointment date', values, errors, { type: 'date' })}</div>
+        <div>${input('visit_date', 'Estimate date', values, errors, { type: 'date' })}</div>
         <div>${input('visit_time', 'Time', values, errors, { type: 'time' })}</div>
       </div>
-      <div class="hint">Optional. Puts the estimate visit on your calendar.</div>
+      <div class="hint">Optional. Puts the estimate on your calendar.</div>
       <label for="status">Status</label>
       <select id="status" name="status">${options(ESTIMATE_STATUS, values.status)}</select>
     </div>
@@ -1190,7 +1238,7 @@ function estimatePage({ estimate, client, items, totalCents, job, options = [], 
   <div class="list"><a class="li" href="/clients/${client.id}"><span class="avatar">${client.name[0].toUpperCase()}</span>
     <div class="main-t"><div class="t">${client.name}</div><div class="s">${client.phone || client.email || ''}</div></div>${chev()}</a>
     ${estimate.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(estimate.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Job address</div><div class="t">${estimate.address}</div></div></a>` : ''}
-    ${estimate.visit_date ? html`<a class="li" href="/jobs?day=${estimate.visit_date}"><span class="icon-bubble">${icon('calendar')}</span><div class="main-t"><div class="s">Appointment</div><div class="t" id="appointment">${fmtDate(estimate.visit_date)}${estimate.visit_time ? ` at ${fmtTime(estimate.visit_time)}` : ''}</div></div>${chev()}</a>` : ''}
+    ${estimate.visit_date ? html`<a class="li" href="/jobs?day=${estimate.visit_date}"><span class="icon-bubble">${icon('calendar')}</span><div class="main-t"><div class="s">Estimate</div><div class="t" id="appointment">${fmtDate(estimate.visit_date)}${estimate.visit_time ? ` at ${fmtTime(estimate.visit_time)}` : ''}</div></div>${chev()}</a>` : ''}
   </div>
   <h2>Line items</h2>
   <div class="card flush"><table class="lines">
@@ -1394,7 +1442,7 @@ function jobsPage({ jobs, status, cal }) {
   const [y, m, d] = cal.day.split('-').map(Number);
   const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
   const legend = html`<div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
-    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate appointment</span></div>`;
+    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate</span></div>`;
   if (cal.view === 'week') {
     const items = (d) => [
       ...cal.weekVisits.filter((e) => e.visit_date === d).map((e) => ({ href: `/estimates/${e.id}`, cls: 'visit',
