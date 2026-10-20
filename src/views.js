@@ -216,6 +216,7 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .progress-presets{margin:4px 0 10px;padding:0;flex-wrap:wrap}.progress-presets .chip{min-height:36px;padding:6px 14px;box-shadow:none;background:var(--surface-2);color:var(--text);border:1px solid var(--line)}.progress-presets .chip.on{background:var(--accent);color:var(--on-accent)}
 .clock{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .clock .t{font-weight:700}.clock .s{font-size:13px;color:var(--text-2)}
+.legal{max-width:720px;margin:0 auto;padding:24px 4px 48px;line-height:1.6}.legal h1{margin:12px 0 4px}.legal h2{margin-top:26px}.legal ul{padding-left:20px}.legal li{margin:6px 0}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .delta{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:13px;font-weight:700;background:rgba(255,255,255,.2);color:#fff;margin-top:8px}
 .stat .delta{background:var(--gray-soft);color:var(--text-2);margin-top:6px;font-size:12px}
@@ -478,6 +479,66 @@ const options = (labels, selected) => Object.entries(labels).map(([k, l]) =>
   html`<option value="${k}" ${selected === k ? raw('selected') : ''}>${l}</option>`);
 const roleSelect = (name, selected, id) => html`<select name="${name}" ${id ? raw(`id="${id}"`) : ''}>${options(ROLES, selected)}</select>`;
 
+// ---------- Privacy policy and terms (public) ----------
+const LEGAL_UPDATED = 'October 20, 2026';
+const SUPPORT_EMAIL = 'support@keystonefsm.com';
+const LEGAL = {
+  privacy: { title: 'Privacy Policy', body: html`
+    <p>Keystone is business-management software for contractors and other service companies, operated by Vista Artisans ("we", "us"). This policy explains what we collect, why, and the choices you have.</p>
+    <h2>What we collect</h2>
+    <ul>
+      <li><strong>Account details:</strong> your email address and password (stored by our sign-in provider, never in plain text), and the optional name, phone number and ZIP code you add.</li>
+      <li><strong>Business records you enter:</strong> your company profile and logo, clients and their contact details, estimates, line items, signatures, jobs, schedules, crew assignments and pay, time clock entries, expenses, receipts, job photos, invoices and payments.</li>
+      <li><strong>Information from connected services:</strong> if you connect Stripe, we store your Stripe account ID and invoice and payment records; card and bank details are handled by Stripe and never reach us. If you connect QuickBooks Online, we store access tokens for your QuickBooks company, its name, and the IDs of the records we create there.</li>
+      <li><strong>Technical data:</strong> sign-in cookies, and basic server logs (such as IP address and pages requested) used to keep the service secure and working.</li>
+    </ul>
+    <h2>How we use it</h2>
+    <p>Only to provide and improve Keystone: to show your records to the people on your team, send estimates, invoices and reminder emails you set up, process subscription billing, sync to the accounting software you connect, keep accounts secure, and answer support requests. We don't sell personal information or use it for advertising.</p>
+    <h2>QuickBooks Online</h2>
+    <p>When you connect QuickBooks, Keystone creates customers, a service item, invoices and payments in the QuickBooks company you choose, and reads only what it needs to do that (your company name, existing customers with the same name, and an income account). It doesn't read or change your other QuickBooks data. You can disconnect at any time from Company profile in Keystone or from QuickBooks; we then delete the stored tokens. Records already sent stay in your QuickBooks.</p>
+    <h2>Who can see your data</h2>
+    <p>Each company's records are kept separate and are visible only to that company's team. Admins see everything in their company; crew see only the jobs assigned to them and their own pay. Your clients see only the estimates and invoices you send them.</p>
+    <p>We share data with the service providers that run Keystone, only as needed: Supabase (database and sign-in), Render (hosting), Stripe (payments and subscriptions), Resend (email delivery) and Intuit (QuickBooks, if you connect it). We may disclose information if the law requires it.</p>
+    <h2>Keeping and deleting data</h2>
+    <p>We keep your records while your company uses Keystone. To delete your account or your company's data, email us and we'll remove it within 30 days, except where we must keep records by law (for example, billing records).</p>
+    <h2>Security</h2>
+    <p>Data is sent over encrypted connections, access is limited by company and role in the database itself, and connection tokens can be read only by the Keystone server. No system is perfectly secure, so please use a strong, unique password.</p>
+    <h2>Children</h2>
+    <p>Keystone is for businesses and isn't meant for anyone under 18.</p>
+    <h2>Changes</h2>
+    <p>If we change this policy, we'll update the date above and, for significant changes, tell account admins by email or in the app.</p>` },
+  terms: { title: 'Terms of Use', body: html`
+    <p>These terms are an agreement between you (and the company you use Keystone for) and Vista Artisans, which operates Keystone. By creating an account or using Keystone, you agree to them.</p>
+    <h2>Your account</h2>
+    <p>You must give accurate information and keep your password safe. You're responsible for what happens under your account and for the teammates you invite. Company admins decide who is on their team and what role they have.</p>
+    <h2>Your data</h2>
+    <p>You own the business records you put into Keystone. You give us permission to store and process them only to run the service for you, as described in our <a href="/privacy">Privacy Policy</a>. You're responsible for having the right to enter your clients' and crew's information and for any messages you send them through Keystone.</p>
+    <h2>Acceptable use</h2>
+    <p>Don't use Keystone to break the law, send spam, upload harmful code, access other companies' data, or interfere with the service.</p>
+    <h2>Plans and billing</h2>
+    <p>Some features need a paid plan. Paid plans renew automatically each month or year until cancelled, and are billed through Stripe. You can cancel any time from Plan &amp; billing; your plan stays active until the end of the paid period. Except where the law requires, payments aren't refunded. We'll give notice before changing prices.</p>
+    <h2>Connected services</h2>
+    <p>Stripe, QuickBooks Online and other services you connect are provided by their own companies under their own terms. Payments you collect go to your own Stripe account; Keystone isn't a party to them. We aren't responsible for those services' availability or for changes you make in them.</p>
+    <h2>No warranty</h2>
+    <p>Keystone is provided "as is". We work to keep it accurate and available but don't promise it will be error-free or uninterrupted. Totals, profit figures and synced records are tools to help you; check them before relying on them for tax, payroll or legal purposes.</p>
+    <h2>Limitation of liability</h2>
+    <p>To the extent the law allows, we aren't liable for indirect or consequential losses, lost profits or lost data, and our total liability is limited to what you paid us for Keystone in the 12 months before the claim.</p>
+    <h2>Ending use</h2>
+    <p>You can stop using Keystone at any time. We may suspend or close accounts that break these terms or don't pay. You can ask for a copy of your data before your account is closed.</p>
+    <h2>General</h2>
+    <p>These terms are governed by the laws of the Commonwealth of Pennsylvania. If we change them, we'll update the date above; continuing to use Keystone after a change means you accept it.</p>` },
+};
+function legalPage(kind) {
+  const d = LEGAL[kind];
+  return layout(d.title, html`<div class="legal">
+    <a class="mark lg" href="/" aria-label="Keystone">${LOGO}</a>
+    <h1>${d.title}</h1><p class="muted">Keystone · Last updated ${LEGAL_UPDATED}</p>
+    ${d.body}
+    <h2>Contact</h2><p>Questions or requests: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
+    <p class="muted" style="margin-top:28px"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Use</a></p>
+  </div>`, { bare: true, docTitle: `${d.title} · Keystone` });
+}
+
 // ---------- Auth & onboarding ----------
 function authPage(title, sub, body) {
   return layout(title, html`<div class="auth">
@@ -498,7 +559,8 @@ function loginPage({ error, notice, email = '' } = {}) {
       <input id="password" name="password" type="password" autocomplete="current-password" required>
       <div class="form-actions"><button type="submit">Log in</button></div>
     </form>
-    <p class="alt">New here? <a href="/signup">Create an account</a></p>`);
+    <p class="alt">New here? <a href="/signup">Create an account</a></p>
+    <p class="hint" style="text-align:center"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>`);
 }
 
 function signupPage({ errors = {}, values = {} } = {}) {
@@ -515,6 +577,7 @@ function signupPage({ errors = {}, values = {} } = {}) {
       ${input('zip', 'ZIP code', values, errors, { autocomplete: 'postal-code', inputmode: 'numeric' })}
       <div class="hint">Shown to your company's admins. You can change these later in Account.</div>
       <div class="form-actions"><button type="submit">Create account</button></div>
+      <p class="hint" style="text-align:center">By creating an account you agree to the <a href="/terms">Terms of Use</a> and <a href="/privacy">Privacy Policy</a>.</p>
     </form>
     <p class="alt">Already have an account? <a href="/login">Log in</a></p>`);
 }
@@ -1848,6 +1911,6 @@ function messagePage(title, message) {
 
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
-  accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
+  legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };

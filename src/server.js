@@ -1606,6 +1606,7 @@ async function handle(req, res) {
 
   if (['/login', '/signup'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
   if (url.pathname === '/healthz' && req.method === 'GET') return health();
+  if (['/privacy', '/terms'].includes(url.pathname) && req.method === 'GET') return ok(v.legalPage(url.pathname.slice(1)));
   if (url.pathname.startsWith('/e/')) return publicEstimate(req, url);
   if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');
 

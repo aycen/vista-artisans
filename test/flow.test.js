@@ -1108,6 +1108,13 @@ test('W-2 time clock vs subcontractor payouts, job photos, appearance stops forc
   assert.match((await getPage('/')).body, /<meta name="color-scheme" content="light dark">/);
 });
 
+test('privacy policy and terms are public', async () => {
+  for (const [p, t] of [['/privacy', 'Privacy Policy'], ['/terms', 'Terms of Use']]) {
+    const r = await getPage(p, { auth: false }); assert.equal(r.status, 200); assert.match(r.body, new RegExp(`<h1>${t}</h1>`));
+  }
+  assert.match((await getPage('/signup', { auth: false })).body, /href="\/terms"/);
+});
+
 test('QuickBooks: connect, push customers, job invoices and payments once, refresh tokens, disconnect', async () => {
   const fq = await startFakeQuickbooks('qbo-client', 'qbo-secret');
   const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
