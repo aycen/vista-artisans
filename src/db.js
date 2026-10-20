@@ -22,7 +22,11 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl,
   max: Number(process.env.DATABASE_POOL_SIZE || 5),
+  // Fail fast with an error page instead of hanging if the database can't be reached.
+  connectionTimeoutMillis: 10_000,
+  query_timeout: 20_000,
 });
+pool.on('error', (e) => console.error('Idle database connection error:', e.message));
 
 // "?" placeholders -> $1, $2 ... so queries read the same as before.
 const numbered = (sql) => { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); };

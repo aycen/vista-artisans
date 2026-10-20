@@ -1,6 +1,6 @@
 'use strict';
 const http = require('node:http');
-const { asUser, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = require('./db');
+const { pool, asUser, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = require('./db');
 const auth = require('./auth');
 const { parseMoney, parseQty, plain, fmtQty } = require('./money');
 const v = require('./views');
@@ -594,6 +594,20 @@ async function publicRoute(req, url) {
   return null;
 }
 
+// Public diagnostics: says which dependency is failing, never any data or secrets.
+async function health() {
+  const check = async (fn) => {
+    try { await fn(); return 'ok'; } catch (e) { return `error ${e.code || ''} ${String(e.message).slice(0, 200)}`.trim(); }
+  };
+  const result = {
+    database: await check(() => pool.query('SELECT 1')),
+    database_as_user: await check(() => asUser('00000000-0000-0000-0000-000000000000', (db) => db.get('SELECT count(*) FROM organizations'))),
+    auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
+  };
+  const healthy = Object.values(result).every((x) => x === 'ok');
+  return { status: healthy ? 200 : 503, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) };
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const cookies = parseCookies(req);
@@ -606,6 +620,7 @@ async function handle(req, res) {
   }
 
   if (['/login', '/signup'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
+  if (url.pathname === '/healthz' && req.method === 'GET') return health();
 
   const { user, setCookies = [] } = await currentUser(cookies);
   if (!user) {
@@ -643,7 +658,7 @@ function respond(res, out) {
   if (Array.isArray(headers['Set-Cookie']) && !headers['Set-Cookie'].length) delete headers['Set-Cookie'];
   let body = out.body || '';
   if (body) {
-    headers['Content-Type'] = 'text/html; charset=utf-8';
+    headers['Content-Type'] ||= 'text/html; charset=utf-8';
     body = body.replace('<!--NAV-->', out.nav?.user ? v.nav(out.nav) : '');
   }
   res.writeHead(out.status, headers);
