@@ -805,7 +805,7 @@ test('estimates: options, emailed link, online approval with signature and depos
     assert.equal((await q('SELECT status, chosen_option FROM estimates WHERE id = $1', [est]))[0].chosen_option, 'Better');
     await waitFor(async () => mail.sent.some((x) => /Jane Rivera approved Countertops/.test(x.subject)), 'approval notice');
     const notice = mail.sent.find((x) => /approved Countertops/.test(x.subject));
-    assert.match(notice.text, /\$4,000\.00/); assert.ok(notice.html.includes(`${BASE}/jobs/${job.id}`)); assert.equal(notice.from, 'Vista <estimates@vista.test>');
+    assert.match(notice.text, /\$4,000\.00/); assert.ok(notice.html.includes(`${BASE}/jobs/${job.id}`)); assert.equal(notice.from, 'Keystone <estimates@vista.test>');
 
     // The company sees the signature; the estimate is locked
     as('alice');

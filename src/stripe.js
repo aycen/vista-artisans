@@ -102,8 +102,8 @@ const voidInvoice = (account, id) => call('POST', `/invoices/${encodeURIComponen
 // ---------- Subscription plans (on the app's own Stripe account) ----------
 // Prices are found by lookup key and created on first use, so there is nothing to set up by hand in Stripe.
 const PLANS = {
-  team: { name: 'Vista Team', month: 4900, year: 49900 },
-  unlimited: { name: 'Vista Unlimited', month: 9900, year: 100900 },
+  team: { name: 'Keystone Team', month: 4900, year: 49900 },
+  unlimited: { name: 'Keystone Unlimited', month: 9900, year: 100900 },
 };
 const FIRST_MONTH_COUPON = 'vista-first-month-50';
 const lookupKey = (plan, interval) => `vista_${plan}_${interval}`;
@@ -114,6 +114,10 @@ async function priceFor(plan, interval) {
   if (priceCache.has(key)) return priceCache.get(key);
   const found = await call('GET', `/prices?active=true&lookup_keys[]=${encodeURIComponent(key)}&expand[]=data.product`);
   let price = found.data && found.data[0];
+  // Products made before the app was renamed keep their old name until updated here.
+  if (price && typeof price.product === 'object' && price.product.name !== PLANS[plan].name) {
+    await call('POST', `/products/${encodeURIComponent(price.product.id)}`, { name: PLANS[plan].name }).catch(() => {});
+  }
   if (!price) {
     // Reuse the plan's product if the other interval already made it.
     const other = (await call('GET', `/prices?active=true&lookup_keys[]=${encodeURIComponent(lookupKey(plan, interval === 'month' ? 'year' : 'month'))}`)).data?.[0];
@@ -159,7 +163,13 @@ async function portalSession(customerId, returnUrl) {
   if (!portalConfig) {
     const existing = (await call('GET', '/billing_portal/configurations?active=true&limit=100')).data
       ?.find((c) => c.metadata?.vista === 'v1');
-    if (existing) portalConfig = existing.id;
+    if (existing) {
+      portalConfig = existing.id;
+      if (existing.business_profile?.headline !== 'Manage your Keystone plan') {
+        await call('POST', `/billing_portal/configurations/${encodeURIComponent(existing.id)}`,
+          { business_profile: { headline: 'Manage your Keystone plan' } }).catch(() => {});
+      }
+    }
     else {
       const prices = await Promise.all(['team', 'unlimited'].flatMap((p) => ['month', 'year'].map((i) => priceFor(p, i))));
       const products = {};
@@ -168,7 +178,7 @@ async function portalSession(customerId, returnUrl) {
         (products[pid] ||= []).push(pr.id);
       }
       portalConfig = (await call('POST', '/billing_portal/configurations', {
-        business_profile: { headline: 'Manage your Vista Artisans plan' },
+        business_profile: { headline: 'Manage your Keystone plan' },
         features: {
           customer_update: { enabled: 'true', allowed_updates: ['email', 'address'] },
           invoice_history: { enabled: 'true' },

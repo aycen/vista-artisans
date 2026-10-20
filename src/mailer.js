@@ -1,5 +1,5 @@
 'use strict';
-// The emails Vista sends for a company (estimates, follow-ups, reminders, review requests, notices to the company),
+// The emails Keystone sends for a company (estimates, follow-ups, reminders, review requests, notices to the company),
 // their wording, the log of what was sent, and the background loop that sends the automatic ones.
 const email = require('./email');
 const { asServer } = require('./db');
@@ -100,7 +100,7 @@ const templates = {
     subject: `${client.name} approved ${estimate.project_name}`,
     content: {
       heading: `${client.name} approved the estimate`,
-      paragraphs: [`${estimate.signer_name} signed ${estimate.project_name}${estimate.chosen_option ? ` (${estimate.chosen_option})` : ''} for ${fmt(total)}. It's now a job in Vista.`,
+      paragraphs: [`${estimate.signer_name} signed ${estimate.project_name}${estimate.chosen_option ? ` (${estimate.chosen_option})` : ''} for ${fmt(total)}. It's now a job in Keystone.`,
         deposit ? `A ${fmt(deposit)} deposit invoice was sent; you'll see the payment on the job when it's paid.` : ''].filter(Boolean),
       button: { label: 'Open the job', url: `${base}/jobs/${job}` },
     },

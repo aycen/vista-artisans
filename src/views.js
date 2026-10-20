@@ -339,10 +339,10 @@ function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle, d
 <meta name="theme-color" content="#f3f4f8" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0d14" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Vista">
+<meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Keystone">
 <link rel="manifest" href="/static/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<title>${docTitle || `${title} · Vista Artisans`}</title><style>${raw(CSS)}</style></head>
+<title>${docTitle || `${title} · Keystone`}</title><style>${raw(CSS)}</style></head>
 <body>
 ${flash ? html`<div class="toast" role="status">${flash}</div>` : ''}
 ${bare ? body : html`<div class="shell">
@@ -373,7 +373,7 @@ function nav({ user, org, path = '/' }) {
   const initial = initialOf(user);
   return {
     nav: html`<nav class="sidebar" aria-label="Main">
-      <a class="brand" href="/"><span class="mark">VA</span>${org ? org.name : 'Vista Artisans'}</a>
+      <a class="brand" href="/"><span class="mark">K</span>${org ? org.name : 'Keystone'}</a>
       ${tabs.map(([href, label, ic]) => html`<a class="nav ${activeTab(path, href) ? 'on' : ''}" href="${href}">${icon(ic)}${label}</a>`)}
       <span class="grow"></span>
       ${org && org.role === 'admin' ? html`<a class="nav ${path.startsWith('/account') ? 'on' : ''}" href="/account">${icon('account')}Account</a>` : ''}
@@ -413,14 +413,14 @@ const roleSelect = (name, selected, id) => html`<select name="${name}" ${id ? ra
 // ---------- Auth & onboarding ----------
 function authPage(title, sub, body) {
   return layout(title, html`<div class="auth">
-    <div class="mark lg">VA</div>
+    <div class="mark lg">K</div>
     <h1>${title}</h1><p class="sub">${sub}</p>
     ${body}
   </div>`, { bare: true });
 }
 
 function loginPage({ error, notice, email = '' } = {}) {
-  return authPage('Welcome back', 'Log in to Vista Artisans', html`
+  return authPage('Welcome back', 'Log in to Keystone', html`
     ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
     ${notice ? html`<div class="notice">${notice}</div>` : ''}
     <form method="post" action="/login" class="form-card">
@@ -462,7 +462,7 @@ function welcomePage({ errors = {}, values = {}, hasOrgs }) {
   </form>
   <form method="post" action="/org/new" class="form-card" novalidate>
     <h3>Start a new company</h3>
-    <div class="hint">For owners setting up Vista for the first time. You'll be its admin.</div>
+    <div class="hint">For owners setting up Keystone for the first time. You'll be its admin.</div>
     ${input('name', 'Company name', values, errors)}
     <div class="form-actions"><button type="submit" class="secondary">Create company</button></div>
   </form>`, { sub: hasOrgs ? null : 'One last step before you start.', back: hasOrgs ? { href: '/account', label: 'Account' } : null });
@@ -1187,7 +1187,7 @@ function publicEstimatePage({ estimate, company, hasLogo, client, items, totals,
       <div class="form-actions"><button type="submit" class="secondary" ${preview ? raw('disabled') : ''}>Decline estimate</button></div>
     </form></details>` : ''}
   <div class="actions" style="justify-content:center"><a class="btn ghost" href="${base}/pdf">${icon('download')}Download PDF</a></div>
-  <p class="pub-foot">Sent with Vista</p>
+  <p class="pub-foot">Sent with Keystone</p>
   </div>
   ${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${estimate.project_name} · ${company.name}` });
 }

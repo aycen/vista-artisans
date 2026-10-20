@@ -1160,9 +1160,9 @@ async function notifyCompany(kind, estimateId, extra) {
       const company = await mailer.companyOf(db, estimate.org_id);
       const client = await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id);
       const t = mailer.templates[kind]({ company, estimate, client, base: mailer.appUrl() || extra.base, ...extra });
-      // The company's own copy comes "from Vista" so it doesn't look like it came from the client.
+      // The company's own copy comes "from Keystone" so it doesn't look like it came from the client.
       for (const to of await companyRecipients(db, estimate.org_id, company)) {
-        await mailer.deliver(db, { orgId: estimate.org_id, kind, to, ...t, company: { ...company, name: 'Vista' }, estimateId });
+        await mailer.deliver(db, { orgId: estimate.org_id, kind, to, ...t, company: { ...company, name: 'Keystone' }, estimateId });
       }
     });
   } catch (e) { console.error(`Could not notify the company (${kind}):`, e.message); }
@@ -1365,7 +1365,7 @@ const server = http.createServer((req, res) => {
 });
 
 if (require.main === module) {
-  server.listen(PORT, () => console.log(`Vista Artisans running on http://localhost:${PORT}`));
+  server.listen(PORT, () => console.log(`Keystone running on http://localhost:${PORT}`));
   mailer.startAutomations();
 }
 module.exports = { server };

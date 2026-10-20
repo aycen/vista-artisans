@@ -41,6 +41,8 @@ function startFakeStripe(secretKey) {
         return send(200, { data });
       }
       if (p === '/v1/products') { const pr = { id: id('prod'), name: form.name, metadata: { vista_plan: form['metadata[vista_plan]'] } }; state.products.set(pr.id, pr); return done(pr); }
+      const prod = p.match(/^\/v1\/products\/([^/]+)$/);
+      if (prod && state.products.has(prod[1])) { const pr = state.products.get(prod[1]); if (form.name) pr.name = form.name; return done(pr); }
       if (p === '/v1/prices') {
         const pr = { id: id('price'), product: form.product, unit_amount: Number(form.unit_amount), lookup_key: form.lookup_key,
           recurring: { interval: form['recurring[interval]'] }, metadata: { vista_plan: form['metadata[vista_plan]'] } };

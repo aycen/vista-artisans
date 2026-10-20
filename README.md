@@ -1,6 +1,6 @@
-# Vista Artisans
+# Keystone
 
-A private web app for tracking clients, estimates, jobs, job expenses and payments received.
+Keystone (keystonefsm.com) is a web app for field-service companies for tracking clients, estimates, jobs, job expenses and payments received.
 Several people can share one organization, and separate organizations never see each other's data.
 
 - **Stack:** Node.js 22.13+, server-rendered pages, the `pg` driver. Data and logins live in **Supabase**
@@ -116,7 +116,7 @@ server every 10 minutes; every email is listed on its estimate or job.
 
 Email is sent through [Resend](https://resend.com). One-time setup: add and verify your domain in Resend (it shows the
 DNS records to add), create an API key with sending access, and set `RESEND_API_KEY` and `EMAIL_FROM` (for example
-`estimates@vistaartisans.com`) in Render. Emails show each company's name as the sender and replies go to the company's
+`estimates@keystonefsm.com`) in Render. Emails show each company's name as the sender and replies go to the company's
 own email. Links in automatic emails use `APP_URL`, or Render's `RENDER_EXTERNAL_URL`.
 
 ## Tests
