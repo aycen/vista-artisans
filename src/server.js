@@ -597,7 +597,11 @@ async function publicRoute(req, url) {
 // Public diagnostics: says which dependency is failing, never any data or secrets.
 async function health() {
   const check = async (fn) => {
-    try { await fn(); return 'ok'; } catch (e) { return `error ${e.code || ''} ${String(e.message).slice(0, 200)}`.trim(); }
+    try { await fn(); return 'ok'; } catch (e) {
+      // Strip anything that looks like a URL with credentials so a misplaced secret is never echoed.
+      const msg = String(e.message).replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"']*/gi, '[url hidden]').slice(0, 200);
+      return `error ${e.code || ''} ${msg}`.trim();
+    }
   };
   const result = {
     database: await check(() => pool.query('SELECT 1')),
