@@ -606,6 +606,10 @@ async function health() {
   const result = {
     database: await check(() => pool.query('SELECT 1')),
     database_as_user: await check(() => asUser('00000000-0000-0000-0000-000000000000', (db) => db.get('SELECT count(*) FROM organizations'))),
+    database_schema: await check(async () => {
+      const r = await pool.query("SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts");
+      if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
+    }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
   let target = 'unparseable';
