@@ -17,7 +17,7 @@ Several people can share one organization, and separate organizations never see 
 1. At [supabase.com](https://supabase.com), create a new project and save its database password.
 2. In the project's **SQL Editor**, paste all of `supabase/setup.sql` and click **Run** (once, on a new project).
    It is the files in `supabase/migrations/` combined. If you already ran an older `setup.sql`, run only the
-   migration files added since (for example `0004_join_codes_and_job_dates.sql`).
+   migration files added since (for example `0005_company_profile_and_completion.sql`).
 3. Optional: under **Authentication → Sign In / Providers → Email**, decide whether new users must confirm their email
    (recommended on). With it on, people confirm by email and then log in.
 
@@ -94,6 +94,14 @@ deleting estimates and clients (and refusing for converted ones), moving an esti
 - **Jobs:** outstanding balance = contract total − payments. Gross profit = contract total − expenses − worker payouts, labeled provisional
   until the job is completed. Payments are records only; the app never processes money.
 - **Home:** revenue this month = payments received with a date in the current calendar month (`APP_TIMEZONE`).
+  Growth compares it with the same days of last month (the 1st through today's date), so it is fair early in the month.
+  Gross profit this month = contract − expenses − payouts of jobs marked completed this month.
+- **Jobs calendar:** the Jobs tab shows a month calendar; a job appears on every day from its start date to its end date.
+  Tap a day to list its jobs below.
+- **Team:** tap a person to see their open and completed jobs and their pay totals.
+- **Company profile (Account → Company profile):** logo, contact details, license number, and terms printed on
+  estimate PDFs (sent to customers; never shows internal cost or profit) and work order PDFs (for subcontractors;
+  shows a person's pay only when downloaded from their row on the job).
   Open estimates are draft, sent, or approved-but-not-converted. Total outstanding adds up every job's positive
   balance in the current organization, including completed jobs that still owe money.
 - **Roles:** *Admins* see and manage everything, including money and the team. *Workers* see only open jobs they are

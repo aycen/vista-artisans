@@ -4,6 +4,7 @@ const { pool, asUser, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = requir
 const auth = require('./auth');
 const { parseMoney, parseQty, plain, fmtQty } = require('./money');
 const v = require('./views');
+const pdf = require('./pdf');
 
 const PORT = Number(process.env.PORT || 3000);
 const APP_TIMEZONE = process.env.APP_TIMEZONE || 'America/Los_Angeles'; // decides which payments count as "this month"
@@ -200,7 +201,7 @@ async function saveEstimate(db, org, estimateId, values, clean) {
 // Routes are admin-only unless marked { worker: true }; the database enforces the same split.
 const routes = [];
 const route = (method, pattern, handler, opts = {}) =>
-  routes.push({ method, re: new RegExp('^' + pattern.replace(/:id/g, '(\\d{1,15})') + '$'), handler, ...opts });
+  routes.push({ method, re: new RegExp('^' + pattern.replace(/:id/g, '(\\d{1,15})').replace(/:uid/g, '([0-9a-f-]{36})') + '$'), handler, uid: pattern.includes(':uid'), ...opts });
 
 route('GET', '/', async (ctx) => {
   if (ctx.org.role !== 'admin') return schedule(ctx);
@@ -213,14 +214,24 @@ route('GET', '/', async (ctx) => {
     ORDER BY jobs.start_date NULLS LAST, jobs.id`, o)).map(withJobMath);
   const allJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ?`, o)).map(withJobMath);
   const outstandingCents = allJobs.reduce((s, j) => s + Math.max(0, j.balance_cents), 0);
-  // Revenue this month = payments received with a date in the current calendar month (in APP_TIMEZONE).
-  const month = await db.get(`WITH m AS (SELECT date_trunc('month', now() AT TIME ZONE ?)::date AS start)
-    SELECT to_char(m.start, 'FMMonth YYYY') AS label,
-      (SELECT coalesce(sum(amount_cents), 0) FROM payments
-        WHERE org_id = ? AND paid_on >= m.start AND paid_on < (m.start + interval '1 month')::date) AS cents
-    FROM m`, APP_TIMEZONE, o);
-  return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, revenueCents: Number(month.cents), monthLabel: month.label,
-    flash: url.searchParams.get('msg') }));
+  // Revenue this month = payments dated in the current calendar month (APP_TIMEZONE).
+  // Growth compares it with the same days of last month (1st through today's day number), so early-month numbers are fair.
+  // Gross profit this month = contract - expenses - payouts of jobs completed this month.
+  const m = await db.get(`WITH d AS (SELECT (now() AT TIME ZONE ?)::date AS today),
+      m AS (SELECT today, date_trunc('month', today)::date AS start, (date_trunc('month', today) - interval '1 month')::date AS prev FROM d)
+    SELECT to_char(m.start, 'FMMonth YYYY') AS label, to_char(m.prev, 'FMMonth') AS prev_label,
+      (SELECT coalesce(sum(amount_cents), 0) FROM payments WHERE org_id = ? AND paid_on >= m.start AND paid_on <= m.today) AS revenue,
+      (SELECT coalesce(sum(amount_cents), 0) FROM payments WHERE org_id = ? AND paid_on >= m.prev
+        AND paid_on <= least(m.prev + (m.today - m.start), m.start - 1)) AS prev_revenue,
+      (SELECT count(*) FROM jobs WHERE org_id = ? AND status = 'completed'
+        AND (completed_at AT TIME ZONE ?)::date >= m.start AND (completed_at AT TIME ZONE ?)::date <= m.today) AS completed_jobs,
+      (SELECT coalesce(sum(t.contract_cents - t.expenses_cents - t.payouts_cents), 0) FROM job_totals t JOIN jobs j ON j.id = t.job_id
+        WHERE j.org_id = ? AND j.status = 'completed'
+        AND (j.completed_at AT TIME ZONE ?)::date >= m.start AND (j.completed_at AT TIME ZONE ?)::date <= m.today) AS profit
+    FROM m`, APP_TIMEZONE, o, o, o, APP_TIMEZONE, APP_TIMEZONE, o, APP_TIMEZONE, APP_TIMEZONE);
+  const month = { label: m.label, prevLabel: `same days of ${m.prev_label}`, revenueCents: m.revenue, prevCents: m.prev_revenue,
+    completedJobs: Number(m.completed_jobs), profitCents: m.profit };
+  return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, month, flash: url.searchParams.get('msg') }));
 }, { worker: true });
 
 // Clients
@@ -343,7 +354,21 @@ route('GET', '/jobs', async ({ db, org, url }) => {
   const jobs = (status
     ? await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.status = ? ORDER BY jobs.id DESC`, org.org_id, status)
     : await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? ORDER BY jobs.id DESC`, org.org_id)).map(withJobMath);
-  return ok(v.jobsPage({ jobs, status }));
+  // Calendar: a job shows on every day from its start date to its end date (or just its start date).
+  const today = (await db.get('SELECT (now() AT TIME ZONE ?)::date::text AS d', APP_TIMEZONE)).d;
+  const dayParam = url.searchParams.get('day'); const monthParam = url.searchParams.get('month');
+  const day = dayParam && isDate(dayParam) ? dayParam
+    : monthParam && /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam) ? (today.startsWith(monthParam) ? today : `${monthParam}-01`) : today;
+  const month = day.slice(0, 7);
+  const gridStart = (await db.get(`SELECT (?::date - extract(dow FROM ?::date)::int)::text AS d`, `${month}-01`, `${month}-01`)).d;
+  const spans = await db.all(`SELECT d::date::text AS day, jobs.status FROM jobs,
+      generate_series(greatest(jobs.start_date, ?::date), least(coalesce(jobs.end_date, jobs.start_date), ?::date + 41), interval '1 day') AS d
+    WHERE jobs.org_id = ? AND jobs.start_date IS NOT NULL ORDER BY jobs.start_date, jobs.id`, gridStart, gridStart, org.org_id);
+  const byDay = {};
+  for (const sp of spans) (byDay[sp.day] ||= []).push(sp.status);
+  const dayJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.start_date <= ?::date
+    AND coalesce(jobs.end_date, jobs.start_date) >= ?::date ORDER BY jobs.start_date, jobs.id`, org.org_id, day, day)).map(withJobMath);
+  return ok(v.jobsPage({ jobs, status, cal: { month, day, today, byDay, dayJobs } }));
 });
 route('GET', '/jobs/:id', ({ db, org, id, url }) => renderJob(db, org.org_id, id, { flash: url.searchParams.get('msg') }));
 route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
@@ -518,7 +543,11 @@ route('POST', '/clients/:id/delete', async ({ db, org, id }) => {
 
 // Team
 async function renderTeam(db, org, user, extra = {}, status = 200) {
-  const members = await db.all('SELECT * FROM org_members(?)', org.org_id);
+  const members = await db.all(`SELECT m.*,
+      (SELECT count(*)::int FROM job_assignments a WHERE a.org_id = ? AND a.user_id = m.user_id) AS job_count,
+      (SELECT coalesce(sum(a.payout_cents), 0) FROM job_assignments a JOIN jobs j ON j.id = a.job_id
+        WHERE a.org_id = ? AND a.user_id = m.user_id AND j.status = 'completed') AS earned_cents
+    FROM org_members(?) m`, org.org_id, org.org_id, org.org_id);
   const joinCode = org.role === 'admin' ? (await db.get('SELECT org_join_code(?) AS code', org.org_id)).code : null;
   return page(status, v.teamPage({ org, members, me: user.id, joinCode, ...extra }));
 }
@@ -540,7 +569,24 @@ route('POST', '/team/role', async ({ db, org, user, form }) => {
     if (!dbMessage(r.error)) throw r.error;
     return renderTeam(db, org, user, { errors: { role: dbMessage(r.error) } }, 422);
   }
-  return redirect('/team?msg=Role+updated');
+  return redirect(`/team/${str(form.get('user_id'), 64)}?msg=Role+updated`);
+});
+route('GET', '/team/:uid', async ({ db, org, user, uid, url }) => {
+  const member = await db.get('SELECT * FROM org_members(?) WHERE user_id = ?::uuid', org.org_id, uid);
+  if (!member) return notFound();
+  const jobs = await db.all(`SELECT jobs.id, jobs.project_name, jobs.status, jobs.start_date, jobs.end_date, jobs.completed_at,
+      clients.name AS client_name, a.payout_cents
+    FROM job_assignments a JOIN jobs ON jobs.id = a.job_id JOIN clients ON clients.id = jobs.client_id
+    WHERE a.org_id = ? AND a.user_id = ?::uuid
+    ORDER BY jobs.status = 'completed', coalesce(jobs.end_date, jobs.start_date) DESC NULLS LAST, jobs.id DESC`, org.org_id, uid);
+  const year = (await db.get("SELECT to_char(now() AT TIME ZONE ?, 'YYYY') AS y", APP_TIMEZONE)).y;
+  const sum = (list) => list.reduce((t, j) => t + j.payout_cents, 0);
+  const done = jobs.filter((j) => j.status === 'completed');
+  const totals = {
+    earned: sum(done), upcoming: sum(jobs.filter((j) => j.status !== 'completed')), yearLabel: year,
+    year: sum(done.filter((j) => j.completed_at && new Date(j.completed_at).toLocaleString('en-CA', { timeZone: APP_TIMEZONE, year: 'numeric' }) === year)),
+  };
+  return ok(v.memberPage({ org, member, me: user.id, jobs, totals, flash: url.searchParams.get('msg') }));
 });
 route('POST', '/team/code', async ({ db, org }) => {
   await db.get('SELECT regenerate_join_code(?) AS code', org.org_id);
@@ -553,6 +599,81 @@ route('POST', '/team/remove', async ({ db, org, user, form }) => {
     return renderTeam(db, org, user, { errors: { remove: dbMessage(r.error) } }, 422);
   }
   return redirect('/team?msg=Teammate+removed');
+});
+
+// Company profile (logo and details printed on estimates and work orders)
+const PROFILE_FIELDS = { phone: 50, email: 200, address: 500, website: 200, license_number: 100, estimate_terms: 5000, work_order_terms: 5000 };
+async function companyFor(db, org) {
+  const p = (await db.get('SELECT * FROM company_profiles WHERE org_id = ?', org.org_id)) || {};
+  const out = { name: org.name, logo: p.logo || null };
+  for (const k of Object.keys(PROFILE_FIELDS)) out[k] = p[k] || '';
+  return out;
+}
+route('GET', '/settings', async ({ db, org, url }) => {
+  const c = await companyFor(db, org);
+  return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg') }));
+});
+route('GET', '/settings/logo', async ({ db, org }) => {
+  const p = await db.get('SELECT logo, logo_type FROM company_profiles WHERE org_id = ?', org.org_id);
+  if (!p?.logo) return notFound();
+  return { status: 200, body: p.logo, headers: { 'Content-Type': p.logo_type, 'Cache-Control': 'private, no-store' } };
+});
+route('POST', '/settings', async ({ db, org, form }) => {
+  const f = formObj(form);
+  const values = { name: f.name ?? '' }; const errors = {};
+  for (const [k, max] of Object.entries(PROFILE_FIELDS)) values[k] = str(f[k], max);
+  values.name = str(values.name, 200);
+  if (!values.name) errors.name = 'Company name is required.';
+  if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = 'Email address does not look valid.';
+  let logo; let logoType;
+  if (f.logo_data) {
+    const mm = /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)$/.exec(f.logo_data);
+    const buf = mm ? Buffer.from(mm[2], 'base64') : null;
+    const isPng = buf && buf.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const isJpg = buf && buf[0] === 0xff && buf[1] === 0xd8;
+    if (!buf || !(isPng || isJpg)) errors.logo = 'The logo must be a PNG or JPG image.';
+    else if (buf.length > 1_500_000) errors.logo = 'The logo is too large. Use an image under 1.5 MB.';
+    else { logo = buf; logoType = isPng ? 'image/png' : 'image/jpeg'; }
+  }
+  const hasLogo = !!(await db.get('SELECT 1 FROM company_profiles WHERE org_id = ? AND logo IS NOT NULL', org.org_id));
+  if (hasErrors(errors)) return page(422, v.settingsPage({ org, values, hasLogo, errors }));
+  await db.run('UPDATE organizations SET name = ? WHERE id = ?', values.name, org.org_id);
+  await db.run(`INSERT INTO company_profiles (org_id, phone, email, address, website, license_number, estimate_terms, work_order_terms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (org_id) DO UPDATE SET phone = excluded.phone, email = excluded.email, address = excluded.address, website = excluded.website,
+      license_number = excluded.license_number, estimate_terms = excluded.estimate_terms, work_order_terms = excluded.work_order_terms, updated_at = now()`,
+  org.org_id, values.phone, values.email, values.address, values.website, values.license_number, values.estimate_terms, values.work_order_terms);
+  if (logo) await db.run('UPDATE company_profiles SET logo = ?, logo_type = ? WHERE org_id = ?', logo, logoType, org.org_id);
+  else if (f.remove_logo === '1') await db.run('UPDATE company_profiles SET logo = NULL, logo_type = NULL WHERE org_id = ?', org.org_id);
+  return redirect('/settings?msg=Profile+saved');
+});
+
+const pdfResponse = (buf, name) => ({ status: 200, body: buf, headers: {
+  'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${name.replace(/[^\w .-]/g, '').slice(0, 80)}.pdf"`,
+} });
+route('GET', '/estimates/:id/pdf', async ({ db, org, id }) => {
+  const estimate = await db.get('SELECT * FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!estimate) return notFound();
+  const buf = await pdf.estimatePdf({
+    company: await companyFor(db, org), estimate,
+    client: await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id),
+    items: await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', id),
+    totalCents: (await db.get(`SELECT ${ESTIMATE_TOTAL_SQL} AS t FROM estimates WHERE id = ?`, id)).t,
+  });
+  return pdfResponse(buf, `Estimate E-${id} ${estimate.project_name}`);
+});
+route('GET', '/jobs/:id/work-order', async ({ db, org, id, url }) => {
+  const job = await db.get('SELECT * FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!job) return notFound();
+  const who = url.searchParams.get('user_id');
+  let assignee = null;
+  if (who) {
+    assignee = /^[0-9a-f-]{36}$/.test(who) ? await db.get('SELECT * FROM job_team(?) WHERE user_id = ?::uuid', id, who) : null;
+    if (!assignee) return notFound();
+  }
+  const buf = await pdf.workOrderPdf({ company: await companyFor(db, org), job, assignee,
+    client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id) });
+  return pdfResponse(buf, `Work order WO-${id} ${job.project_name}`);
 });
 
 // Joining or creating a company, and the account page (these work before the user belongs to one)
@@ -656,9 +777,10 @@ async function health() {
     database_as_user: await check(() => asUser('00000000-0000-0000-0000-000000000000', (db) => db.get('SELECT count(*) FROM organizations'))),
     database_schema: await check(async () => {
       const r = await pool.query(`SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts,
-        to_regclass('public.join_attempts') IS NOT NULL AS join_codes`);
+        to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -705,7 +827,7 @@ async function handle(req, res) {
     const org = orgs.find((o) => o.org_id === cookies.org) || orgs[0] || null;
     if (!org && !ORG_ROUTES.has(url.pathname)) return { ...redirect('/welcome'), nav: { user, org, orgs } };
     if (org && org.role !== 'admin' && !r.worker) return { ...notFound(), nav: { user, org, orgs } };
-    const out = await r.handler({ req, url, form, db, user, org, orgs, id: m[1] ? Number(m[1]) : undefined });
+    const out = await r.handler({ req, url, form, db, user, org, orgs, id: m[1] && !r.uid ? Number(m[1]) : undefined, uid: r.uid ? m[1] : undefined });
     return { ...out, nav: { user, org, orgs }, path: url.pathname };
   });
   const existing = [].concat(result.headers?.['Set-Cookie'] || []);

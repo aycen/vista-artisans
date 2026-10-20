@@ -40,7 +40,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .appbar .back{display:inline-flex;align-items:center;gap:2px;color:var(--accent);font-weight:500;margin-left:-6px;padding:6px}
 .appbar .back .svg{transform:rotate(180deg)}
 .appbar-spacer{flex:1}
-.page-title{font-size:30px;line-height:1.15;font-weight:750;letter-spacing:-.02em;margin:6px 2px 4px}
+.page-title{font-size:30px;line-height:1.15;font-weight:750;letter-spacing:-.02em;margin:6px 2px 4px;overflow-wrap:anywhere}
 .page-sub{color:var(--text-2);margin:0 2px 14px;font-size:15px}
 .avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:15px}
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;
@@ -76,7 +76,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .hero .v{font-size:38px;font-weight:780;letter-spacing:-.03em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
 .hero .s{font-size:13px;opacity:.8}
 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
-@media (min-width:640px){.stats.three{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width:640px){.stats.three{grid-template-columns:repeat(3,minmax(0,1fr))}.stats.four{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .stat{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
 .stat .k{font-size:13px;color:var(--text-2);font-weight:500}
 .stat .v{font-size:22px;font-weight:720;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
@@ -161,13 +161,38 @@ input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:blo
 .item input{background:var(--surface)}
 .item .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:14px;color:var(--text-2)}
 .item .line-total{font-weight:650;color:var(--text);font-variant-numeric:tabular-nums}
-.totalbar{position:sticky;bottom:calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);z-index:10;display:flex;align-items:center;gap:12px;
-  background:var(--text);color:var(--bg);border-radius:18px;padding:12px 12px 12px 18px;margin:14px 0;box-shadow:0 10px 30px rgba(15,23,42,.25)}
+.totalbar{position:sticky;bottom:calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);z-index:10;display:flex;align-items:center;gap:8px;
+  background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:saturate(180%) blur(16px);-webkit-backdrop-filter:saturate(180%) blur(16px);
+  color:var(--text);border:1px solid var(--line);border-radius:18px;padding:10px 10px 10px 16px;margin:14px 0;box-shadow:0 10px 30px rgba(15,23,42,.14)}
 @media (min-width:960px){.totalbar{bottom:16px}}
-.totalbar .lbl{font-size:12px;opacity:.7}
-.totalbar .num{font-size:20px;font-weight:750;font-variant-numeric:tabular-nums}
+.totalbar .lbl{font-size:12px;color:var(--text-2)}
+.totalbar .num{font-size:20px;font-weight:750;font-variant-numeric:tabular-nums;color:var(--accent)}
 .totalbar .grow{flex:1;min-width:0}
-.totalbar button{background:var(--bg);color:var(--text)}
+.totalbar .btn.ghost{color:var(--text-2);padding:0 8px}
+
+/* Growth badge */
+.delta{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:13px;font-weight:700;background:rgba(255,255,255,.2);color:#fff;margin-top:8px}
+.stat .delta{background:var(--gray-soft);color:var(--text-2);margin-top:6px;font-size:12px}
+.stat .delta.up{background:var(--green-soft);color:var(--green)} .stat .delta.down{background:var(--red-soft);color:var(--red)}
+
+/* Calendar */
+.cal{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 10px 10px;margin-bottom:14px}
+.cal-head{display:flex;align-items:center;justify-content:space-between;padding:2px 6px 10px}
+.cal-head strong{font-size:17px}
+.cal-head a{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--surface-2);color:var(--text)}
+.cal-head a.prev .svg{transform:rotate(180deg)}
+.cal-head .today-link{width:auto;padding:0 12px;font-size:14px;font-weight:600;color:var(--accent)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;text-align:center}
+.cal-dow{font-size:11px;font-weight:700;color:var(--text-3);padding:4px 0 6px;text-transform:uppercase;letter-spacing:.04em}
+.cal-day{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0 7px;border-radius:12px;color:var(--text);min-height:50px}
+.cal-day.out{color:var(--text-3);opacity:.55}
+.cal-day .n{width:32px;height:32px;line-height:32px;border-radius:50%;font-weight:600;font-size:15px;font-variant-numeric:tabular-nums}
+.cal-day.today .n{color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.cal-day.sel .n{background:var(--accent);color:var(--on-accent);box-shadow:none}
+.cal-dots{display:flex;gap:3px;height:6px}
+.cal-dots i{width:6px;height:6px;border-radius:50%;background:var(--amber)}
+.cal-dots i.in_progress{background:var(--blue)} .cal-dots i.completed{background:var(--green)}
+@media (hover:hover){a.cal-day:hover{background:var(--surface-2)}}
 table.lines{width:100%;border-collapse:collapse}
 table.lines td,table.lines th{padding:12px 16px;text-align:left;font-size:15px}
 table.lines th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:600}
@@ -231,6 +256,8 @@ const ICONS = {
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   account: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.2 18.5a7 7 0 0 1 11.6 0"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
+  download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   building: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"/>',
 };
 const icon = (name, cls = '') => raw(`<svg class="svg ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`);
@@ -397,11 +424,73 @@ function accountPage({ user, org, orgs, flash }) {
       <div class="main-t"><div class="t">${o.name}</div><div class="s">${ROLES[o.role]}</div></div>
       ${org && o.org_id === org.org_id ? html`<span class="pill completed">Current</span>` : html`<button type="submit" class="sm secondary">Switch</button>`}
     </form>`)}</div>` : ''}
+  ${org && org.role === 'admin' ? html`<div class="list"><a class="li" href="/settings"><span class="icon-bubble">${icon('settings')}</span>
+    <div class="main-t"><div class="t">Company profile</div><div class="s">Logo and details on estimates and work orders</div></div>${chev()}</a></div>` : ''}
   <div class="actions">
     <a class="btn secondary" href="/welcome">${icon('key')}Join or create a company</a>
   </div>
   <form method="post" action="/logout"><button type="submit" class="danger block">${icon('logout')}Log out</button></form>`, { flash });
 }
+
+// ---------- Company profile ----------
+function settingsPage({ org, values, hasLogo, errors = {}, flash }) {
+  return layout('Company profile', html`
+  ${errorBox(errors)}
+  <form method="post" action="/settings" id="settings-form" novalidate>
+    <div class="form-card">
+      <h3>Logo</h3>
+      <div class="hint">PNG or JPG. Shown at the top of estimates and work orders.</div>
+      <div class="row" style="margin-top:12px;align-items:center">
+        <div id="logo-preview" style="width:150px;height:64px;border-radius:12px;background:var(--surface-2);display:grid;place-items:center;overflow:hidden">
+          ${hasLogo ? html`<img src="/settings/logo?v=${Date.now()}" alt="Company logo" style="width:150px;height:64px;object-fit:contain">` : html`<span class="muted" style="font-size:13px">No logo</span>`}
+        </div>
+        <label class="btn sm secondary" for="logo-file" style="margin:0;color:var(--accent)">Choose image</label>
+        ${hasLogo ? html`<label style="margin:0;display:flex;gap:6px;align-items:center;font-weight:500"><input type="checkbox" name="remove_logo" value="1" style="width:18px;min-height:0;height:18px">Remove</label>` : ''}
+      </div>
+      <input type="file" id="logo-file" accept="image/png,image/jpeg" style="display:none">
+      <input type="hidden" name="logo_data" id="logo_data" value="">
+      ${fieldErr(errors, 'logo')}
+    </div>
+    <div class="form-card">
+      <h3>Business details</h3>
+      ${input('name', 'Company name', values, errors, { required: true })}
+      <div class="two stack"><div>${input('phone', 'Phone', values, errors, { type: 'tel', inputmode: 'tel' })}</div>
+      <div>${input('email', 'Email', values, errors, { type: 'email', inputmode: 'email' })}</div></div>
+      ${input('address', 'Business address', values, errors)}
+      <div class="two stack"><div>${input('website', 'Website', values, errors, { placeholder: 'vistaartisans.com' })}</div>
+      <div>${input('license_number', 'License number', values, errors)}</div></div>
+    </div>
+    <div class="form-card">
+      <h3>Fine print</h3>
+      ${textarea('estimate_terms', 'Estimate terms', values, errors, { placeholder: 'e.g. Valid for 30 days. 50% deposit to schedule, balance due on completion.' })}
+      ${textarea('work_order_terms', 'Work order terms', values, errors, { placeholder: 'e.g. Clean up daily. Call the office before any change to the scope.' })}
+    </div>
+    <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
+  </form>
+  <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
+}
+
+// Shrinks the chosen image in the browser (max 800px wide) and sends it as a data URL.
+const LOGO_JS = `
+(function () {
+  var file = document.getElementById('logo-file');
+  file.addEventListener('change', function () {
+    var f = file.files[0]; if (!f) return;
+    var img = new Image();
+    img.onload = function () {
+      var scale = Math.min(1, 800 / img.width, 400 / img.height);
+      var c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      var data = c.toDataURL(f.type === 'image/jpeg' ? 'image/jpeg' : 'image/png', 0.9);
+      document.getElementById('logo_data').value = data;
+      document.getElementById('logo-preview').innerHTML = '<img src="' + data + '" alt="" style="width:150px;height:64px;object-fit:contain">';
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = function () { alert('That file could not be read as an image. Try a PNG or JPG.'); };
+    img.src = URL.createObjectURL(f);
+  });
+})();`;
 
 // ---------- Team ----------
 function teamPage({ org, members, me, joinCode, errors = {}, values = {}, flash }) {
@@ -416,16 +505,12 @@ function teamPage({ org, members, me, joinCode, errors = {}, values = {}, flash 
     <div class="hint">Share this with your crew. After creating an account, they enter it to join ${org.name} as workers.</div>
   </div>` : ''}
   <h2>People</h2>
-  <div class="list">${members.map((m) => html`<div class="li">
+  <div class="list">${members.map((m) => html`<a class="li" href="/team/${m.user_id}">
     <span class="avatar">${(m.email || '?')[0].toUpperCase()}</span>
     <div class="main-t"><div class="t">${m.email}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
-      ${admin ? html`<form method="post" action="/team/role" class="row" style="margin-top:6px">
-        <input type="hidden" name="user_id" value="${m.user_id}">
-        <select name="role" style="min-height:36px;padding:4px 32px 4px 10px;width:auto;font-size:14px">${options(ROLES, m.role)}</select>
-        <button type="submit" class="sm secondary">Save</button></form>` : html`<div class="s">${ROLES[m.role]}</div>`}</div>
-    ${admin && m.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${m.email} from ${org.name}?">
-      <input type="hidden" name="user_id" value="${m.user_id}"><button type="submit" class="sm danger">Remove</button></form>` : ''}
-  </div>`)}</div>
+      <div class="s">${ROLES[m.role]} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}</div></div>
+    <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
+  </a>`)}</div>
   <p class="hint"><strong>Admins</strong> see and manage everything, including money and the team.
     <strong>Workers</strong> see only open jobs assigned to them: dates, address, scope of work and their own pay.</p>
   ${admin ? html`<form method="post" action="/team/add" class="form-card" novalidate>
@@ -435,6 +520,37 @@ function teamPage({ org, members, me, joinCode, errors = {}, values = {}, flash 
     <label for="new-role">Role</label>${roleSelect('role', values.role || 'worker', 'new-role')}
     <div class="form-actions"><button type="submit">Add to ${org.name}</button></div>
   </form>` : ''}`, { flash });
+}
+
+function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
+  const open = jobs.filter((j) => j.status !== 'completed');
+  const done = jobs.filter((j) => j.status === 'completed');
+  const rows = (list, empty) => (list.length ? html`<div class="list">${list.map((j) => html`<a class="li" href="/jobs/${j.id}">
+    <div class="main-t"><div class="t">${j.project_name}</div>
+      <div class="s">${j.client_name}${dateRange(j.start_date, j.end_date) ? ' · ' : ''}${dateRange(j.start_date, j.end_date)}</div></div>
+    <div class="r"><span class="amt">${fmt(j.payout_cents)}</span>${pill(j.status, JOB_STATUS)}</div>${chev()}</a>`)}</div>`
+    : html`<div class="empty">${empty}</div>`);
+  return layout(member.email, html`
+  <p style="margin:0 2px 14px"><span class="pill ${member.role === 'admin' ? 'sent' : ''}">${ROLES[member.role]}</span></p>
+  ${errorBox(errors)}
+  <div class="stats">
+    <div class="stat"><div class="k">Jobs completed</div><div class="v" data-k="jobs-done">${done.length}</div></div>
+    <div class="stat"><div class="k">Open jobs</div><div class="v" data-k="jobs-open">${open.length}</div></div>
+    <div class="stat"><div class="k">Pay on completed jobs</div><div class="v" data-k="earned">${fmt(totals.earned)}</div></div>
+    <div class="stat"><div class="k">Pay on open jobs</div><div class="v" data-k="upcoming">${fmt(totals.upcoming)}</div></div>
+    <div class="stat wide"><div class="k">Pay this year</div><div class="v" data-k="year">${fmt(totals.year)}</div><div class="s">Completed jobs finished in ${totals.yearLabel}</div></div>
+  </div>
+  <h2>Open jobs</h2>${rows(open, 'No open jobs assigned.')}
+  <h2>Completed jobs</h2>${rows(done, 'No completed jobs yet.')}
+  <h2>Role</h2>
+  <form method="post" action="/team/role" class="form-card" novalidate>
+    <input type="hidden" name="user_id" value="${member.user_id}">
+    <label for="role">Role in ${org.name}</label>${roleSelect('role', member.role, 'role')}
+    <div class="form-actions"><button type="submit" class="secondary">Save role</button></div>
+  </form>
+  ${member.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${member.email} from ${org.name}?">
+    <input type="hidden" name="user_id" value="${member.user_id}"><button type="submit" class="danger block">Remove from ${org.name}</button></form>` : ''}`,
+  { flash, back: { href: '/team', label: 'Team' } });
 }
 
 // ---------- Worker schedule ----------
@@ -466,14 +582,28 @@ function scheduleJobPage({ job }) {
 }
 
 // ---------- Home ----------
-function homePage({ openEstimates, activeJobs, outstandingCents, revenueCents, monthLabel, flash }) {
+// Revenue growth: this month so far vs the same days of last month.
+function growthBadge(m) {
+  if (!m.prevCents) {
+    return html`<span class="delta" id="revenue-growth">${m.revenueCents ? 'No payments by this point last month' : 'No payments yet'}</span>`;
+  }
+  const pct = ((m.revenueCents - m.prevCents) / m.prevCents) * 100;
+  const shown = `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(Math.abs(pct) < 10 ? 1 : 0)}%`;
+  return html`<span class="delta" id="revenue-growth">${pct >= 0 ? '▲' : '▼'} ${shown} vs ${m.prevLabel}</span>`;
+}
+
+function homePage({ openEstimates, activeJobs, outstandingCents, month, flash }) {
+  const profitClass = month.profitCents > 0 ? 'good' : month.profitCents < 0 ? 'bad' : '';
   return layout('Home', html`
   <div class="hero">
-    <div class="k">Revenue · ${monthLabel}</div>
-    <div class="v" id="month-revenue">${fmt(revenueCents)}</div>
+    <div class="k">Revenue · ${month.label}</div>
+    <div class="v" id="month-revenue">${fmt(month.revenueCents)}</div>
     <div class="s">Payments received this month</div>
+    ${growthBadge(month)}
   </div>
-  <div class="stats three">
+  <div class="stats four">
+    <div class="stat wide-sm ${profitClass}"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
+      <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div></div>
     <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Owed across all jobs</div></div>
     <div class="stat"><div class="k">Active jobs</div><div class="v">${activeJobs.length}</div></div>
     <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
@@ -696,21 +826,66 @@ function estimatePage({ estimate, client, items, totalCents, job, flash, errors 
       <td class="num">${fmt(i.line_total_cents)}</td></tr>`)}</tbody>
     <tfoot><tr><td>Total</td><td class="num" id="estimate-total">${fmt(totalCents)}</td></tr></tfoot>
   </table></div>
-  ${locked ? '' : html`<div class="actions">
-    <a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
-    <a class="btn danger" href="/estimates/${estimate.id}/delete">Delete</a></div>`}`,
+  <div class="actions">
+    <a class="btn" href="/estimates/${estimate.id}/pdf" id="estimate-pdf">${icon('download')}Download PDF</a>
+    ${locked ? '' : html`<a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
+    <a class="btn danger" href="/estimates/${estimate.id}/delete">Delete</a>`}</div>
+  <p class="hint">The PDF shows your company profile, the client, scope and line items. Your internal cost and profit are never included.</p>`,
   { flash, back: { href: '/estimates', label: 'Estimates' } });
 }
 
 // ---------- Jobs ----------
-function jobsPage({ jobs, status }) {
-  return layout('Jobs', html`${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
+const iso = (d) => d.toISOString().slice(0, 10);
+const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const LONG_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+// Month grid (Sunday first). byDay maps 'YYYY-MM-DD' -> job statuses on that day.
+function calendar({ month, day, today, byDay }) {
+  const first = month + '-01';
+  const [y, m] = month.split('-').map(Number);
+  const start = addDays(first, -new Date(first + 'T00:00:00Z').getUTCDay());
+  const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  const prevMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  const cells = [];
+  for (let d = start; cells.length < 42; d = addDays(d, 1)) {
+    if (cells.length === 35 && d.slice(0, 7) !== month) break; // drop an empty sixth row
+    cells.push(d);
+  }
+  return html`<div class="cal" id="calendar">
+    <div class="cal-head">
+      <a class="prev" href="/jobs?month=${prevMonth}" aria-label="Previous month">${icon('chev', 'sm')}</a>
+      <strong>${LONG_MONTHS[m - 1]} ${y}</strong>
+      <span class="row" style="gap:6px">${today.slice(0, 7) !== month || day !== today ? html`<a class="today-link" href="/jobs">Today</a>` : ''}
+        <a href="/jobs?month=${nextMonth}" aria-label="Next month">${icon('chev', 'sm')}</a></span>
+    </div>
+    <div class="cal-grid">
+      ${DOW.map((d) => html`<div class="cal-dow">${d.slice(0, 1)}</div>`)}
+      ${cells.map((d) => {
+        const st = byDay[d] || [];
+        const cls = [d.slice(0, 7) !== month ? 'out' : '', d === today ? 'today' : '', d === day ? 'sel' : ''].join(' ');
+        return html`<a class="cal-day ${cls}" href="/jobs?day=${d}" aria-label="${d}${st.length ? `, ${st.length} job${st.length > 1 ? 's' : ''}` : ''}">
+          <span class="n">${Number(d.slice(8))}</span><span class="cal-dots">${st.slice(0, 3).map((x) => html`<i class="${x}"></i>`)}</span></a>`;
+      })}
+    </div>
+  </div>`;
+}
+
+function jobsPage({ jobs, status, cal }) {
+  const [y, m, d] = cal.day.split('-').map(Number);
+  const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
+  return layout('Jobs', html`
+  ${calendar(cal)}
+  <h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
+  ${jobList(cal.dayJobs, 'No jobs scheduled this day.')}
+  <h2>All jobs</h2>
+  ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
 
 function jobPage({ job, client, expenses, payments, crew = [], members = [], forms = {}, flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
-  const pf = forms.payment || { values: { paid_on: new Date().toISOString().slice(0, 10) }, errors: {} };
+  const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
   const af = forms.assign || { values: {}, errors: {} };
   const final = job.status === 'completed';
   return layout(job.project_name, html`
@@ -733,6 +908,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], for
     <a class="li" href="/estimates/${job.estimate_id}"><span class="icon-bubble">${icon('file')}</span><div class="main-t"><div class="s">Original estimate</div><div class="t">View estimate</div></div>${chev()}</a>
   </div>
   <h2>Scope of work</h2><div class="card pre">${job.scope || html`<span class="muted">—</span>`}</div>
+  <div class="actions"><a class="btn secondary" href="/jobs/${job.id}/work-order" id="work-order">${icon('download')}Work order PDF</a></div>
 
   <h2>Job details</h2>
   <form method="post" action="/jobs/${job.id}" class="form-card" novalidate>
@@ -749,7 +925,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], for
   ${crew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
     <span class="avatar">${(c.email || '?')[0].toUpperCase()}</span>
     <div class="main-t"><div class="t">${c.email}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : ROLES[c.role]}</div></div>
-    <div class="r"><span class="amt">${fmt(c.payout_cents)}</span><a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}" style="font-size:14px">Remove</a></div>
+    <div class="r"><span class="amt">${fmt(c.payout_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?user_id=${c.user_id}">Work order</a> · <a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></span></div>
   </div>`)}</div>` : html`<div class="empty">Nobody assigned yet.</div>`}
   ${members.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="form-card" novalidate>
     <div class="two stack"><div><label for="assign_user">Person</label>
@@ -826,6 +1002,6 @@ function messagePage(title, message) {
 
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, welcomePage,
-  accountPage, teamPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
+  accountPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };

@@ -141,6 +141,22 @@ select pg_temp.expect(regenerate_join_code(:'vista') <> :'code', 'admin can chan
 do $$ begin update organizations set join_code = 'EASY1234'; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
 select pg_temp.expect(true, 'nobody can pick their own join code directly');
 
+-- Company profile: admins only, own company only. Completing a job stamps completed_at.
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+insert into company_profiles (org_id, phone, logo, logo_type) values (:'vista', '555-1111', '\x89504e47', 'image/png');
+update jobs set status = 'completed' where id = :job;
+select pg_temp.expect((select completed_at is not null from jobs where id = :job), 'completing a job records when');
+update jobs set status = 'in_progress' where id = :job;
+select pg_temp.expect((select completed_at is null from jobs where id = :job), 'reopening a job clears the completion time');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from company_profiles) = 0, 'workers cannot read the company profile');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from company_profiles) = 0, 'other companies cannot read the profile');
+select set_config('t.vista', :'vista', false);
+do $$ begin insert into company_profiles (org_id) values (current_setting('t.vista')::uuid);
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'other companies cannot write the profile');
+
 -- Signed-out (anon) gets nothing
 reset role; set role anon;
 do $$ begin perform count(*) from clients; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;

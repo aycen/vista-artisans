@@ -51,7 +51,7 @@ async function req(method, p, form, { auth = true } = {}) {
       if (/Max-Age=0/.test(c)) delete jar[k]; else jar[k] = val;
     }
   }
-  return { status: res.status, location: res.headers.get('location'), setCookies, body: await res.text() };
+  return { status: res.status, location: res.headers.get('location'), type: res.headers.get('content-type'), setCookies, body: await res.text() };
 }
 const post = (p, form, o) => req('POST', p, form, o);
 const getPage = (p, o) => req('GET', p, undefined, o);
@@ -239,8 +239,10 @@ test('full workflow', async () => {
   assert.match(page, /Gross profit \(final\)/); assert.doesNotMatch(page, /\(provisional\)/);
   assert.match(page, /Gate code 1234/); assert.match(page, /value="2026-11-03"/); assert.match(page, /value="2026-11-07"/);
 
-  // Completed job leaves the active list but its balance still counts as outstanding
+  // Completed job leaves the active list but its balance still counts as outstanding;
+  // its gross profit counts toward this month's gross profit (completed today).
   page = (await getPage('/')).body;
+  assert.match(page, /id="month-profit">\$2,552\.50</); assert.match(page, /From 1 job completed this month/);
   assert.match(page, /No active jobs/); assert.match(page, /id="total-outstanding">\$2,052\.25</);
 
   // Client page shows estimates and jobs
@@ -319,6 +321,42 @@ test('full workflow', async () => {
   assert.notEqual(await monthRevenue(), before); assert.equal(await monthRevenue(), await expectedRevenue());
   assert.match(await monthRevenue(), /^\$\d/);
 
+  assert.match((await getPage('/')).body, /id="revenue-growth"/);
+
+  // Jobs calendar: the deck job (Nov 10-12) shows on each of its days, and not after
+  const dayList = async (d) => (await getPage(`/jobs?day=${d}`)).body.split('All jobs')[0];
+  page = await dayList('2026-11-11');
+  assert.match(page, /aria-label="2026-11-11, 1 job"/); assert.match(page, new RegExp(`href="/jobs/${deckJob}"`));
+  assert.doesNotMatch(await dayList('2026-11-13'), new RegExp(`href="/jobs/${deckJob}"`));
+  assert.match(await dayList('2026-11-13'), /No jobs scheduled this day/);
+  assert.equal((await getPage('/jobs?month=2026-11')).status, 200);
+  assert.equal((await getPage('/jobs?day=garbage')).status, 200);
+
+  // Worker page: Dave's jobs and pay totals
+  r = await getPage('/team');
+  assert.match(r.body, new RegExp(`href="/team/${await uid('dave@vista.test')}"`));
+  page = (await getPage(`/team/${await uid('dave@vista.test')}`)).body;
+  assert.equal(stat(page, 'jobs-open'), '1'); assert.equal(stat(page, 'upcoming'), '$350.00'); assert.equal(stat(page, 'earned'), '$0.00');
+  assert.match(page, /Deck/);
+  assert.equal((await getPage(`/team/${await uid('bob@other.test')}`)).status, 404, 'no pages for people outside the team');
+
+  // Company profile, logo, and PDFs
+  r = await post('/settings', { name: '', phone: '555-000-1111' });
+  assert.equal(r.status, 422); assert.match(r.body, /Company name is required/); assert.match(r.body, /value="555-000-1111"/);
+  r = await post('/settings', { name: 'Vista Artisans', logo_data: 'data:image/png;base64,aGVsbG8=' });
+  assert.equal(r.status, 422); assert.match(r.body, /must be a PNG or JPG/);
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  r = await post('/settings', { name: 'Vista Artisans', phone: '555-000-1111', license_number: 'CA-99', estimate_terms: 'Valid 30 days.',
+    logo_data: `data:image/png;base64,${PNG}` });
+  assert.equal(r.status, 303);
+  r = await getPage('/settings/logo'); assert.equal(r.status, 200); assert.equal(r.type, 'image/png');
+  assert.match((await getPage('/settings')).body, /value="CA-99"/);
+  r = await getPage(`/estimates/${estId}/pdf`);
+  assert.equal(r.status, 200); assert.equal(r.type, 'application/pdf'); assert.match(r.body, /^%PDF-/);
+  r = await getPage(`/jobs/${deckJob}/work-order`); assert.equal(r.type, 'application/pdf');
+  r = await getPage(`/jobs/${deckJob}/work-order?user_id=${await uid('dave@vista.test')}`); assert.equal(r.type, 'application/pdf');
+  assert.equal((await getPage(`/jobs/${deckJob}/work-order?user_id=${await uid('bob@other.test')}`)).status, 404);
+
   // Erin joins with the company's join code (no company of her own needed) and becomes a worker
   as('alice');
   const code = (await getPage('/team')).body.match(/id="join-code">([A-Z0-9]{4}-[A-Z0-9]{4})</)[1];
@@ -345,7 +383,8 @@ test('full workflow', async () => {
   page = (await getPage(`/schedule/${deckJob}`)).body;
   assert.match(page, /Deck/); assert.match(page, /Bring the long ladder/);
   assert.match(page, /data-k="my-pay">\$350\.00</); assert.equal((page.match(/\$/g) || []).length, 1);
-  for (const p of ['/clients', '/estimates', '/jobs', `/jobs/${deckJob}`, `/clients/${clientId}`, `/estimates/${deckId}`, '/team']) {
+  for (const p of ['/clients', '/estimates', '/jobs', `/jobs/${deckJob}`, `/clients/${clientId}`, `/estimates/${deckId}`, '/team',
+    '/settings', '/settings/logo', `/estimates/${deckId}/pdf`, `/jobs/${deckJob}/work-order`]) {
     assert.equal((await getPage(p)).status, 404, `worker gets 404 on ${p}`);
   }
   assert.equal((await post(`/jobs/${deckJob}/payments`, { payment_amount: '1', paid_on: '2026-10-19' })).status, 404);
@@ -394,7 +433,7 @@ test('full workflow', async () => {
   // Bob (another organization) can't see or change anything of Vista's
   as('bob');
   for (const p of [`/clients/${clientId}`, `/estimates/${estId}`, `/jobs/${jobId}`, `/clients/${clientId}/edit`,
-    `/expenses/${expenseIds[0]}/edit`]) {
+    `/expenses/${expenseIds[0]}/edit`, `/estimates/${estId}/pdf`, `/jobs/${jobId}/work-order`]) {
     assert.equal((await getPage(p)).status, 404, `bob gets 404 on ${p}`);
   }
   for (const [p, f] of [[`/clients/${clientId}`, { name: 'Hacked' }], [`/jobs/${jobId}/payments`, { payment_amount: '1', paid_on: '2026-10-19' }],
