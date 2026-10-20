@@ -1007,7 +1007,7 @@ route('POST', '/settings/quickbooks/connect', async ({ req, form }) => {
   if (!qbo.configured()) return redirect('/settings');
   const from = str(form.get('sync_from'), 20);
   const state = `${crypto.randomBytes(16).toString('hex')}.${isDate(from) ? from : ''}`;
-  return redirect(qbo.authorizeUrl(state, `${hereUrl(req)}/settings/quickbooks/callback`), { 'Set-Cookie': cookie(QBO_STATE, state, 15 * 60) });
+  return redirect(await qbo.authorizeUrl(state, `${hereUrl(req)}/settings/quickbooks/callback`), { 'Set-Cookie': cookie(QBO_STATE, state, 15 * 60) });
 });
 route('GET', '/settings/quickbooks/callback', async ({ db, org, req, url }) => {
   const state = parseCookies(req)[QBO_STATE] || '';

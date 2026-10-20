@@ -1169,6 +1169,10 @@ test('QuickBooks: connect, push customers, job invoices and payments once, refre
     await post(`/jobs/${deck}/payments`, { payment_amount: '10', paid_on: '2026-10-20' });
     r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /Sent (0|1) jobs? and 1 payment/);
 
+    // An access token QuickBooks rejects early is refreshed and the call retried
+    fq.state.tokens.clear();
+    await post(`/jobs/${deck}/payments`, { payment_amount: '3', paid_on: '2026-10-20' });
+    r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /Sent 0 jobs and 1 payment/);
     // Expired access token: refreshed automatically. Revoked sign-in: shown on the settings page.
     await dbClient.query("UPDATE qbo_connections SET access_expires_at = now() - interval '1 hour' WHERE org_id = $1", [vista]);
     const before = fq.state.requests.filter((x) => x === 'POST /token').length;
@@ -1179,13 +1183,21 @@ test('QuickBooks: connect, push customers, job invoices and payments once, refre
     await post(`/jobs/${deck}/payments`, { payment_amount: '5', paid_on: '2026-10-20' });
     r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /sync stopped/);
     assert.match((await getPage('/settings')).body, /id="qbo-error"[^>]*>QuickBooks sign-in expired/);
+    // Reconnecting keeps what was already sent (same QuickBooks company) and clears the error
+    r = await post('/settings/quickbooks/connect', { sync_from: '2020-01-01' });
+    const st3 = new URL(r.location).searchParams.get('state'); fq.issueCode('code-2');
+    const sentBefore = fq.state.invoices.length; const paidBefore = fq.state.payments.length;
+    r = await getPage(`/settings/quickbooks/callback?code=code-2&state=${st3}&realmId=4620816365`); assert.match(r.location, /connected/);
+    await waitFor(() => fq.state.payments.length === paidBefore + 1, 'the waiting payment after reconnecting');
+    assert.equal(fq.state.invoices.length, sentBefore);
+    await waitFor(async () => !/id="qbo-error"/.test((await getPage('/settings')).body), 'error cleared');
 
     // Tokens are never readable through the app's database role; other companies see nothing
     as('bob'); await post('/login', { email: 'bob@other.test', password: 'bob-password' });
     assert.match((await getPage('/settings')).body, /id="connect-quickbooks"/);
     as('alice');
     r = await post('/settings/quickbooks/disconnect', {}); assert.match(r.location, /disconnected/);
-    assert.deepEqual(fq.state.revoked, ['gone']);
+    assert.equal(fq.state.revoked.length, 1);
     assert.equal(Number((await dbClient.query('SELECT count(*) FROM qbo_connections')).rows[0].count), 0);
   } finally {
     fq.close();
