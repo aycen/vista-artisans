@@ -71,7 +71,11 @@ async function onboardingLink(accountId, baseUrl) {
 async function ensureCustomer(account, client, email, orgId) {
   const fields = { name: client.name, email, metadata: { client_id: client.id, org_id: orgId } };
   if (client.stripe_customer_id && client.stripe_customer_account === account) {
-    return (await call('POST', `/customers/${encodeURIComponent(client.stripe_customer_id)}`, fields, { account })).id;
+    try {
+      return (await call('POST', `/customers/${encodeURIComponent(client.stripe_customer_id)}`, fields, { account })).id;
+    } catch (e) {
+      if (!(e instanceof StripeError)) throw e; // deleted in Stripe: make a new one below
+    }
   }
   return (await call('POST', '/customers', fields, { account })).id;
 }

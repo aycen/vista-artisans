@@ -213,6 +213,33 @@ table.lines tfoot td{border-top:1px solid var(--line);font-weight:750;font-size:
 .notice{background:var(--amber-soft);color:var(--amber);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;font-size:15px}
 .notice a{color:inherit;text-decoration:underline}
 .muted{color:var(--text-2)}
+.sig-img{display:block;max-width:100%;height:90px;margin-top:12px;background:#fff;border-radius:10px;border:1px solid var(--line)}
+.sig-typed{margin-top:12px;font:italic 30px/1.2 "Snell Roundhand","Segoe Script","Brush Script MT",cursive}
+.track{font-size:14px;color:var(--text-2);background:var(--surface-2);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+table.lines tr.grp td{background:var(--surface-2);font-weight:600;font-size:14px;color:var(--text-2)}
+table.lines tbody.not-chosen{opacity:.45}
+.pub{max-width:640px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 20px) 16px 40px}
+.pub-head{display:flex;align-items:center;gap:14px;margin:4px 2px 18px}
+.pub-logo{max-width:150px;max-height:60px;object-fit:contain}
+.pub-co{font-weight:700;font-size:18px}
+.pub-title{font-size:26px;line-height:1.2;letter-spacing:-.02em;margin:4px 0 6px}
+.pub-ok{border:2px solid var(--green)}
+.pub-foot{text-align:center;color:var(--text-3);font-size:13px;margin-top:24px}
+.opts{display:grid;gap:12px;margin-bottom:14px}
+@media(min-width:640px){.opts{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}}
+.opt{display:block;background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;border:2px solid transparent;cursor:pointer;position:relative;margin:0;font-weight:400}
+.opt.on{border-color:var(--accent);background:var(--accent-soft)}.opt.dim{opacity:.5}
+.opt input[type=radio]{position:absolute;top:18px;right:16px;width:20px;height:20px;accent-color:var(--accent)}
+.opt-head{display:flex;flex-direction:column;gap:2px;padding-right:28px}.opt-head strong{font-size:17px}
+.opt-total{font-size:24px;font-weight:750;letter-spacing:-.02em}
+.opt ul{margin:8px 0 6px;padding-left:18px;font-size:15px}.opt li{margin:3px 0}
+.sigpad{position:relative;background:#fff;border:1.5px dashed var(--line);border-radius:12px;margin-bottom:6px}
+.sigpad canvas{display:block;width:100%;height:auto;aspect-ratio:10/3;touch-action:none;cursor:crosshair}
+.sigpad .link{position:absolute;right:10px;bottom:6px;font-size:14px}
+label.check{display:flex;gap:10px;align-items:flex-start;font-weight:500;margin-top:14px}
+label.check input{width:20px;height:20px;flex:none;margin-top:2px;accent-color:var(--accent)}
+details.decline{margin:16px 2px}details.decline summary{color:var(--text-2);cursor:pointer;font-size:15px}
+.opt-input{margin-top:8px;font-size:15px !important;padding:9px 12px !important}
 .plan-strip{display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none;padding:14px 16px}
 .plan-strip .main-t{flex:1;min-width:0}.plan-strip .t{font-weight:600}.plan-strip .s{color:var(--text-2);font-size:14px}
 .seg{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;margin:6px 0 14px;max-width:340px}
@@ -277,6 +304,7 @@ const ICONS = {
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
   card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6.5 15h4"/>',
   building: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"/>',
 };
@@ -300,7 +328,7 @@ const pill = (status, labels) => html`<span class="pill ${status}">${labels[stat
 
 // ---------- Layout ----------
 // The server fills <!--NAV--> (sidebar + tab bar) and <!--AVATAR--> for the signed-in user.
-function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle } = {}) {
+function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle, docTitle } = {}) {
   return html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -310,7 +338,7 @@ function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle } 
 <meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Vista">
 <link rel="manifest" href="/static/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<title>${title} · Vista Artisans</title><style>${raw(CSS)}</style></head>
+<title>${docTitle || `${title} · Vista Artisans`}</title><style>${raw(CSS)}</style></head>
 <body>
 ${flash ? html`<div class="toast" role="status">${flash}</div>` : ''}
 ${bare ? body : html`<div class="shell">
@@ -469,7 +497,7 @@ function accountPage({ user, org, orgs, plan, values = {}, errors = {}, flash })
 }
 
 // ---------- Company profile ----------
-function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null }) {
+function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false }) {
   return layout('Company profile', html`
   ${errorBox(errors)}
   <form method="post" action="/settings" id="settings-form" novalidate>
@@ -504,7 +532,27 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
   </form>
   ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
+  ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled) : ''}
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
+}
+
+function emailSettings(ev, errors, enabled) {
+  const toggle = (name, label, hint) => html`<label class="check"><input type="checkbox" name="${name}" ${ev[name] ? raw('checked') : ''}>
+    <span>${label}<div class="hint" style="font-weight:400;margin:2px 0 0">${hint}</div></span></label>`;
+  return html`<h2 id="emails">Automatic emails & approvals</h2>
+  ${errorBox(errors)}
+  <form method="post" action="/settings/emails" class="form-card" novalidate id="email-settings">
+    ${enabled ? '' : html`<div class="notice">Emailing isn't switched on for this app yet, so nothing will be sent. You can still set these up now.</div>`}
+    <div class="hint" style="margin:0 0 8px">Emails come from your company name, and replies go to your business email above.</div>
+    <label for="estimate_followup_days">Follow up on estimates that haven't been approved</label>
+    <select id="estimate_followup_days" name="estimate_followup_days">${[['0', 'Off'], ['2', 'After 2 days, then 4'], ['3', 'After 3 days, then 6'], ['5', 'After 5 days, then 10'], ['7', 'After 7 days, then 14']]
+      .map(([k, l]) => html`<option value="${k}" ${String(ev.estimate_followup_days) === k ? raw('selected') : ''}>${l}</option>`)}</select>
+    ${toggle('appointment_reminders', 'Appointment reminders', 'The day before a job starts, remind the client by email.')}
+    ${toggle('review_requests', 'Ask for a review', 'An hour after you mark a job completed, ask the client for a review.')}
+    ${input('review_url', 'Review link', ev, errors, { placeholder: 'https://g.page/r/…', hint: 'Your Google (or Yelp, Facebook…) review page.' })}
+    ${input('default_deposit_percent', 'Default deposit for new estimates (%)', ev, errors, { inputmode: 'numeric', hint: 'Clients pay it online when they approve, if Stripe is connected. 0 for none.' })}
+    <div class="form-actions"><button type="submit" class="secondary">Save email settings</button></div>
+  </form>`;
 }
 
 function paymentsCard({ configured, testMode, account }) {
@@ -825,7 +873,7 @@ function estimatesPage({ estimates, status }) {
 function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
   const action = estimate ? `/estimates/${estimate.id}` : '/estimates';
   // Always offer blank rows so the form works without JavaScript too.
-  const all = [...items, ...Array.from({ length: items.length ? 1 : 2 }, () => ({ desc: '', qty: '', price: '' }))];
+  const all = [...items, ...Array.from({ length: items.length ? 1 : 2 }, () => ({ desc: '', qty: '', price: '', option: '' }))];
   const isNewClient = values.client_id === 'new' || (!values.client_id && !clients.length);
   const cancel = estimate ? `/estimates/${estimate.id}` : '/estimates';
   return layout(estimate ? 'Edit estimate' : 'New estimate', html`
@@ -848,6 +896,10 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
     </div>
     <h2>Line items</h2>
     ${errors.items ? html`<div class="field-error" style="margin:0 4px 8px">${errors.items}</div>` : ''}
+    ${errors.options ? html`<div class="field-error" style="margin:0 4px 8px">${errors.options}</div>` : ''}
+    <p class="hint" style="margin:0 4px 8px">Want to offer choices? Put an option name like <strong>Good</strong>, <strong>Better</strong> or <strong>Best</strong> on lines;
+      the client picks one when approving. Lines with no option are included in every choice.</p>
+    <datalist id="option-names"><option value="Good"><option value="Better"><option value="Best"></datalist>
     <div class="form-card" style="padding-top:6px">
       <div id="items">${all.map((it, i) => itemRow(it, errors[`item_${i}`]))}</div>
       <button type="button" class="secondary block" id="add-item" style="margin-top:12px">${icon('plus')}Add line item</button>
@@ -856,6 +908,11 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
       ${input('estimated_cost', 'Internal estimated cost ($)', values, errors, { inputmode: 'decimal', placeholder: '0.00',
         hint: 'Your expected cost for the whole project. Never shown to the client.' })}
       <div class="row" style="justify-content:space-between;margin-top:14px"><span class="muted">Estimated profit</span><strong id="calc-profit">—</strong></div>
+      <div id="calc-options" class="hint" style="margin-top:6px"></div>
+    </div>
+    <div class="form-card">
+      ${input('deposit_percent', 'Deposit due at approval (%)', values, errors, { inputmode: 'numeric', placeholder: '0',
+        hint: 'When the client approves online, they get an invoice for this share of the total. 0 for no deposit.' })}
     </div>
     <div class="totalbar">
       <div class="grow"><div class="lbl">Estimate total</div><div class="num" id="calc-total">—</div></div>
@@ -863,7 +920,7 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
       <button type="submit">Save estimate</button>
     </div>
   </form>
-  <template id="item-template">${itemRow({ desc: '', qty: '', price: '' })}</template>
+  <template id="item-template">${itemRow({ desc: '', qty: '', price: '', option: '' })}</template>
   <script>${raw(ESTIMATE_JS)}</script>`, { back: { href: cancel, label: estimate ? estimate.project_name : 'Estimates' } });
 }
 
@@ -875,6 +932,7 @@ function itemRow(it, err) {
       <input name="item_qty" value="${it.qty}" inputmode="decimal" aria-label="Quantity" placeholder="Qty">
       <input name="item_price" value="${it.price}" inputmode="decimal" aria-label="Unit price" placeholder="Unit price">
     </div>
+    <input name="item_option" value="${it.option || ''}" list="option-names" aria-label="Option" placeholder="Option (optional)" class="opt-input">
     <div class="foot"><button type="button" class="link remove-item">Remove</button><span>Line total <span class="line-total">—</span></span></div>
   </div>`;
 }
@@ -893,14 +951,20 @@ const ESTIMATE_JS = `
     return (neg ? '-' : '') + '$' + Math.floor(c / 100).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',') + '.' + String(c % 100).padStart(2, '0');
   }
   function recalc() {
-    var total = 0;
+    var shared = 0, opts = {}, order = [];
     list.querySelectorAll('.item').forEach(function (row) {
       var q = cents(row.querySelector('[name=item_qty]').value), p = cents(row.querySelector('[name=item_price]').value);
+      var o = row.querySelector('[name=item_option]').value.trim();
       var cell = row.querySelector('.line-total');
       if (q === null || p === null) { cell.textContent = '—'; return; }
-      var lt = Math.floor((q * p + 50) / 100); total += lt; cell.textContent = fmt(lt);
+      var lt = Math.floor((q * p + 50) / 100); cell.textContent = fmt(lt);
+      if (!o) shared += lt; else { if (!(o in opts)) { opts[o] = 0; order.push(o); } opts[o] += lt; }
     });
+    // With options, the total shown is the first option's; the client's choice decides the final total.
+    var total = shared + (order.length ? opts[order[0]] : 0);
     document.getElementById('calc-total').textContent = fmt(total);
+    document.getElementById('calc-options').textContent = order.length
+      ? 'Options: ' + order.map(function (o) { return o + ' ' + fmt(shared + opts[o]); }).join(' · ') + '. Profit shown for ' + order[0] + '.' : '';
     var cost = cents(document.getElementById('estimated_cost').value);
     document.getElementById('calc-profit').textContent = cost === null ? 'Enter a cost' : fmt(total - cost);
   }
@@ -921,26 +985,75 @@ const ESTIMATE_JS = `
   recalc();
 })();`;
 
-function estimatePage({ estimate, client, items, totalCents, job, flash, errors }) {
+// Timestamps in the company's time zone, e.g. "Oct 20, 3:04 PM".
+const fmtWhen = (ts) => (ts ? new Intl.DateTimeFormat('en-US', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles',
+  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(ts)) : '');
+const EMAIL_KINDS = { estimate: 'Estimate sent', estimate_reminder: 'Follow-up', appointment_reminder: 'Appointment reminder',
+  review_request: 'Review request', estimate_approved: 'Approval notice to you', estimate_declined: 'Decline notice to you' };
+function emailHistory(emails) {
+  if (!emails?.length) return '';
+  return html`<h2>Emails</h2><div class="list" id="email-history">${emails.map((m) => html`<div class="li">
+    <span class="icon-bubble">${icon('mail')}</span>
+    <div class="main-t"><div class="t">${EMAIL_KINDS[m.kind] || m.kind}</div><div class="s">${m.to_email} · ${fmtWhen(m.created_at)}</div></div>
+    ${m.status === 'failed' ? html`<span class="pill declined" title="${m.error}">Failed</span>` : html`<span class="pill completed">Sent</span>`}</div>`)}</div>`;
+}
+
+// Line items grouped by option (shared lines first). Used on the company's page and the client's page.
+function itemGroups(items) {
+  const shared = items.filter((i) => !i.option_name);
+  const names = [...new Set(items.filter((i) => i.option_name).map((i) => i.option_name))];
+  return { shared, groups: names.map((name) => ({ name, items: items.filter((i) => i.option_name === name) })) };
+}
+const itemRows = (list) => list.map((i) => html`<tr><td>${i.description}<div class="muted" style="font-size:13px">${fmtQty(i.qty_hundredths)} × ${fmt(i.unit_price_cents)}</div></td>
+  <td class="num">${fmt(i.line_total_cents)}</td></tr>`);
+
+function estimatePage({ estimate, client, items, totalCents, job, options = [], emails = [], sending = {}, sendForm, flash, errors }) {
   const locked = !!job;
   const profit = estimate.estimated_cost_cents == null ? null : totalCents - estimate.estimated_cost_cents;
   const others = Object.entries(ESTIMATE_STATUS).filter(([k]) => k !== estimate.status);
+  const { shared, groups } = itemGroups(items);
+  const sf = sendForm || { values: { send_to: estimate.sent_to || client.email || '', send_message: '' }, errors: {} };
+  const link = `/e/${estimate.public_token}`;
+  const chosen = estimate.chosen_option;
   return layout(estimate.project_name, html`
-  <p style="margin:0 2px 14px">${pill(estimate.status, ESTIMATE_STATUS)}</p>
-  ${errorBox(errors)}
+  <p style="margin:0 2px 14px">${pill(estimate.status, ESTIMATE_STATUS)}${chosen ? html` <span class="pill">${chosen}</span>` : ''}</p>
+  ${errorBox({ ...errors, ...sf.errors })}
   ${locked ? html`<div class="notice">Converted to <a href="/jobs/${job.id}">a job</a>. This estimate is locked and can no longer be edited.</div>` : ''}
   <div class="stats three">
-    <div class="stat wide"><div class="k">Estimate total</div><div class="v">${fmt(totalCents)}</div></div>
+    <div class="stat wide"><div class="k">${options.length && !chosen ? `Estimate total (${options[0].name})` : 'Estimate total'}</div><div class="v" data-k="estimate-total">${fmt(totalCents)}</div>
+      ${options.length && !chosen ? html`<div class="s">${options.map((o) => `${o.name} ${fmt(o.total)}`).join(' · ')}</div>` : ''}</div>
     <div class="stat"><div class="k">Estimated cost</div><div class="v">${fmt(estimate.estimated_cost_cents)}</div></div>
     <div class="stat ${profit == null ? '' : profit >= 0 ? 'good' : 'bad'}"><div class="k">Estimated profit</div><div class="v" id="estimated-profit">${profit == null ? '—' : fmt(profit)}</div></div>
   </div>
-  ${locked ? '' : html`<div class="card">
+  ${estimate.approved_at ? html`<div class="card" id="approval">
+    <div class="row" style="gap:10px"><span class="icon-bubble" style="background:var(--green-soft);color:var(--green)">${icon('check')}</span>
+      <div><strong>Approved online by ${estimate.signer_name}</strong><div class="muted" style="font-size:14px">${fmtWhen(estimate.approved_at)}${estimate.signer_ip ? ` · IP ${estimate.signer_ip}` : ''}</div></div></div>
+    ${estimate.signature ? html`<img src="${estimate.signature}" alt="Client signature" class="sig-img">` : html`<div class="sig-typed">${estimate.signer_name}</div>`}
+  </div>` : ''}
+  ${estimate.status === 'declined' && estimate.decline_reason ? html`<div class="card"><strong>Client declined</strong><div class="pre muted" style="margin-top:6px">${estimate.decline_reason}</div></div>` : ''}
+  ${locked ? '' : html`<div class="card" id="send-card">
+    <h3 style="margin:0 0 4px">Send to client</h3>
+    <div class="hint" style="margin:0 0 10px">They get a link to review the estimate${options.length ? ', pick an option' : ''}, sign and approve${estimate.deposit_percent ? `, then pay a ${estimate.deposit_percent}% deposit` : ''}. Approving turns it into a job automatically.</div>
+    ${estimate.sent_at ? html`<div class="track" id="tracking">Sent to ${estimate.sent_to} · ${fmtWhen(estimate.sent_at)}${estimate.viewed_at ? html` · <strong>Opened ${fmtWhen(estimate.viewed_at)}</strong>` : ' · Not opened yet'}${estimate.reminders_sent ? ` · ${estimate.reminders_sent} follow-up${estimate.reminders_sent > 1 ? 's' : ''} sent` : ''}</div>` : ''}
+    ${sending.enabled ? html`<form method="post" action="/estimates/${estimate.id}/send" novalidate>
+      ${input('send_to', "Client's email", sf.values, sf.errors, { type: 'email', inputmode: 'email' })}
+      ${textarea('send_message', 'Message (optional)', sf.values, {}, { placeholder: `Thanks for the opportunity. Here's your estimate for ${estimate.project_name}.` })}
+      <div class="form-actions"><button type="submit" id="send-estimate">${icon('mail')}${estimate.sent_at ? 'Send again' : 'Email estimate'}</button></div>
+    </form>` : html`<div class="hint">Emailing isn't set up for this app yet. Copy the link below and text or email it yourself.</div>`}
+    <label for="client-link" style="margin-top:12px">Client link</label>
+    <div class="row" style="gap:8px;flex-wrap:nowrap"><input id="client-link" readonly value="${link}" data-path="${link}" style="flex:1;min-width:0">
+      <button type="button" class="secondary sm" id="copy-link">Copy</button></div>
+    <div class="hint"><a href="${link}?preview=1" target="_blank" rel="noopener">Preview what the client sees</a></div>
+  </div>
+  <div class="card">
     ${estimate.status === 'approved' ? html`
     <form method="post" action="/estimates/${estimate.id}/convert" data-confirm="Convert this estimate to a job? The estimate will be locked.">
       <button type="submit" id="convert" class="block">${icon('briefcase')}Convert to job</button>
-    </form>` : html`<div class="hint" style="margin:0 0 10px">Mark it approved to convert it to a job.</div>`}
-    <div class="row" style="margin-top:12px">${others.map(([k, l]) => html`<form method="post" action="/estimates/${estimate.id}/status">
-      <input type="hidden" name="status" value="${k}"><button type="submit" class="sm secondary">Mark ${l.toLowerCase()}</button></form>`)}</div>
+    </form>` : html`<div class="hint" style="margin:0 0 10px">Approved in person or by phone? Mark it approved, then convert it to a job.</div>`}
+    <div class="row" style="margin-top:12px">${others.map(([k, l]) => html`<form method="post" action="/estimates/${estimate.id}/status" class="row" style="gap:6px">
+      <input type="hidden" name="status" value="${k}">
+      ${k === 'approved' && options.length ? html`<select name="chosen_option" aria-label="Approved option" style="width:auto">${options.map((o) => html`<option value="${o.name}">${o.name} (${fmt(o.total)})</option>`)}</select>` : ''}
+      <button type="submit" class="sm secondary">Mark ${l.toLowerCase()}</button></form>`)}</div>
   </div>`}
   <h2>Client</h2>
   <div class="list"><a class="li" href="/clients/${client.id}"><span class="avatar">${client.name[0].toUpperCase()}</span>
@@ -948,17 +1061,135 @@ function estimatePage({ estimate, client, items, totalCents, job, flash, errors 
   <h2>Scope of work</h2><div class="card pre">${estimate.scope || html`<span class="muted">—</span>`}</div>
   <h2>Line items</h2>
   <div class="card flush"><table class="lines">
-    <tbody>${items.map((i) => html`<tr><td>${i.description}<div class="muted" style="font-size:13px">${fmtQty(i.qty_hundredths)} × ${fmt(i.unit_price_cents)}</div></td>
-      <td class="num">${fmt(i.line_total_cents)}</td></tr>`)}</tbody>
-    <tfoot><tr><td>Total</td><td class="num" id="estimate-total">${fmt(totalCents)}</td></tr></tfoot>
+    ${groups.length && shared.length ? html`<tbody><tr class="grp"><td colspan="2">Included in every option</td></tr></tbody>` : ''}
+    <tbody>${itemRows(shared)}</tbody>
+    ${groups.map((g) => html`<tbody class="${chosen && chosen !== g.name ? 'not-chosen' : ''}"><tr class="grp"><td>Option: ${g.name}${chosen === g.name ? ' ✓' : ''}</td>
+      <td class="num">${fmt((options.find((o) => o.name === g.name) || {}).total)}</td></tr>${itemRows(g.items)}</tbody>`)}
+    <tfoot><tr><td>Total${groups.length ? ` (${chosen || groups[0].name})` : ''}</td><td class="num" id="estimate-total">${fmt(totalCents)}</td></tr></tfoot>
   </table></div>
+  ${estimate.deposit_percent ? html`<p class="hint">Deposit at approval: ${estimate.deposit_percent}% (${fmt(Math.round((totalCents * estimate.deposit_percent) / 100))}).</p>` : ''}
   <div class="actions">
     <a class="btn" href="/estimates/${estimate.id}/pdf" id="estimate-pdf">${icon('download')}Download PDF</a>
     ${locked ? '' : html`<a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
     <a class="btn danger" href="/estimates/${estimate.id}/delete">Delete</a>`}</div>
-  <p class="hint">The PDF shows your company profile, the client, scope and line items. Your internal cost and profit are never included.</p>`,
+  ${emailHistory(emails)}
+  <p class="hint">The PDF and the client's page show your company profile, the client, scope and line items. Your internal cost and profit are never included.</p>
+  <script>${raw(COPY_LINK_JS)}</script>`,
   { flash, back: { href: '/estimates', label: 'Estimates' } });
 }
+const COPY_LINK_JS = `
+(function () {
+  var i = document.getElementById('client-link'), b = document.getElementById('copy-link');
+  if (!i || !b) return;
+  i.value = location.origin + i.dataset.path;
+  b.addEventListener('click', function () {
+    i.select();
+    (navigator.clipboard ? navigator.clipboard.writeText(i.value) : Promise.reject()).catch(function () { document.execCommand('copy'); });
+    b.textContent = 'Copied';
+    setTimeout(function () { b.textContent = 'Copy'; }, 1500);
+  });
+})();`;
+
+// ---------- The client's estimate page (opened from the emailed link, no login) ----------
+function publicEstimatePage({ estimate, company, hasLogo, client, items, totals, job, invoices = [], canPayOnline, token, values = {}, errors = {}, flash, preview }) {
+  const approved = !!job || estimate.status === 'approved';
+  const open = !approved;
+  const { shared, groups } = itemGroups(items);
+  const chosen = estimate.chosen_option;
+  const pick = values.option || chosen || '';
+  const depositFor = (t) => Math.round((t * estimate.deposit_percent) / 100);
+  const base = `/e/${token}`;
+  const contact = [company.phone, company.email].filter(Boolean).join(' · ');
+  const openInv = invoices.filter((i) => i.status === 'open' && i.hosted_url);
+  const paidInv = invoices.filter((i) => i.status === 'paid');
+  return layout(estimate.project_name, html`<div class="pub">
+  ${preview ? html`<div class="notice">Preview: this is what your client sees. Approving is turned off here.</div>` : ''}
+  <header class="pub-head">
+    ${hasLogo ? html`<img src="${base}/logo" alt="${company.name}" class="pub-logo">` : html`<div class="mark">${company.name.slice(0, 2).toUpperCase()}</div>`}
+    <div><div class="pub-co">${company.name}</div><div class="muted" style="font-size:14px">${contact}${company.license_number ? ` · License #${company.license_number}` : ''}</div></div>
+  </header>
+  <div class="card">
+    <div class="muted" style="font-size:13px;letter-spacing:.04em;text-transform:uppercase">Estimate E-${estimate.id}</div>
+    <h1 class="pub-title">${estimate.project_name}</h1>
+    <div class="muted">Prepared for <strong style="color:var(--text)">${client.name}</strong>${client.address ? ` · ${client.address}` : ''}</div>
+  </div>
+  ${approved ? html`<div class="card pub-ok" id="approved">
+    <div class="row" style="gap:10px"><span class="icon-bubble" style="background:var(--green-soft);color:var(--green)">${icon('check')}</span>
+      <div><strong>Approved${estimate.signer_name ? ` by ${estimate.signer_name}` : ''}</strong>
+      <div class="muted" style="font-size:14px">${estimate.approved_at ? fmtWhen(estimate.approved_at) : ''}${chosen ? ` · ${chosen}` : ''} · ${fmt(totals.total)}</div></div></div>
+    ${openInv.map((i) => html`<a class="btn block" style="margin-top:14px" href="${i.hosted_url}" id="pay-deposit">${icon('card')}Pay ${i.description.toLowerCase().startsWith('deposit') ? 'deposit' : 'invoice'} · ${fmt(i.amount_cents)}</a>`)}
+    ${paidInv.map((i) => html`<div class="hint" style="margin-top:10px">${icon('check')} ${i.description}: ${fmt(i.amount_cents)} paid. Thank you!</div>`)}
+    <div class="hint" style="margin-top:10px">${company.name} will be in touch to schedule the work.</div>
+  </div>` : ''}
+  ${estimate.status === 'declined' && open ? html`<div class="notice">You declined this estimate. Changed your mind? You can still approve it below.</div>` : ''}
+  ${estimate.scope ? html`<h2>Scope of work</h2><div class="card pre">${estimate.scope}</div>` : ''}
+  <form method="post" action="${base}/approve" id="approve-form" novalidate>
+  ${groups.length ? html`
+    ${shared.length ? html`<h2>Included in every option</h2><div class="card flush"><table class="lines"><tbody>${itemRows(shared)}</tbody></table></div>` : ''}
+    <h2>${open ? 'Choose an option' : 'Options'}</h2>
+    ${errors.option ? html`<div class="field-error" style="margin:0 4px 8px">${errors.option}</div>` : ''}
+    <div class="opts">${groups.map((g) => {
+      const t = totals.options.find((o) => o.name === g.name).total;
+      const isChosen = approved ? chosen === g.name : pick === g.name;
+      return html`<label class="opt ${isChosen ? 'on' : ''} ${approved && !isChosen ? 'dim' : ''}">
+        ${open ? html`<input type="radio" name="option" value="${g.name}" ${isChosen ? raw('checked') : ''}>` : ''}
+        <div class="opt-head"><strong>${g.name}</strong><span class="opt-total">${fmt(t)}</span></div>
+        <ul>${g.items.map((i) => html`<li>${i.description}${Number(i.qty_hundredths) !== 100 ? html` <span class="muted">× ${fmtQty(i.qty_hundredths)}</span>` : ''}</li>`)}</ul>
+        ${estimate.deposit_percent ? html`<div class="muted" style="font-size:13px">${estimate.deposit_percent}% deposit: ${fmt(depositFor(t))}</div>` : ''}
+      </label>`;
+    })}</div>` : html`
+    <h2>Details</h2>
+    <div class="card flush"><table class="lines"><tbody>${itemRows(shared)}</tbody>
+      <tfoot><tr><td>Total</td><td class="num" data-k="total">${fmt(totals.total)}</td></tr></tfoot></table></div>
+    ${estimate.deposit_percent ? html`<p class="hint">A ${estimate.deposit_percent}% deposit (${fmt(depositFor(totals.total))}) is due when you approve.</p>` : ''}`}
+  ${company.terms ? html`<h2>Terms</h2><div class="card pre" style="font-size:15px">${company.terms}</div>` : ''}
+  ${open ? html`<h2>Approve</h2>
+    <div class="form-card">
+      ${errorBox(Object.fromEntries(Object.entries(errors).filter(([k]) => k !== 'option')))}
+      ${input('signer_name', 'Your full name', values, errors, { autocomplete: 'name', required: true })}
+      <label>Signature <span class="muted" style="font-weight:400">(draw with your finger or mouse)</span></label>
+      <div class="sigpad"><canvas id="sig" width="600" height="180" aria-label="Signature pad"></canvas>
+        <button type="button" class="link" id="sig-clear">Clear</button></div>
+      <input type="hidden" name="signature" id="signature">
+      ${estimate.deposit_percent && canPayOnline ? input('deposit_email', 'Email for the deposit invoice', { deposit_email: values.deposit_email ?? client.email ?? '' }, errors, { type: 'email', inputmode: 'email' }) : ''}
+      <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''}> <span>I approve this estimate and agree to the terms above.</span></label>
+      ${fieldErr(errors, 'agree')}
+      <div class="form-actions"><button type="submit" class="block" id="approve" ${preview ? raw('disabled') : ''}>${icon('check')}Approve estimate</button></div>
+      ${estimate.deposit_percent && canPayOnline ? html`<div class="hint">Next, you'll be taken to a secure Stripe page to pay the deposit.</div>` : ''}
+    </div>` : ''}
+  </form>
+  ${open ? html`<details class="decline"><summary>Not moving forward?</summary>
+    <form method="post" action="${base}/decline" class="form-card" style="margin-top:10px">
+      ${textarea('reason', 'Anything we should know? (optional)', {}, {}, { placeholder: 'Timing, budget, went another way…' })}
+      <div class="form-actions"><button type="submit" class="secondary" ${preview ? raw('disabled') : ''}>Decline estimate</button></div>
+    </form></details>` : ''}
+  <div class="actions" style="justify-content:center"><a class="btn ghost" href="${base}/pdf">${icon('download')}Download PDF</a></div>
+  <p class="pub-foot">Sent with Vista</p>
+  </div>
+  ${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${estimate.project_name} · ${company.name}` });
+}
+const SIGNATURE_JS = `
+(function () {
+  var c = document.getElementById('sig'); if (!c) return;
+  var ctx = c.getContext('2d'), drawing = false, drawn = false, last = null;
+  ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0f172a';
+  function pos(e) { var r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * c.width / r.width, y: (e.clientY - r.top) * c.height / r.height }; }
+  c.addEventListener('pointerdown', function (e) { drawing = true; last = pos(e); c.setPointerCapture(e.pointerId); e.preventDefault(); });
+  c.addEventListener('pointermove', function (e) {
+    if (!drawing) return; var p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; drawn = true; e.preventDefault();
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) { c.addEventListener(t, function () { drawing = false; }); });
+  document.getElementById('sig-clear').addEventListener('click', function () { ctx.clearRect(0, 0, c.width, c.height); drawn = false; });
+  document.getElementById('approve-form').addEventListener('submit', function () {
+    document.getElementById('signature').value = drawn ? c.toDataURL('image/png') : '';
+  });
+  document.querySelectorAll('.opt input[type=radio]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      document.querySelectorAll('.opt').forEach(function (o) { o.classList.toggle('on', o.contains(r) && r.checked); });
+    });
+  });
+})();`;
 
 // ---------- Jobs ----------
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -1008,7 +1239,7 @@ function jobsPage({ jobs, status, cal }) {
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
 
-function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, forms = {}, flash }) {
+function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, forms = {}, emails = [], flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
@@ -1082,7 +1313,8 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
     <div>${input('paid_on', 'Date received', pf.values, pf.errors, { type: 'date', required: true })}</div></div>
     <div class="hint">For cash, checks and other payments received outside the app. Invoices paid online are recorded automatically.</div>
     <div class="form-actions"><button type="submit" class="secondary">Record payment</button></div>
-  </form>`, { flash, back: { href: '/jobs', label: 'Jobs' } });
+  </form>
+  ${emailHistory(emails)}`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
 
 const INVOICE_STATUS = { open: 'Sent', paid: 'Paid', void: 'Voided', uncollectible: 'Uncollectible' };
@@ -1170,7 +1402,7 @@ function messagePage(title, message) {
 }
 
 module.exports = {
-  ESTIMATE_STATUS, JOB_STATUS, nav, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, welcomePage,
+  ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, welcomePage,
   accountPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };

@@ -1,11 +1,13 @@
 'use strict';
 const http = require('node:http');
-const { pool, asUser, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = require('./db');
+const { pool, asUser, asServer, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = require('./db');
 const auth = require('./auth');
 const { parseMoney, parseQty, plain, fmtQty, fmt } = require('./money');
 const v = require('./views');
 const pdf = require('./pdf');
 const stripe = require('./stripe');
+const email = require('./email');
+const mailer = require('./mailer');
 const crypto = require('node:crypto');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -86,6 +88,7 @@ async function validateEstimate(db, org, params) {
   const values = {
     client_id: f.client_id ?? '', project_name: f.project_name ?? '', scope: f.scope ?? '',
     estimated_cost: f.estimated_cost ?? '', status: v.ESTIMATE_STATUS[f.status] ? f.status : 'draft',
+    deposit_percent: f.deposit_percent ?? '0',
   };
   let newClient = null;
   if (values.client_id === 'new') {
@@ -100,10 +103,14 @@ async function validateEstimate(db, org, params) {
   const cost = parseMoney(values.estimated_cost, 'Estimated cost', { required: false });
   if (cost.error) errors.estimated_cost = cost.error;
 
+  const deposit = /^\d{1,3}$/.test(String(values.deposit_percent).trim()) ? Number(String(values.deposit_percent).trim()) : NaN;
+  if (!(deposit >= 0 && deposit <= 100)) errors.deposit_percent = 'Deposit must be a whole percent from 0 to 100.';
+
   const descs = params.getAll('item_desc'); const qtys = params.getAll('item_qty'); const prices = params.getAll('item_price');
+  const opts = params.getAll('item_option');
   const items = []; const cleanItems = [];
   for (let i = 0; i < Math.max(descs.length, qtys.length, prices.length); i++) {
-    const it = { desc: descs[i] ?? '', qty: qtys[i] ?? '', price: prices[i] ?? '' };
+    const it = { desc: descs[i] ?? '', qty: qtys[i] ?? '', price: prices[i] ?? '', option: opts[i] ?? '' };
     if (!it.desc.trim() && !it.qty.trim() && !it.price.trim()) continue; // ignore blank rows
     const n = items.length; items.push(it);
     const problems = [];
@@ -112,12 +119,15 @@ async function validateEstimate(db, org, params) {
     const q = parseQty(it.qty, 'quantity'); if (q.error) problems.push(q.error.replace(/^q/, 'Q'));
     const p = parseMoney(it.price, 'unit price'); if (p.error) problems.push(p.error.replace(/^u/, 'U'));
     if (problems.length) errors[`item_${n}`] = `Line ${n + 1}: ${problems.join(' ')}`;
-    else cleanItems.push({ desc, qty: q.value, price: p.value });
+    else cleanItems.push({ desc, qty: q.value, price: p.value, option: str(it.option, 60) });
   }
   if (!items.length) errors.items = 'Add at least one line item.';
+  const optionNames = new Set(cleanItems.map((i) => i.option).filter(Boolean));
+  if (optionNames.size === 1) errors.options = 'Give at least two options (for example Good and Better), or leave Option blank on every line.';
   return {
     values, items, errors,
-    clean: { projectName, scope: str(values.scope, 10000), cost: cost.value ?? null, status: values.status, items: cleanItems, newClient },
+    clean: { projectName, scope: str(values.scope, 10000), cost: cost.value ?? null, status: values.status, items: cleanItems, newClient,
+      deposit: Number.isNaN(deposit) ? 0 : deposit },
   };
 }
 
@@ -171,6 +181,7 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
     members: await db.all('SELECT * FROM org_members(?)', org),
     invoices: await db.all('SELECT * FROM invoices WHERE job_id = ? ORDER BY id DESC', id),
     invoicing: { enabled: !!(await payoutAccount(db, org)), testMode: stripe.testMode(), key: crypto.randomUUID() },
+    emails: await db.all('SELECT * FROM email_log WHERE job_id = ? ORDER BY id DESC LIMIT 20', id),
   }));
 }
 
@@ -183,6 +194,9 @@ async function renderEstimate(db, org, id, extra = {}, status = 200) {
     items: await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', id),
     totalCents: (await db.get(`SELECT ${ESTIMATE_TOTAL_SQL} AS t FROM estimates WHERE id = ?`, id)).t,
     job: await jobFor(db, id),
+    options: (await mailer.estimateTotals(db, id)).options,
+    emails: await db.all('SELECT * FROM email_log WHERE estimate_id = ? ORDER BY id DESC LIMIT 20', id),
+    sending: { enabled: email.configured() },
   }));
 }
 
@@ -194,16 +208,17 @@ async function saveEstimate(db, org, estimateId, values, clean) {
       org, c.name, c.phone, c.email, c.address)).id;
   }
   if (estimateId) {
-    await db.run(`UPDATE estimates SET client_id = ?, project_name = ?, scope = ?, estimated_cost_cents = ?, status = ?, updated_at = now()
-      WHERE id = ? AND org_id = ?`, clientId, clean.projectName, clean.scope, clean.cost, clean.status, estimateId, org);
+    await db.run(`UPDATE estimates SET client_id = ?, project_name = ?, scope = ?, estimated_cost_cents = ?, status = ?, deposit_percent = ?,
+      chosen_option = NULL, updated_at = now() WHERE id = ? AND org_id = ?`,
+    clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit, estimateId, org);
     await db.run('DELETE FROM line_items WHERE estimate_id = ?', estimateId);
   } else {
-    estimateId = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, scope, estimated_cost_cents, status)
-      VALUES (?, ?, ?, ?, ?, ?) RETURNING id`, org, clientId, clean.projectName, clean.scope, clean.cost, clean.status)).id;
+    estimateId = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, scope, estimated_cost_cents, status, deposit_percent)
+      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`, org, clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit)).id;
   }
   for (const [i, it] of clean.items.entries()) {
-    await db.run(`INSERT INTO line_items (org_id, estimate_id, position, description, qty_hundredths, unit_price_cents)
-      VALUES (?, ?, ?, ?, ?, ?)`, org, estimateId, i, it.desc, it.qty, it.price);
+    await db.run(`INSERT INTO line_items (org_id, estimate_id, position, description, qty_hundredths, unit_price_cents, option_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`, org, estimateId, i, it.desc, it.qty, it.price, it.option);
   }
   return estimateId;
 }
@@ -300,7 +315,9 @@ route('GET', '/estimates', async ({ db, org, url }) => {
 route('GET', '/estimates/new', async ({ db, org, url }) => {
   const clients = await clientsForSelect(db, org.org_id);
   const cid = url.searchParams.get('client_id');
-  const values = { status: 'draft', client_id: cid && clients.some((c) => String(c.id) === cid) ? cid : (clients.length ? '' : 'new') };
+  const dp = await db.get('SELECT default_deposit_percent FROM company_profiles WHERE org_id = ?', org.org_id);
+  const values = { status: 'draft', client_id: cid && clients.some((c) => String(c.id) === cid) ? cid : (clients.length ? '' : 'new'),
+    deposit_percent: String(dp?.default_deposit_percent ?? 0) };
   return ok(v.estimateFormPage({ values, items: [], clients }));
 });
 route('POST', '/estimates', async ({ db, org, form }) => {
@@ -318,10 +335,10 @@ route('GET', '/estimates/:id/edit', async ({ db, org, id }) => {
   if (!e) return notFound();
   if (await jobFor(db, id)) return renderEstimate(db, org.org_id, id, { errors: lockedMsg }, 409);
   const items = (await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', id))
-    .map((i) => ({ desc: i.description, qty: fmtQty(i.qty_hundredths), price: plain(i.unit_price_cents) }));
+    .map((i) => ({ desc: i.description, qty: fmtQty(i.qty_hundredths), price: plain(i.unit_price_cents), option: i.option_name }));
   const values = {
     client_id: String(e.client_id), project_name: e.project_name, scope: e.scope, status: e.status,
-    estimated_cost: e.estimated_cost_cents == null ? '' : plain(e.estimated_cost_cents),
+    estimated_cost: e.estimated_cost_cents == null ? '' : plain(e.estimated_cost_cents), deposit_percent: String(e.deposit_percent),
   };
   return ok(v.estimateFormPage({ estimate: e, values, items, clients: await clientsForSelect(db, org.org_id) }));
 });
@@ -345,8 +362,36 @@ route('POST', '/estimates/:id/status', async ({ db, org, id, form }) => {
   if (!(await db.get('SELECT id FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
   if (await jobFor(db, id)) return renderEstimate(db, org.org_id, id, { errors: lockedMsg }, 409);
   if (!v.ESTIMATE_STATUS[status]) return renderEstimate(db, org.org_id, id, { errors: { status: 'Unknown status.' } }, 422);
-  await db.run('UPDATE estimates SET status = ?, updated_at = now() WHERE id = ?', status, id);
+  const { options } = await mailer.estimateTotals(db, id);
+  const chosen = form.get('chosen_option');
+  if (status === 'approved' && options.length && !options.some((o) => o.name === chosen)) {
+    return renderEstimate(db, org.org_id, id, { errors: { status: 'Choose which option the client approved.' } }, 422);
+  }
+  await db.run('UPDATE estimates SET status = ?, chosen_option = ?, updated_at = now() WHERE id = ?',
+    status, status === 'approved' && options.length ? chosen : null, id);
   return redirect(`/estimates/${id}?msg=Status+updated`);
+});
+// Emailing the estimate to the client: a link to the online approval page.
+route('POST', '/estimates/:id/send', async ({ db, org, id, form, req }) => {
+  const estimate = await db.get('SELECT * FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!estimate) return notFound();
+  const values = { send_to: str(form.get('send_to'), 200), send_message: str(form.get('send_message'), 2000) };
+  const fail = (status, msg) => renderEstimate(db, org.org_id, id, { sendForm: { values, errors: { send_to: msg } } }, status);
+  if (await jobFor(db, id)) return fail(409, 'This estimate is already approved and converted to a job.');
+  if (!email.configured()) return fail(409, 'Email sending is not set up for this app yet. Copy the link and send it yourself.');
+  if (!email.validEmail(values.send_to)) return fail(422, "Enter the client's email address.");
+  const client = await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id);
+  const result = await asServer(async (sdb) => {
+    const company = await mailer.companyOf(sdb, org.org_id);
+    const t = mailer.templates.estimate({ company, estimate, client, totals: await mailer.estimateTotals(sdb, id),
+      message: values.send_message, base: baseUrl(req) });
+    return mailer.deliver(sdb, { orgId: org.org_id, kind: 'estimate', to: values.send_to, ...t, company, estimateId: id });
+  });
+  if (!result.ok) return fail(502, `The email could not be sent: ${result.error}`);
+  await db.run(`UPDATE estimates SET status = CASE WHEN status IN ('draft', 'declined') THEN 'sent' ELSE status END,
+    sent_to = ?, sent_at = now(), reminders_sent = 0, last_reminded_at = NULL, updated_at = now() WHERE id = ?`, values.send_to, id);
+  if (!client.email) await db.run('UPDATE clients SET email = ? WHERE id = ?', values.send_to, client.id);
+  return redirect(`/estimates/${id}?msg=${encodeURIComponent(`Estimate emailed to ${values.send_to}`)}`);
 });
 route('POST', '/estimates/:id/convert', async ({ db, org, id }) => {
   if (!(await db.get('SELECT id FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
@@ -680,7 +725,10 @@ async function companyFor(db, org) {
 route('GET', '/settings', async ({ db, org, url }) => {
   const c = await companyFor(db, org);
   const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
-  return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'),
+  const ep = (await db.get('SELECT * FROM company_profiles WHERE org_id = ?', org.org_id)) || {};
+  const emailValues = { estimate_followup_days: ep.estimate_followup_days ?? 3, appointment_reminders: ep.appointment_reminders ?? true,
+    review_requests: ep.review_requests ?? false, review_url: ep.review_url || '', default_deposit_percent: String(ep.default_deposit_percent ?? 0) };
+  return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'), emailValues, emailEnabled: email.configured(),
     payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
 });
 
@@ -752,6 +800,32 @@ route('POST', '/settings', async ({ db, org, form }) => {
   return redirect('/settings?msg=Profile+saved');
 });
 
+route('POST', '/settings/emails', async ({ db, org, form }) => {
+  const f = formObj(form);
+  const values = {
+    estimate_followup_days: ['0', '2', '3', '5', '7'].includes(f.estimate_followup_days) ? Number(f.estimate_followup_days) : 3,
+    appointment_reminders: f.appointment_reminders === 'on', review_requests: f.review_requests === 'on',
+    review_url: str(f.review_url, 500), default_deposit_percent: str(f.default_deposit_percent, 5),
+  };
+  const errors = {};
+  if (values.review_url && !/^https?:\/\/\S+\.\S+/i.test(values.review_url)) errors.review_url = 'Review link must be a web address starting with https://';
+  if (values.review_requests && !values.review_url) errors.review_url = 'Add your review link (for example your Google review page) to send review requests.';
+  const dep = /^\d{1,3}$/.test(values.default_deposit_percent) ? Number(values.default_deposit_percent) : NaN;
+  if (!(dep >= 0 && dep <= 100)) errors.default_deposit_percent = 'Deposit must be a whole percent from 0 to 100.';
+  if (hasErrors(errors)) {
+    const c = await companyFor(db, org);
+    const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
+    return page(422, v.settingsPage({ org, values: c, hasLogo: !!c.logo, emailValues: values, emailErrors: errors, emailEnabled: email.configured(),
+      payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
+  }
+  await db.run(`INSERT INTO company_profiles (org_id, estimate_followup_days, appointment_reminders, review_requests, review_url, default_deposit_percent)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (org_id) DO UPDATE SET estimate_followup_days = excluded.estimate_followup_days,
+      appointment_reminders = excluded.appointment_reminders, review_requests = excluded.review_requests, review_url = excluded.review_url,
+      default_deposit_percent = excluded.default_deposit_percent, updated_at = now()`,
+  org.org_id, values.estimate_followup_days, values.appointment_reminders, values.review_requests, values.review_url, dep);
+  return redirect('/settings?msg=Email+settings+saved#emails');
+});
+
 const pdfResponse = (buf, name) => ({ status: 200, body: buf, headers: {
   'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${name.replace(/[^\w .-]/g, '').slice(0, 80)}.pdf"`,
 } });
@@ -763,6 +837,7 @@ route('GET', '/estimates/:id/pdf', async ({ db, org, id }) => {
     client: await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id),
     items: await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', id),
     totalCents: (await db.get(`SELECT ${ESTIMATE_TOTAL_SQL} AS t FROM estimates WHERE id = ?`, id)).t,
+    options: (await mailer.estimateTotals(db, id)).options,
   });
   return pdfResponse(buf, `Estimate E-${id} ${estimate.project_name}`);
 });
@@ -1016,12 +1091,13 @@ async function health() {
       const r = await pool.query(`SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts,
         to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles,
         to_regclass('public.invoices') IS NOT NULL AS invoices,
-        to_regclass('public.org_subscriptions') IS NOT NULL AS plans`);
+        to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
       if (!r.rows[0].invoices) throw new Error('Run supabase/migrations/0006_invoices.sql in the Supabase SQL Editor.');
       if (!r.rows[0].plans) throw new Error('Run supabase/migrations/0007_profiles_and_plans.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].emails) throw new Error('Run supabase/migrations/0008_estimate_approval_and_emails.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1030,6 +1106,155 @@ async function health() {
   const healthy = Object.values(result).every((x) => x === 'ok');
   result.database_target = target; // host, port and user only; never the password
   return { status: healthy ? 200 : 503, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) };
+}
+
+// ---------- The client's estimate page (no login: the link's secret token is the key) ----------
+const PUBLIC_RE = /^\/e\/([0-9a-f]{64})(?:\/(logo|pdf|approve|decline))?$/;
+const clientIp = (req) => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().slice(0, 64);
+
+async function publicEstimateData(db, estimate) {
+  const company = await mailer.companyOf(db, estimate.org_id);
+  const profile = (await db.get('SELECT estimate_terms, website, license_number, logo IS NOT NULL AS has_logo FROM company_profiles WHERE org_id = ?', estimate.org_id)) || {};
+  const job = await db.get('SELECT id FROM jobs WHERE estimate_id = ?', estimate.id);
+  return {
+    estimate, company: { ...company, terms: profile.estimate_terms || '', website: profile.website || '', license_number: profile.license_number || '' },
+    hasLogo: !!profile.has_logo, job,
+    client: await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id),
+    items: await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', estimate.id),
+    totals: await mailer.estimateTotals(db, estimate.id),
+    invoices: job ? await db.all("SELECT * FROM invoices WHERE job_id = ? AND status IN ('open', 'paid') ORDER BY id", job.id) : [],
+    canPayOnline: !!(await payoutAccount(db, estimate.org_id)),
+  };
+}
+// Who to tell when a client approves or declines: the company email, or else its admins.
+async function companyRecipients(db, orgId, company) {
+  if (email.validEmail(company.email)) return [company.email];
+  return (await db.all(`SELECT u.email FROM memberships m JOIN auth.users u ON u.id = m.user_id
+    WHERE m.org_id = ? AND m.role = 'admin' ORDER BY m.created_at LIMIT 3`, orgId)).map((r) => r.email);
+}
+async function notifyCompany(kind, estimateId, extra) {
+  if (!email.configured()) return;
+  try {
+    await asServer(async (db) => {
+      const estimate = await db.get('SELECT * FROM estimates WHERE id = ?', estimateId);
+      const company = await mailer.companyOf(db, estimate.org_id);
+      const client = await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id);
+      const t = mailer.templates[kind]({ company, estimate, client, base: mailer.appUrl() || extra.base, ...extra });
+      // The company's own copy comes "from Vista" so it doesn't look like it came from the client.
+      for (const to of await companyRecipients(db, estimate.org_id, company)) {
+        await mailer.deliver(db, { orgId: estimate.org_id, kind, to, ...t, company: { ...company, name: 'Vista' }, estimateId });
+      }
+    });
+  } catch (e) { console.error(`Could not notify the company (${kind}):`, e.message); }
+}
+
+async function publicEstimate(req, url) {
+  const m = url.pathname.match(PUBLIC_RE);
+  if (!m) return page(404, v.messagePage('Link not found', 'This estimate link is not valid. Please check the link or contact the company that sent it.'));
+  const [, token, action] = m;
+  const notFoundLink = () => page(404, v.messagePage('Link not found', 'This estimate link is not valid or the estimate was deleted. Please contact the company that sent it.'));
+
+  if (req.method === 'GET' && !action) {
+    return asServer(async (db) => {
+      const estimate = await db.get('SELECT * FROM estimates WHERE public_token = ?', token);
+      if (!estimate) return notFoundLink();
+      // First time the client opens it (the company's own preview doesn't count).
+      if (!estimate.viewed_at && !url.searchParams.has('preview')) {
+        await db.run('UPDATE estimates SET viewed_at = now() WHERE id = ?', estimate.id);
+      }
+      return ok(v.publicEstimatePage({ ...(await publicEstimateData(db, estimate)), token, flash: url.searchParams.get('msg'),
+        preview: url.searchParams.has('preview') }));
+    });
+  }
+  if (req.method === 'GET' && action === 'logo') {
+    const r = await asServer((db) => db.get(`SELECT p.logo, p.logo_type FROM estimates e JOIN company_profiles p ON p.org_id = e.org_id
+      WHERE e.public_token = ?`, token));
+    if (!r?.logo) return page(404, 'Not found');
+    return { status: 200, body: r.logo, headers: { 'Content-Type': r.logo_type, 'Cache-Control': 'private, max-age=3600' } };
+  }
+  if (req.method === 'GET' && action === 'pdf') {
+    return asServer(async (db) => {
+      const estimate = await db.get('SELECT * FROM estimates WHERE public_token = ?', token);
+      if (!estimate) return notFoundLink();
+      const org = { org_id: estimate.org_id, name: (await db.get('SELECT name FROM organizations WHERE id = ?', estimate.org_id)).name };
+      const buf = await pdf.estimatePdf({
+        company: await companyFor(db, org), estimate,
+        client: await db.get('SELECT * FROM clients WHERE id = ?', estimate.client_id),
+        items: await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', estimate.id),
+        totalCents: (await db.get('SELECT estimate_total(?) AS t', estimate.id)).t,
+        options: (await mailer.estimateTotals(db, estimate.id)).options,
+      });
+      return pdfResponse(buf, `Estimate E-${estimate.id} ${estimate.project_name}`);
+    });
+  }
+  if (req.method !== 'POST' || !['approve', 'decline'].includes(action)) return page(405, v.messagePage('Not allowed', 'That action is not allowed.'));
+  const form = await readBody(req);
+  const f = formObj(form);
+
+  if (action === 'decline') {
+    const id = await asServer(async (db) => {
+      const e = await db.get('SELECT * FROM estimates WHERE public_token = ? FOR UPDATE', token);
+      if (!e || e.status === 'approved' || await db.get('SELECT 1 FROM jobs WHERE estimate_id = ?', e.id)) return e ? -1 : null;
+      await db.run("UPDATE estimates SET status = 'declined', decline_reason = ?, updated_at = now() WHERE id = ?", str(f.reason, 2000), e.id);
+      return e.id;
+    });
+    if (id === null) return notFoundLink();
+    if (id > 0) await notifyCompany('estimate_declined', id, { base: baseUrl(req) });
+    return redirect(`/e/${token}?msg=${encodeURIComponent(id > 0 ? 'Thanks for letting us know.' : 'This estimate was already approved.')}`);
+  }
+
+  // Approve: choose an option, sign, agree. The estimate becomes a job right away.
+  const values = { option: str(f.option, 60), signer_name: str(f.signer_name, 200), signature: String(f.signature || ''),
+    agree: f.agree === 'on', deposit_email: str(f.deposit_email, 200) };
+  const outcome = await asServer(async (db) => {
+    const e = await db.get('SELECT * FROM estimates WHERE public_token = ? FOR UPDATE', token);
+    if (!e) return { notFound: true };
+    if (e.status === 'approved' || await db.get('SELECT 1 FROM jobs WHERE estimate_id = ?', e.id)) return { already: true };
+    const totals = await mailer.estimateTotals(db, e.id);
+    const errors = {};
+    if (totals.options.length && !totals.options.some((o) => o.name === values.option)) errors.option = 'Choose one of the options.';
+    if (!values.signer_name) errors.signer_name = 'Type your full name.';
+    if (values.signature && !/^data:image\/png;base64,[A-Za-z0-9+/=]{100,300000}$/.test(values.signature)) errors.signature = 'Please sign again.';
+    if (!values.agree) errors.agree = 'Check the box to approve the estimate.';
+    if (values.deposit_email && !email.validEmail(values.deposit_email)) errors.deposit_email = 'Email address does not look valid.';
+    if (hasErrors(errors)) return { errors, data: await publicEstimateData(db, e) };
+    await db.run(`UPDATE estimates SET status = 'approved', chosen_option = ?, approved_at = now(), signer_name = ?, signature = ?,
+      signer_ip = ?, signer_agent = ?, decline_reason = NULL, updated_at = now() WHERE id = ?`,
+    totals.options.length ? values.option : null, values.signer_name, values.signature || null, clientIp(req),
+    str(req.headers['user-agent'], 300), e.id);
+    const jobId = (await db.get('SELECT convert_estimate_to_job(?) AS id', e.id)).id;
+    const client = await db.get('SELECT * FROM clients WHERE id = ?', e.client_id);
+    const total = (await db.get('SELECT estimate_total(?) AS t', e.id)).t;
+    return { estimate: e, jobId, client, total, account: await payoutAccount(db, e.org_id) };
+  });
+  if (outcome.notFound) return notFoundLink();
+  if (outcome.already) return redirect(`/e/${token}?msg=${encodeURIComponent('This estimate is already approved.')}`);
+  if (outcome.errors) return page(422, v.publicEstimatePage({ ...outcome.data, token, values, errors: outcome.errors }));
+
+  // Deposit: a Stripe invoice on the company's own account; the client goes straight to its pay page.
+  const { estimate: e, jobId, client, total, account } = outcome;
+  const deposit = Math.round((total * e.deposit_percent) / 100);
+  const to = values.deposit_email || client.email;
+  let payUrl = null;
+  if (deposit > 0 && account && email.validEmail(to)) {
+    try {
+      const customerId = await stripe.ensureCustomer(account, client, to, e.org_id);
+      const description = `Deposit (${e.deposit_percent}%) for ${e.project_name}`;
+      const inv = await stripe.sendInvoice({ account, customerId, amountCents: deposit, description, daysUntilDue: 7,
+        jobId, orgId: e.org_id, key: `deposit-${e.id}` });
+      await asServer(async (db) => {
+        if (customerId !== client.stripe_customer_id) {
+          await db.run('UPDATE clients SET stripe_customer_id = ?, stripe_customer_account = ? WHERE id = ?', customerId, account, client.id);
+        }
+        await db.run(`INSERT INTO invoices (org_id, job_id, stripe_invoice_id, number, amount_cents, description, sent_to, due_date, hosted_url, pdf_url)
+          VALUES (?, ?, ?, ?, ?, ?, ?, (now() AT TIME ZONE ?)::date + 7, ?, ?) ON CONFLICT (stripe_invoice_id) DO NOTHING`,
+        e.org_id, jobId, inv.id, inv.number || '', deposit, description, to, APP_TIMEZONE, inv.hosted_invoice_url || '', inv.invoice_pdf || '');
+      });
+      payUrl = inv.hosted_invoice_url || null;
+    } catch (err) { console.error('Deposit invoice failed:', err.message); }
+  }
+  await notifyCompany('estimate_approved', e.id, { job: jobId, total, deposit: payUrl ? deposit : 0, base: baseUrl(req) });
+  return redirect(`/e/${token}?msg=${encodeURIComponent(payUrl ? 'Approved! You can pay the deposit below.' : 'Approved! Thank you.')}`);
 }
 
 async function handle(req, res) {
@@ -1047,6 +1272,7 @@ async function handle(req, res) {
 
   if (['/login', '/signup'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
   if (url.pathname === '/healthz' && req.method === 'GET') return health();
+  if (url.pathname.startsWith('/e/')) return publicEstimate(req, url);
   if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');
 
   const { user, setCookies = [] } = await currentUser(cookies);
@@ -1120,5 +1346,6 @@ const server = http.createServer((req, res) => {
 
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Vista Artisans running on http://localhost:${PORT}`));
+  mailer.startAutomations();
 }
 module.exports = { server };

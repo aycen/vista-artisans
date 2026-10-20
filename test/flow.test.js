@@ -11,6 +11,7 @@ const pg = require('pg');
 const { startFakeAuth } = require('./fake-supabase-auth');
 const { fmt } = require('../src/money');
 const { startFakeStripe } = require('./fake-stripe');
+const { startFakeEmail } = require('./fake-email');
 const crypto = require('node:crypto');
 
 const ADMIN_URL = process.env.TEST_PG_ADMIN_URL || 'postgresql://postgres@localhost:5432/postgres';
@@ -712,5 +713,169 @@ test('plans: Free limits, Stripe Checkout, webhook sync, billing portal, cancel'
       UPDATE org_subscriptions SET comped = true`).finally(() => dbClient.query('RESET ROLE')));
   } finally {
     await fakeStripe.close();
+  }
+});
+
+test('estimates: options, emailed link, online approval with signature and deposit, decline, automatic emails', async () => {
+  const fakeStripe = await startFakeStripe('sk_test_fake');
+  const mail = await startFakeEmail('re_test_key');
+  const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
+  const acct = (await dbClient.query('SELECT account_id FROM stripe_accounts WHERE org_id = $1', [vista])).rows[0].account_id;
+  fakeStripe.state.accounts.set(acct, { id: acct, charges_enabled: true, details_submitted: true });
+  const jane = (await dbClient.query("SELECT id FROM clients WHERE org_id = $1 AND name = 'Jane Rivera'", [vista])).rows[0].id;
+  const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
+  const waitFor = async (fn, what) => {
+    for (let i = 0; i < 60; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 150)); }
+    assert.fail(`timed out waiting for ${what}`);
+  };
+  await stop();
+  await start({ STRIPE_SECRET_KEY: 'sk_test_fake', STRIPE_WEBHOOK_SECRET: 'whsec_test_secret', STRIPE_API_BASE: fakeStripe.url,
+    RESEND_API_KEY: 're_test_key', EMAIL_FROM: 'estimates@vista.test', EMAIL_API_BASE: mail.url, APP_URL: BASE, AUTOMATION_INTERVAL_MS: '300' });
+  try {
+    as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
+    // Options need at least two names; deposit must be a percent
+    const form = (extra) => [['client_id', String(jane)], ['project_name', 'Countertops'], ['scope', 'New counters'], ['status', 'draft'],
+      ['deposit_percent', '25'], ['estimated_cost', '1500'],
+      ['item_desc', 'Demo and haul-away'], ['item_qty', '1'], ['item_price', '500'], ['item_option', ''],
+      ['item_desc', 'Laminate counters'], ['item_qty', '1'], ['item_price', '2000'], ['item_option', 'Good'],
+      ['item_desc', 'Quartz counters'], ['item_qty', '1'], ['item_price', '3500'], ['item_option', 'Better'], ...extra];
+    let r = await post('/estimates', [...form([]).map(([k, val]) => [k, val === 'Better' ? 'Good' : val])]);
+    assert.equal(r.status, 422); assert.match(r.body, /at least two options/);
+    r = await post('/estimates', form([]).map(([k, val]) => [k, k === 'deposit_percent' ? '150' : val]));
+    assert.equal(r.status, 422); assert.match(r.body, /whole percent/);
+    r = await post('/estimates', form([])); assert.equal(r.status, 303);
+    const est = idFrom(r.location);
+    let page = (await getPage(`/estimates/${est}`)).body;
+    assert.match(page, /Good \$2,500\.00 · Better \$4,000\.00/); assert.equal(stat(page, 'estimate-total'), '$2,500.00');
+    assert.match(page, /Option: Better/); assert.match(page, /25% \(\$625\.00\)/);
+    assert.equal((await getPage(`/estimates/${est}/pdf`)).type, 'application/pdf');
+
+    // Email it to the client
+    r = await post(`/estimates/${est}/send`, { send_to: 'nope', send_message: '' });
+    assert.equal(r.status, 422); assert.match(r.body, /client(&#39;|')s email/);
+    r = await post(`/estimates/${est}/send`, { send_to: 'bounce@example.com', send_message: '' });
+    assert.equal(r.status, 502); assert.match(r.body, /could not be sent/);
+    r = await post(`/estimates/${est}/send`, { send_to: 'jane@example.com', send_message: 'Great meeting you today!' });
+    assert.equal(r.status, 303);
+    const token = (await q('SELECT public_token FROM estimates WHERE id = $1', [est]))[0].public_token;
+    assert.match(token, /^[0-9a-f]{64}$/);
+    const m = mail.sent.at(-1);
+    assert.deepEqual(m.to, ['jane@example.com']); assert.equal(m.from, 'Vista Artisans <estimates@vista.test>');
+    assert.match(m.subject, /Estimate from Vista Artisans: Countertops/);
+    assert.ok(m.html.includes(`${BASE}/e/${token}`)); assert.match(m.text, /Great meeting you today!/); assert.match(m.text, /Options from \$2,500\.00/);
+    assert.equal((await q('SELECT status FROM estimates WHERE id = $1', [est]))[0].status, 'sent');
+    page = (await getPage(`/estimates/${est}`)).body;
+    assert.match(page, /Sent to jane@example\.com/); assert.match(page, /Not opened yet/); assert.match(page, /Estimate sent/); assert.match(page, />Failed</);
+
+    // The client opens the link: no login, no internal numbers
+    as('anon');
+    assert.equal((await getPage(`/e/${'0'.repeat(64)}`)).status, 404);
+    assert.equal((await getPage('/e/abc')).status, 404);
+    page = (await getPage(`/e/${token}`)).body;
+    assert.match(page, /Choose an option/); assert.match(page, /Quartz counters/); assert.match(page, /\$4,000\.00/);
+    assert.match(page, /25% deposit: \$1,000\.00/); assert.doesNotMatch(page, /1,500|Estimated|profit/i);
+    assert.equal((await getPage(`/e/${token}/pdf`)).type, 'application/pdf');
+    assert.ok((await q('SELECT viewed_at FROM estimates WHERE id = $1', [est]))[0].viewed_at, 'opening is tracked');
+
+    // Approving needs an option, a name and the checkbox
+    r = await post(`/e/${token}/approve`, { signer_name: '', signature: '' });
+    assert.equal(r.status, 422); assert.match(r.body, /Choose one of the options/); assert.match(r.body, /Type your full name/); assert.match(r.body, /Check the box/);
+    r = await post(`/e/${token}/approve`, { option: 'Platinum', signer_name: 'Jane Rivera', agree: 'on' });
+    assert.equal(r.status, 422);
+    const sig = 'data:image/png;base64,' + 'iVBORw0KGgo'.padEnd(200, 'A');
+    r = await post(`/e/${token}/approve`, { option: 'Better', signer_name: 'Jane Rivera', signature: sig, agree: 'on', deposit_email: 'jane@example.com' });
+    assert.equal(r.status, 303); assert.match(decodeURIComponent(r.location), /Approved! You can pay the deposit/);
+    const e = (await q('SELECT * FROM estimates WHERE id = $1', [est]))[0];
+    assert.equal(e.status, 'approved'); assert.equal(e.chosen_option, 'Better'); assert.equal(e.signer_name, 'Jane Rivera');
+    assert.equal(e.signature, sig); assert.ok(e.signer_ip); assert.ok(e.approved_at);
+    const job = (await q('SELECT * FROM jobs WHERE estimate_id = $1', [est]))[0];
+    assert.equal(Number(job.contract_cents), 400000, 'job is created for the chosen option');
+    const dep = (await q('SELECT * FROM invoices WHERE job_id = $1', [job.id]))[0];
+    assert.equal(Number(dep.amount_cents), 100000); assert.match(dep.description, /Deposit \(25%\) for Countertops/);
+    assert.equal(fakeStripe.state.invoices.get(dep.stripe_invoice_id).account, acct, 'deposit goes to the company account');
+    page = (await getPage(`/e/${token}`)).body;
+    assert.match(page, /Approved by Jane Rivera/); assert.match(page, /Pay deposit · \$1,000\.00/); assert.doesNotMatch(page, /Approve estimate/);
+    // Approving twice, or declining after approval, changes nothing
+    r = await post(`/e/${token}/approve`, { option: 'Good', signer_name: 'Someone', agree: 'on' });
+    assert.match(decodeURIComponent(r.location), /already approved/);
+    await post(`/e/${token}/decline`, { reason: 'changed mind' });
+    assert.equal((await q('SELECT count(*)::int AS n FROM jobs WHERE estimate_id = $1', [est]))[0].n, 1);
+    assert.equal((await q('SELECT status, chosen_option FROM estimates WHERE id = $1', [est]))[0].chosen_option, 'Better');
+    await waitFor(async () => mail.sent.some((x) => /Jane Rivera approved Countertops/.test(x.subject)), 'approval notice');
+    const notice = mail.sent.find((x) => /approved Countertops/.test(x.subject));
+    assert.match(notice.text, /\$4,000\.00/); assert.ok(notice.html.includes(`${BASE}/jobs/${job.id}`)); assert.equal(notice.from, 'Vista <estimates@vista.test>');
+
+    // The company sees the signature; the estimate is locked
+    as('alice');
+    page = (await getPage(`/estimates/${est}`)).body;
+    assert.match(page, /Approved online by Jane Rivera/); assert.match(page, /class="sig-img"/);
+    assert.equal((await post(`/estimates/${est}/send`, { send_to: 'jane@example.com' })).status, 409);
+    // Admins can't forge a signature directly
+    await assert.rejects(dbClient.query(`SET ROLE authenticated; SELECT set_config('request.jwt.claim.sub', (SELECT id::text FROM auth.users WHERE email = 'alice@vista.test'), false);
+      UPDATE estimates SET signer_name = 'Forged' WHERE id = ${est}`).finally(() => dbClient.query('RESET ROLE')));
+
+    // A second estimate is declined with a note
+    r = await post('/estimates', [['client_id', String(jane)], ['project_name', 'Fence'], ['status', 'draft'], ['deposit_percent', '0'],
+      ['item_desc', 'Cedar fence'], ['item_qty', '40'], ['item_price', '45']]);
+    const fence = idFrom(r.location);
+    const fenceToken = (await q('SELECT public_token FROM estimates WHERE id = $1', [fence]))[0].public_token;
+    as('anon');
+    r = await post(`/e/${fenceToken}/decline`, { reason: 'Going with a cheaper quote' }); assert.equal(r.status, 303);
+    assert.deepEqual((await q('SELECT status, decline_reason FROM estimates WHERE id = $1', [fence]))[0], { status: 'declined', decline_reason: 'Going with a cheaper quote' });
+    await waitFor(async () => mail.sent.some((x) => /declined Fence/.test(x.subject)), 'decline notice');
+    // ... and they can still change their mind (no deposit: nothing to pay)
+    r = await post(`/e/${fenceToken}/approve`, { signer_name: 'Jane Rivera', agree: 'on' });
+    assert.match(decodeURIComponent(r.location), /Approved! Thank you/);
+    assert.equal((await q('SELECT count(*)::int AS n FROM invoices i JOIN jobs j ON j.id = i.job_id WHERE j.estimate_id = $1', [fence]))[0].n, 0);
+
+    // ---- Automatic emails ----
+    as('alice');
+    r = await post('/settings/emails', { estimate_followup_days: '3', appointment_reminders: 'on', review_requests: 'on', review_url: '', default_deposit_percent: '10' });
+    assert.equal(r.status, 422); assert.match(r.body, /Add your review link/);
+    r = await post('/settings/emails', { estimate_followup_days: '3', appointment_reminders: 'on', review_requests: 'on', review_url: 'https://g.page/r/vista', default_deposit_percent: '10' });
+    assert.equal(r.status, 303);
+    assert.match((await getPage('/estimates/new')).body, /id="deposit_percent"[^>]*value="10"|value="10"[^>]*id="deposit_percent"/);
+    // Follow-ups: after 3 days, again after 6, then stop
+    r = await post('/estimates', [['client_id', String(jane)], ['project_name', 'Patio'], ['status', 'draft'], ['deposit_percent', '0'],
+      ['item_desc', 'Pavers'], ['item_qty', '1'], ['item_price', '3000']]);
+    const patio = idFrom(r.location);
+    await post(`/estimates/${patio}/send`, { send_to: 'jane@example.com' });
+    const reminders = async () => (await q("SELECT count(*)::int AS n FROM email_log WHERE estimate_id = $1 AND kind = 'estimate_reminder'", [patio]))[0].n;
+    await new Promise((res) => setTimeout(res, 700));
+    assert.equal(await reminders(), 0, 'not before 3 days');
+    await dbClient.query("UPDATE estimates SET sent_at = now() - interval '3 days 1 minute' WHERE id = $1", [patio]);
+    await waitFor(async () => (await reminders()) === 1, 'first follow-up');
+    assert.match(mail.sent.find((x) => /Reminder: your estimate/.test(x.subject)).text, /Patio/);
+    await dbClient.query("UPDATE estimates SET sent_at = now() - interval '6 days 1 minute' WHERE id = $1", [patio]);
+    await waitFor(async () => (await reminders()) === 2, 'second follow-up');
+    await dbClient.query("UPDATE estimates SET sent_at = now() - interval '30 days' WHERE id = $1", [patio]);
+    await new Promise((res) => setTimeout(res, 700));
+    assert.equal(await reminders(), 2, 'at most two follow-ups');
+
+    // Appointment reminder the day before the job starts, once
+    const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date(Date.now() + 86400000));
+    await post(`/jobs/${job.id}`, { status: 'not_started', start_date: tomorrow, end_date: '', notes: '' });
+    const kindCount = async (kind) => (await q('SELECT count(*)::int AS n FROM email_log WHERE job_id = $1 AND kind = $2', [job.id, kind]))[0].n;
+    await waitFor(async () => (await kindCount('appointment_reminder')) === 1, 'appointment reminder');
+    assert.match(mail.sent.find((x) => /is scheduled for/.test(x.subject)).text, /Countertops/);
+    await new Promise((res) => setTimeout(res, 700));
+    assert.equal(await kindCount('appointment_reminder'), 1);
+
+    // Review request an hour after completion
+    await post(`/jobs/${job.id}`, { status: 'completed', start_date: tomorrow, end_date: '', notes: '' });
+    await new Promise((res) => setTimeout(res, 700));
+    assert.equal(await kindCount('review_request'), 0, 'waits an hour in case completion was a mistake');
+    await dbClient.query("UPDATE jobs SET completed_at = now() - interval '2 hours' WHERE id = $1", [job.id]);
+    await waitFor(async () => (await kindCount('review_request')) === 1, 'review request');
+    assert.ok(mail.sent.find((x) => /How did we do/.test(x.subject)).html.includes('https://g.page/r/vista'));
+    page = (await getPage(`/jobs/${job.id}`)).body;
+    assert.match(page, /Appointment reminder/); assert.match(page, /Review request/);
+
+    // Workers can't send estimates or change email settings
+    as('dave');
+    assert.equal((await post(`/estimates/${patio}/send`, { send_to: 'x@y.z' })).status, 404);
+    assert.equal((await post('/settings/emails', {})).status, 404);
+  } finally {
+    await fakeStripe.close(); await mail.close();
   }
 });

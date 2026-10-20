@@ -202,6 +202,24 @@ select pg_temp.expect((select count(*) from org_subscriptions) = 0, 'other compa
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
 select pg_temp.expect((select count(*) from org_subscriptions) = 0, 'workers cannot see the plan');
 
+-- Online approvals: only the server writes the client's signature; email history stays within the company
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+do $$ begin update estimates set signer_name = 'Forged', approved_at = now(); raise exception 'should fail';
+  exception when insufficient_privilege then null; end $$;
+do $$ begin update estimates set public_token = 'guessable'; raise exception 'should fail';
+  exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'companies cannot forge a client signature or change the link');
+reset role;
+insert into email_log (org_id, kind, to_email, subject, status) values (current_setting('t.vista')::uuid, 'estimate', 'x@y.z', 'Hi', 'sent');
+set role authenticated;
+select pg_temp.expect((select count(*) from email_log) = 1, 'admins see their email history');
+do $$ begin insert into email_log (org_id, kind, to_email, subject, status) values (current_setting('t.vista')::uuid, 'estimate', 'x@y.z', 'Hi', 'sent');
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'email history is written only by the server');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from email_log) = 0, 'other companies cannot see email history');
+select pg_temp.expect((select count(*) from estimates where public_token is not null) = 0, 'other companies cannot see estimate links');
+
 -- Signed-out (anon) gets nothing
 reset role; set role anon;
 do $$ begin perform count(*) from clients; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;

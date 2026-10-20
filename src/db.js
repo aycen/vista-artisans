@@ -57,8 +57,25 @@ async function asUser(userId, fn) {
   }
 }
 
-const ESTIMATE_TOTAL_SQL =
-  '(SELECT COALESCE(SUM(line_total_cents), 0) FROM line_items WHERE estimate_id = estimates.id)';
+// Shared line items plus the chosen option (see estimate_total in migration 0008).
+const ESTIMATE_TOTAL_SQL = 'estimate_total(estimates.id)';
+
+// For the few things done without a signed-in user (a client opening an estimate link, scheduled emails):
+// a transaction as the database owner, so every query must be scoped by hand.
+async function asServer(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(wrap(client));
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
 
 const JOB_TOTALS_SQL = `
   (SELECT COALESCE(SUM(amount_cents), 0) FROM expenses WHERE job_id = jobs.id) AS expenses_cents,
@@ -74,4 +91,4 @@ function withJobMath(job) {
   };
 }
 
-module.exports = { pool, asUser, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath };
+module.exports = { pool, asUser, asServer, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath };

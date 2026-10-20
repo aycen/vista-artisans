@@ -101,6 +101,24 @@ automatically on first use. One-time setup:
    `customer.subscription.deleted`. Copy its signing secret into Render as `STRIPE_BILLING_WEBHOOK_SECRET`.
 2. Paid plans appear once that secret and `STRIPE_SECRET_KEY` are set.
 
+## Online estimate approval and automatic emails
+
+Every estimate has a private link (`/e/<token>`). Admins email it from the estimate page (or copy it and text it).
+The client sees the company's logo and details, picks an option if the estimate has Good/Better/Best lines, signs with
+a finger or mouse, and approves; the estimate becomes a job right away. If the estimate asks for a deposit and the
+company has connected Stripe, a deposit invoice is created on the company's Stripe account and the client goes
+straight to its pay page. The company gets an email when a client approves or declines. The signature, time, IP
+address and browser are stored with the estimate and can only be written by the server.
+
+Automatic emails (Company profile → Automatic emails): estimate follow-ups (after N and 2N days), an appointment
+reminder the day before a job starts, and a review request an hour after a job is completed. They run inside the web
+server every 10 minutes; every email is listed on its estimate or job.
+
+Email is sent through [Resend](https://resend.com). One-time setup: add and verify your domain in Resend (it shows the
+DNS records to add), create an API key with sending access, and set `RESEND_API_KEY` and `EMAIL_FROM` (for example
+`estimates@vistaartisans.com`) in Render. Emails show each company's name as the sender and replies go to the company's
+own email. Links in automatic emails use `APP_URL`, or Render's `RENDER_EXTERNAL_URL`.
+
 ## Tests
 
 Both test suites run against a local Postgres 16 server, not your Supabase project.

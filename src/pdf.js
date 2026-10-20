@@ -98,7 +98,7 @@ function section(doc, title, body) {
   doc.y += 18;
 }
 
-function estimatePdf({ company, estimate, client, items, totalCents }) {
+function estimatePdf({ company, estimate, client, items, totalCents, options = [] }) {
   return render((doc) => {
     header(doc, { company, title: 'ESTIMATE', number: `E-${estimate.id}`, dateLabel: 'Date', date: estimate.updated_at });
     infoColumns(doc, [
@@ -134,16 +134,35 @@ function estimatePdf({ company, estimate, client, items, totalCents }) {
       x += c.w;
     }
     doc.y = hy + 24;
-    items.forEach((it, i) => row([it.description, fmtQty(it.qty_hundredths), fmt(it.unit_price_cents), fmt(it.line_total_cents)],
+    // With options: shared lines, then each option (only the chosen one once the client has picked).
+    const chosen = estimate.chosen_option;
+    const shared = items.filter((it) => !it.option_name);
+    const groups = options.filter((o) => !chosen || o.name === chosen)
+      .map((o) => ({ ...o, items: items.filter((it) => it.option_name === o.name) }));
+    const heading = (text, amount) => row([text, '', '', amount], { bold: true, fill: '#eef0ff' });
+    if (groups.length && shared.length) heading(chosen ? 'Included' : 'Included in every option', '');
+    shared.forEach((it, i) => row([it.description, fmtQty(it.qty_hundredths), fmt(it.unit_price_cents), fmt(it.line_total_cents)],
       { fill: i % 2 ? '#f8fafc' : undefined }));
+    for (const g of groups) {
+      heading(`Option: ${g.name}`, chosen ? '' : `Total ${fmt(g.total)}`);
+      g.items.forEach((it, i) => row([it.description, fmtQty(it.qty_hundredths), fmt(it.unit_price_cents), fmt(it.line_total_cents)],
+        { fill: i % 2 ? '#f8fafc' : undefined }));
+    }
     doc.moveTo(left, doc.y).lineTo(left + w, doc.y).lineWidth(1).strokeColor(LINE).stroke();
 
-    ensureSpace(doc, 50);
-    const ty = doc.y + 12;
-    doc.roundedRect(left + w - 240, ty, 240, 40, 6).fill('#eef0ff');
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(INK).text('Total', left + w - 228, ty + 14, { width: 100 });
-    doc.fontSize(15).fillColor(ACCENT).text(fmt(totalCents), left + w - 228, ty + 11, { width: 216, align: 'right' });
-    doc.y = ty + 64;
+    const totalsList = groups.length > 1 ? groups.map((g) => [`${g.name} total`, g.total]) : [[chosen ? `Total (${chosen})` : 'Total', totalCents]];
+    for (const [lbl, amt] of totalsList) {
+      ensureSpace(doc, 50);
+      const ty = doc.y + 12;
+      doc.roundedRect(left + w - 260, ty, 260, 40, 6).fill('#eef0ff');
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(INK).text(lbl, left + w - 248, ty + 14, { width: 130 });
+      doc.fontSize(15).fillColor(ACCENT).text(fmt(amt), left + w - 248, ty + 11, { width: 236, align: 'right' });
+      doc.y = ty + 44;
+    }
+    if (estimate.deposit_percent) {
+      doc.font('Helvetica').fontSize(10).fillColor(MUTED).text(`A ${estimate.deposit_percent}% deposit is due at approval.`, left, doc.y + 6, { width: w, align: 'right' });
+    }
+    doc.y += 20;
 
     section(doc, 'Terms', company.estimate_terms);
     ensureSpace(doc, 70);
