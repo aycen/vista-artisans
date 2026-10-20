@@ -2,9 +2,11 @@
 const http = require('node:http');
 const { pool, asUser, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = require('./db');
 const auth = require('./auth');
-const { parseMoney, parseQty, plain, fmtQty } = require('./money');
+const { parseMoney, parseQty, plain, fmtQty, fmt } = require('./money');
 const v = require('./views');
 const pdf = require('./pdf');
+const stripe = require('./stripe');
+const crypto = require('node:crypto');
 
 const PORT = Number(process.env.PORT || 3000);
 const APP_TIMEZONE = process.env.APP_TIMEZONE || 'America/Los_Angeles'; // decides which payments count as "this month"
@@ -156,9 +158,12 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
     job, ...extra,
     client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id),
     expenses: await db.all('SELECT * FROM expenses WHERE job_id = ? ORDER BY id', id),
-    payments: await db.all('SELECT * FROM payments WHERE job_id = ? ORDER BY paid_on, id', id),
+    payments: await db.all(`SELECT payments.*, invoices.number AS invoice_number FROM payments
+      LEFT JOIN invoices ON invoices.payment_id = payments.id WHERE payments.job_id = ? ORDER BY payments.paid_on, payments.id`, id),
     crew: await db.all('SELECT * FROM job_team(?)', id),
     members: await db.all('SELECT * FROM org_members(?)', org),
+    invoices: await db.all('SELECT * FROM invoices WHERE job_id = ? ORDER BY id DESC', id),
+    invoicing: { enabled: stripe.enabledFor(org), testMode: stripe.testMode(), key: crypto.randomUUID() },
   }));
 }
 
@@ -414,6 +419,57 @@ route('POST', '/jobs/:id/payments', async ({ db, org, id, form }) => {
 
 // Worker assignments and payouts
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Invoices through Stripe: Stripe emails the client a pay link; the webhook below records the payment when paid.
+route('POST', '/jobs/:id/invoices', async ({ db, org, id, form }) => {
+  const job = await loadJob(db, org.org_id, id);
+  if (!job) return notFound();
+  if (!stripe.enabledFor(org.org_id)) return renderJob(db, org.org_id, id, { forms: { invoice: { values: {}, errors: { invoice_amount: 'Online invoicing is not set up for this company.' } } } }, 409);
+  const f = formObj(form);
+  const values = { invoice_amount: f.invoice_amount ?? '', invoice_email: str(f.invoice_email, 200), days: f.days ?? '14',
+    invoice_desc: f.invoice_desc ?? '', key: str(f.key, 64) };
+  const errors = {};
+  const amt = parseMoney(values.invoice_amount, 'Invoice amount', { allowZero: false });
+  if (amt.error) errors.invoice_amount = amt.error;
+  else if (amt.value > job.balance_cents) errors.invoice_amount = `Invoice amount can't be more than the outstanding balance (${fmt(job.balance_cents)}).`;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.invoice_email)) errors.invoice_email = 'Enter the email address to send the invoice to.';
+  const days = ['0', '7', '14', '30'].includes(values.days) ? Number(values.days) : null;
+  if (days == null) errors.days = 'Choose when payment is due.';
+  if (!/^[0-9a-f-]{36}$/.test(values.key)) values.key = crypto.randomUUID();
+  if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { invoice: { values, errors } } }, 422);
+  const description = str(values.invoice_desc, 500) || job.project_name;
+  const client = await db.get('SELECT * FROM clients WHERE id = ?', job.client_id);
+  let inv;
+  try {
+    const customerId = await stripe.ensureCustomer(client, values.invoice_email, org.org_id);
+    if (customerId !== client.stripe_customer_id) await db.run('UPDATE clients SET stripe_customer_id = ? WHERE id = ?', customerId, client.id);
+    inv = await stripe.sendInvoice({ customerId, amountCents: amt.value, description, daysUntilDue: days,
+      jobId: id, orgId: org.org_id, key: values.key });
+  } catch (e) {
+    console.error('Stripe invoice failed:', e.message);
+    const msg = e instanceof stripe.StripeError ? `Stripe didn't accept the invoice: ${e.message}` : 'Could not reach Stripe. Nothing was sent; please try again.';
+    return renderJob(db, org.org_id, id, { forms: { invoice: { values, errors: { invoice_amount: msg } } } }, 502);
+  }
+  await db.run(`INSERT INTO invoices (org_id, job_id, stripe_invoice_id, number, amount_cents, description, sent_to, due_date, hosted_url, pdf_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, (now() AT TIME ZONE ?)::date + ?::int, ?, ?) ON CONFLICT (stripe_invoice_id) DO NOTHING`,
+  org.org_id, id, inv.id, inv.number || '', amt.value, description, values.invoice_email, APP_TIMEZONE, days, inv.hosted_invoice_url || '', inv.invoice_pdf || '');
+  return redirect(`/jobs/${id}?msg=Invoice+sent+to+${encodeURIComponent(values.invoice_email)}`);
+});
+async function invoiceAction(db, org, id, fn, msg) {
+  const inv = await db.get('SELECT * FROM invoices WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!inv) return notFound();
+  if (inv.status !== 'open' || !stripe.enabledFor(org.org_id)) return redirect(`/jobs/${inv.job_id}`);
+  try { await fn(inv); } catch (e) {
+    console.error('Stripe action failed:', e.message);
+    return renderJob(db, org.org_id, inv.job_id, { forms: { invoice: { values: {}, errors: { invoice_amount: `Stripe error: ${e.message}` } } } }, 502);
+  }
+  return redirect(`/jobs/${inv.job_id}?msg=${msg}`);
+}
+route('POST', '/invoices/:id/resend', ({ db, org, id }) => invoiceAction(db, org, id, (inv) => stripe.resendInvoice(inv.stripe_invoice_id), 'Invoice+sent+again'));
+route('POST', '/invoices/:id/void', ({ db, org, id }) => invoiceAction(db, org, id, async (inv) => {
+  await stripe.voidInvoice(inv.stripe_invoice_id);
+  await db.run("UPDATE invoices SET status = 'void' WHERE id = ?", inv.id);
+}, 'Invoice+voided'));
+
 route('POST', '/jobs/:id/assignments', async ({ db, org, id, form }) => {
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
   const values = { user_id: str(form.get('user_id'), 64), payout: form.get('payout') ?? '' };
@@ -611,7 +667,8 @@ async function companyFor(db, org) {
 }
 route('GET', '/settings', async ({ db, org, url }) => {
   const c = await companyFor(db, org);
-  return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg') }));
+  return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'),
+    payments: { enabled: stripe.enabledFor(org.org_id), configured: stripe.configured(), testMode: stripe.testMode() } }));
 });
 route('GET', '/settings/logo', async ({ db, org }) => {
   const p = await db.get('SELECT logo, logo_type FROM company_profiles WHERE org_id = ?', org.org_id);
@@ -764,6 +821,35 @@ async function publicRoute(req, url) {
 }
 
 // Public diagnostics: says which dependency is failing, never any data or secrets.
+// Stripe webhook: records paid invoices as payments. Runs as the database owner (there is no signed-in user);
+// it only acts on events with a valid signature, for the company Stripe is set up for.
+async function stripeWebhook(req) {
+  const raw = await readRaw(req);
+  const event = stripe.verifyEvent(raw, req.headers['stripe-signature']);
+  if (!event) return { status: 400, body: 'Invalid signature', headers: { 'Content-Type': 'text/plain' } };
+  const obj = event.data?.object || {};
+  const orgId = obj.metadata?.org_id; const jobId = Number(obj.metadata?.job_id);
+  const ack = { status: 200, body: '{"received":true}', headers: { 'Content-Type': 'application/json' } };
+  if (orgId !== stripe.ORG_ID || !Number.isInteger(jobId)) return ack; // not one of ours
+  if (event.type === 'invoice.paid') {
+    const paidAt = new Date(((obj.status_transitions && obj.status_transitions.paid_at) || event.created || Date.now() / 1000) * 1000);
+    const paidOn = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TIMEZONE }).format(paidAt);
+    await pool.query('SELECT record_stripe_payment($1, $2, $3, $4, $5, $6, $7, $8)',
+      [orgId, jobId, obj.id, obj.amount_paid, paidOn, obj.number || '', obj.hosted_invoice_url || '', obj.invoice_pdf || '']);
+  } else if (event.type === 'invoice.voided' || event.type === 'invoice.marked_uncollectible') {
+    await pool.query('SELECT set_stripe_invoice_status($1, $2)', [obj.id, event.type === 'invoice.voided' ? 'void' : 'uncollectible']);
+  }
+  return ack;
+}
+function readRaw(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > 1_000_000) { req.destroy(); reject(new Error('Body too large')); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
 async function health() {
   const check = async (fn) => {
     try { await fn(); return 'ok'; } catch (e) {
@@ -777,10 +863,12 @@ async function health() {
     database_as_user: await check(() => asUser('00000000-0000-0000-0000-000000000000', (db) => db.get('SELECT count(*) FROM organizations'))),
     database_schema: await check(async () => {
       const r = await pool.query(`SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts,
-        to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles`);
+        to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles,
+        to_regclass('public.invoices') IS NOT NULL AS invoices`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].invoices) throw new Error('Run supabase/migrations/0006_invoices.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -794,6 +882,8 @@ async function health() {
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const cookies = parseCookies(req);
+
+  if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(req);
 
   // Reject cross-site form posts (defence in depth on top of SameSite cookies).
   if (req.method === 'POST' && req.headers.origin) {

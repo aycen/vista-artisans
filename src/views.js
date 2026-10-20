@@ -433,7 +433,7 @@ function accountPage({ user, org, orgs, flash }) {
 }
 
 // ---------- Company profile ----------
-function settingsPage({ org, values, hasLogo, errors = {}, flash }) {
+function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null }) {
   return layout('Company profile', html`
   ${errorBox(errors)}
   <form method="post" action="/settings" id="settings-form" novalidate>
@@ -467,6 +467,14 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash }) {
     </div>
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
   </form>
+  ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">
+    ${payments.enabled ? html`<strong>Stripe is connected${payments.testMode ? ' (test mode)' : ''}.</strong>
+      <div class="hint">Send invoices from any job with money owed. Paid invoices are recorded on the job automatically.</div>`
+    : html`<strong>Not set up yet.</strong>
+      <div class="hint">To email invoices with a pay link, add your Stripe keys in Render along with this company ID:</div>
+      <div class="code" style="font-size:15px;letter-spacing:0;overflow-wrap:anywhere">${org.org_id}</div>
+      ${payments.configured ? html`<div class="hint">Stripe is set up for a different company.</div>` : ''}`}
+  </div>` : ''}
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
 }
 
@@ -882,15 +890,16 @@ function jobsPage({ jobs, status, cal }) {
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
 
-function jobPage({ job, client, expenses, payments, crew = [], members = [], forms = {}, flash }) {
+function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, forms = {}, flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
   const af = forms.assign || { values: {}, errors: {} };
+  const vf = forms.invoice || { values: {}, errors: {} };
   const final = job.status === 'completed';
   return layout(job.project_name, html`
   <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)} ${dateRange(job.start_date, job.end_date) ? html`<span class="muted" style="margin-left:6px">${dateRange(job.start_date, job.end_date)}</span>` : ''}</p>
-  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors })}
+  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors })}
   <div class="stats" id="job-summary">
     <div class="stat"><div class="k">Contract total</div><div class="v" data-k="contract">${fmt(job.contract_cents)}</div></div>
     <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
@@ -945,15 +954,57 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], for
     <div class="form-actions"><button type="submit" class="secondary">Add expense</button></div>
   </form>
 
+  <h2>Invoices</h2>
+  ${invoiceSection(job, client, invoices, invoicing, vf)}
+
   <h2>Payments received</h2>
-  ${entryList(payments, 'payments', (p) => html`Payment · ${fmtDate(p.paid_on)}`, 'No payments recorded.')}
+  ${entryList(payments, 'payments', (p) => html`${p.invoice_number ? `Paid online · ${p.invoice_number}` : 'Payment'} · ${fmtDate(p.paid_on)}`, 'No payments recorded.')}
   <form method="post" action="/jobs/${job.id}/payments" class="form-card" novalidate>
     <div class="two stack"><div>${input('payment_amount', 'Amount ($)', pf.values, pf.errors, { required: true, inputmode: 'decimal' })}</div>
     <div>${input('paid_on', 'Date received', pf.values, pf.errors, { type: 'date', required: true })}</div></div>
-    <div class="hint">Manual records only. No money is processed by this app.</div>
+    <div class="hint">For cash, checks and other payments received outside the app. Invoices paid online are recorded automatically.</div>
     <div class="form-actions"><button type="submit" class="secondary">Record payment</button></div>
   </form>`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
+
+const INVOICE_STATUS = { open: 'Sent', paid: 'Paid', void: 'Voided', uncollectible: 'Uncollectible' };
+const INVOICE_PILL = { open: 'sent', paid: 'completed', void: 'declined', uncollectible: 'declined' };
+function invoiceSection(job, client, invoices, invoicing, vf) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date());
+  const list = invoices.length ? html`<div class="list" id="invoices">${invoices.map((i) => {
+    const overdue = i.status === 'open' && i.due_date && i.due_date < today;
+    return html`<div class="li">
+    <div class="main-t"><div class="t">${i.number || 'Invoice'} · ${i.description}</div>
+      <div class="s">${i.status === 'paid' ? html`Paid ${fmtDate(String(i.paid_at).slice(0, 10))}` : html`To ${i.sent_to}${i.due_date ? html` · due ${fmtDate(i.due_date)}` : ''}`}</div>
+      <div class="row" style="gap:12px;margin-top:6px;font-size:14px">
+        ${i.hosted_url ? html`<a href="${i.hosted_url}" target="_blank" rel="noopener">View</a>` : ''}
+        ${i.status === 'open' && invoicing.enabled ? html`
+          <form method="post" action="/invoices/${i.id}/resend"><button type="submit" class="link" style="font-size:14px">Resend</button></form>
+          <form method="post" action="/invoices/${i.id}/void" data-confirm="Void this invoice? The client's pay link will stop working."><button type="submit" class="link" style="font-size:14px;color:var(--red)">Void</button></form>` : ''}
+      </div></div>
+    <div class="r"><span class="amt">${fmt(i.amount_cents)}</span><span class="pill ${overdue ? 'declined' : INVOICE_PILL[i.status]}">${overdue ? 'Overdue' : INVOICE_STATUS[i.status]}</span></div>
+  </div>`;
+  })}</div>` : '';
+  if (!invoicing.enabled) {
+    return html`${list}<div class="empty" style="text-align:left">Online invoicing isn't set up yet. Once it is, you can email the client an invoice with a pay link and the payment is recorded here automatically. See <a href="/settings">Company profile</a>.</div>`;
+  }
+  if (job.balance_cents <= 0) return html`${list}${invoices.length ? '' : html`<div class="empty">Nothing is owed on this job.</div>`}`;
+  const unbilled = Math.max(0, job.balance_cents - invoices.filter((i) => i.status === 'open').reduce((t, i) => t + i.amount_cents, 0));
+  const values = { invoice_amount: plainCents(unbilled || job.balance_cents), invoice_email: client.email, days: '14', invoice_desc: job.project_name, key: invoicing.key, ...vf.values };
+  return html`${list}
+  <form method="post" action="/jobs/${job.id}/invoices" class="form-card" id="invoice-form" novalidate
+    data-confirm="Email this invoice to the client now?">
+    <h3>Send an invoice</h3>
+    <div class="hint">Stripe emails the client a secure link to pay by card or bank transfer. When they pay, it's recorded under Payments received.${invoicing.testMode ? ' Test mode: no real money moves and Stripe does not email clients.' : ''}</div>
+    <input type="hidden" name="key" value="${values.key}">
+    <div class="two stack"><div>${input('invoice_amount', 'Amount ($)', values, vf.errors, { required: true, inputmode: 'decimal', hint: `Outstanding: ${fmt(job.balance_cents)}` })}</div>
+    <div><label for="days">Payment due</label><select id="days" name="days">${options({ 0: 'On receipt', 7: 'In 7 days', 14: 'In 14 days', 30: 'In 30 days' }, String(values.days))}</select></div></div>
+    ${input('invoice_email', 'Send to', values, vf.errors, { type: 'email', required: true, inputmode: 'email' })}
+    ${input('invoice_desc', 'Description on the invoice', values, vf.errors)}
+    <div class="form-actions"><button type="submit">Send invoice</button></div>
+  </form>`;
+}
+const plainCents = (c) => `${Math.floor(c / 100)}.${String(c % 100).padStart(2, '0')}`;
 
 function entryList(rows, kind, title, empty) {
   if (!rows.length) return html`<div class="empty">${empty}</div>`;

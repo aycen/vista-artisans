@@ -62,6 +62,23 @@ On a phone, use the browser's **Add to Home Screen** to get an app icon that ope
 
 The `starter` plan stays awake; Render's free plan also works but sleeps when idle and takes a while to wake up.
 
+## Online invoicing with Stripe
+
+Admins can email an invoice from any job with money owed. Stripe sends the client a pay link (card or bank transfer),
+and when the invoice is paid Stripe calls `/stripe/webhook`, which records the payment on the job. All money goes to one
+Stripe account, so invoicing is turned on for one company, named by `STRIPE_ORG_ID`.
+
+1. Create a Stripe account and stay in **test mode** to try it.
+2. **Developers → API keys:** copy the secret key into Render as `STRIPE_SECRET_KEY`. (A restricted key with write access
+   to Customers and Invoices also works.)
+3. **Developers → Webhooks → Add endpoint:** URL `https://<your site>/stripe/webhook`, events `invoice.paid`,
+   `invoice.voided` and `invoice.marked_uncollectible`. Copy its signing secret into Render as `STRIPE_WEBHOOK_SECRET`.
+4. In the app, **Account → Company profile** shows your company ID; put it in Render as `STRIPE_ORG_ID`.
+5. In Stripe, set your logo and colors under **Settings → Branding**; they appear on Stripe's invoice emails and pay page.
+
+Test mode moves no real money and Stripe doesn't email clients, but the invoice's **View** link opens the pay page,
+where Stripe's test card `4242 4242 4242 4242` pays it. To go live, swap in the live-mode key and a live-mode webhook secret.
+
 ## Tests
 
 Both test suites run against a local Postgres 16 server, not your Supabase project.
@@ -115,4 +132,5 @@ deleting estimates and clients (and refusing for converted ones), moving an esti
 - **Joining:** each company has an 8-character join code (shown as XXXX-XXXX on the Team page, admins only). Joining
   with it makes you a worker. An admin can make a new code, which stops the old one working. Ten wrong codes in an hour
   locks that person out of joining for the hour.
+- **Invoices:** see *Online invoicing with Stripe* above. Payments received outside the app are still entered by hand.
 - **Organizations:** a person can belong to several companies and switch between them on the **Account** page.

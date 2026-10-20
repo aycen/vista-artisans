@@ -157,6 +157,17 @@ do $$ begin insert into company_profiles (org_id) values (current_setting('t.vis
   raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
 select pg_temp.expect(true, 'other companies cannot write the profile');
 
+-- Invoices: admins of the company only; the webhook's payment function can't be called by signed-in users
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+insert into invoices (org_id, job_id, stripe_invoice_id, amount_cents) values (:'vista', :job, 'in_test_1', 1000);
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from invoices) = 0, 'workers cannot see invoices');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from invoices) = 0, 'other companies cannot see invoices');
+do $$ begin perform record_stripe_payment(current_setting('t.vista')::uuid, 1, 'in_test_1', 1000, current_date, '', '', '');
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'signed-in users cannot record Stripe payments');
+
 -- Signed-out (anon) gets nothing
 reset role; set role anon;
 do $$ begin perform count(*) from clients; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
