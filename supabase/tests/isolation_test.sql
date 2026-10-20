@@ -143,6 +143,8 @@ select pg_temp.expect((select count(*) from job_photos) + (select count(*) from 
 select pg_temp.expect(pg_temp.denied(format('insert into job_photos (org_id, job_id, data, content_type) values (%L, %s, %L, %L)',
   (select id from organizations), :job, '\x89504e47', 'image/png')), 'cannot add a photo to another org''s job');
 select pg_temp.expect(pg_temp.fails(format('select clock_in(%s)', :job)), 'cannot clock in on another org''s job');
+select pg_temp.expect(pg_temp.denied('select * from qbo_connections'), 'QuickBooks tokens are never readable by app users');
+select pg_temp.expect((select count(*) from qbo_links) + (select count(*) from qbo_status(:'vista')) = 0, 'other org sees no QuickBooks sync records');
 update clients set name = 'hacked'; delete from payments;
 do $$ begin insert into clients (org_id, name) select id, 'x' from organizations where name = 'Vista Artisans';
   if found then raise exception 'should fail'; end if; end $$;

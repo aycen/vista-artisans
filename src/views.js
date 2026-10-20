@@ -576,7 +576,7 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
 }
 
 // ---------- Company profile ----------
-function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false }) {
+function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, quickbooks = null, emailValues = null, emailErrors = {}, emailEnabled = false }) {
   return layout('Company profile', html`
   ${errorBox(errors)}
   <form method="post" action="/settings" id="settings-form" novalidate>
@@ -611,6 +611,7 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
   </form>
   ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
+  ${quickbooks ? html`<h2>QuickBooks</h2><div class="card" id="quickbooks">${quickbooksCard(quickbooks)}</div>` : ''}
   ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled) : ''}
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
 }
@@ -648,6 +649,37 @@ function paymentsCard({ configured, testMode, account }) {
     <div class="hint">${account ? 'Stripe still needs some details before you can send invoices.'
       : 'Connect a Stripe account to email clients invoices they can pay by card or bank transfer. Money goes straight to your account; Stripe charges its standard fees per payment.'}</div>
     <form method="post" action="/settings/stripe/connect" style="margin-top:12px"><button type="submit" class="block" id="connect-stripe">${account ? 'Continue Stripe setup' : 'Connect Stripe'}</button></form>`;
+}
+
+function quickbooksCard({ configured, sandbox, today, status }) {
+  if (!configured) {
+    return html`<strong>Not available yet.</strong><div class="hint">QuickBooks hasn't been switched on for this app. See "QuickBooks Online" in the README.</div>`;
+  }
+  const what = 'Keystone sends each job as an invoice once it\'s completed or paid on, along with its payments. Clients are added as customers. Nothing in QuickBooks is changed or deleted.';
+  if (!status) {
+    return html`<strong>Connect QuickBooks Online${sandbox ? ' (sandbox)' : ''}</strong>
+      <div class="hint">${what}</div>
+      <form method="post" action="/settings/quickbooks/connect" style="margin-top:12px" novalidate>
+        ${input('sync_from', 'Send jobs and payments from', { sync_from: today }, {}, { type: 'date', hint: 'Anything earlier is left out, so work already in QuickBooks isn\'t entered twice.' })}
+        <button type="submit" class="block" id="connect-quickbooks">Connect QuickBooks</button></form>`;
+  }
+  return html`<div class="row" style="justify-content:space-between"><strong>${status.company_name || 'QuickBooks'} connected${sandbox ? ' (sandbox)' : ''}</strong>
+      <span class="pill ${status.last_error ? 'declined' : 'completed'}">${status.last_error ? 'Needs attention' : 'Syncing'}</span></div>
+    <div class="hint">${what} It checks every 15 minutes.</div>
+    ${status.last_error ? html`<div class="notice" id="qbo-error" style="margin-top:10px">${status.last_error}</div>` : ''}
+    <div class="list" style="margin-top:12px">
+      <div class="kv"><span class="k">Jobs sent</span><span class="v" id="qbo-jobs">${status.synced_jobs}</span></div>
+      <div class="kv"><span class="k">Payments sent</span><span class="v" id="qbo-payments">${status.synced_payments}</span></div>
+      <div class="kv"><span class="k">Last sync</span><span class="v">${status.last_synced_at ? html`<span data-local-time="${status.last_synced_at}">${fmtDate(status.last_synced_at.slice(0, 10))}</span>` : 'Not yet'}</span></div>
+    </div>
+    <form method="post" action="/settings/quickbooks/sync" style="margin-top:12px"><button type="submit" class="block" id="qbo-sync">Sync now</button></form>
+    <form method="post" action="/settings/quickbooks/sync-from" class="row" style="gap:8px;align-items:flex-end;margin-top:12px" novalidate>
+      <div style="flex:1;min-width:0">${input('sync_from', 'Send jobs and payments from', { sync_from: status.sync_from }, {}, { type: 'date' })}</div>
+      <button type="submit" class="secondary" style="margin-bottom:2px">Save</button></form>
+    <div class="hint">If you change or delete a job or payment after it's been sent, make the same change in QuickBooks.</div>
+    <form method="post" action="/settings/quickbooks/disconnect" data-confirm="Disconnect QuickBooks? Nothing already sent is removed." style="margin-top:12px">
+      <button type="submit" class="link" style="color:var(--red)">Disconnect QuickBooks</button></form>
+    <script>${raw(`document.querySelectorAll('[data-local-time]').forEach(function(e){e.textContent=new Date(e.dataset.localTime).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})});`)}</script>`;
 }
 
 // Shrinks the chosen image in the browser (max 800px wide) and sends it as a data URL.

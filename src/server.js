@@ -6,6 +6,7 @@ const { parseMoney, parseQty, plain, fmtQty, fmt } = require('./money');
 const v = require('./views');
 const pdf = require('./pdf');
 const stripe = require('./stripe');
+const qbo = require('./quickbooks');
 const email = require('./email');
 const mailer = require('./mailer');
 const crypto = require('node:crypto');
@@ -993,7 +994,54 @@ route('GET', '/settings', async ({ db, org, url }) => {
   const emailValues = { estimate_followup_days: ep.estimate_followup_days ?? 3, appointment_reminders: ep.appointment_reminders ?? true,
     review_requests: ep.review_requests ?? false, review_url: ep.review_url || '', default_deposit_percent: String(ep.default_deposit_percent ?? 0) };
   return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'), emailValues, emailEnabled: email.configured(),
-    payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
+    payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null },
+    quickbooks: { configured: qbo.configured(), sandbox: qbo.sandbox(), today: await todayIn(db),
+      status: (await db.get('SELECT *, sync_from::text AS sync_from FROM qbo_status(?)', org.org_id)) || null } }));
+});
+
+// QuickBooks Online: the admin signs in to Intuit and picks their company; Keystone then pushes new jobs and payments.
+const QBO_STATE = 'qbo_state';
+// Intuit must send people back to the same address they started on (the state cookie lives there), not APP_URL.
+const hereUrl = (req) => `${String(req.headers['x-forwarded-proto'] || (COOKIE_SECURE ? 'https' : 'http')).split(',')[0]}://${req.headers.host}`;
+route('POST', '/settings/quickbooks/connect', async ({ req, form }) => {
+  if (!qbo.configured()) return redirect('/settings');
+  const from = str(form.get('sync_from'), 20);
+  const state = `${crypto.randomBytes(16).toString('hex')}.${isDate(from) ? from : ''}`;
+  return redirect(qbo.authorizeUrl(state, `${hereUrl(req)}/settings/quickbooks/callback`), { 'Set-Cookie': cookie(QBO_STATE, state, 15 * 60) });
+});
+route('GET', '/settings/quickbooks/callback', async ({ db, org, req, url }) => {
+  const state = parseCookies(req)[QBO_STATE] || '';
+  const clear = { 'Set-Cookie': cookie(QBO_STATE, '', 0) };
+  if (url.searchParams.get('error')) return redirect('/settings?msg=QuickBooks+was+not+connected#quickbooks', clear);
+  const code = url.searchParams.get('code'); const realm = url.searchParams.get('realmId');
+  if (!state || url.searchParams.get('state') !== state || !code || !/^\d{1,30}$/.test(realm || '')) {
+    return page(400, v.messagePage('QuickBooks sign-in expired', 'Please start again from Company profile.'), clear);
+  }
+  const from = state.split('.')[1] || await todayIn(db);
+  try {
+    await qbo.connect(org.org_id, code, realm, `${hereUrl(req)}/settings/quickbooks/callback`, from);
+  } catch (e) {
+    console.error('QuickBooks connect failed:', e.message);
+    return page(502, v.messagePage('Could not connect QuickBooks', `QuickBooks said: ${e.message}. Please try again from Company profile.`), clear);
+  }
+  qbo.syncOrg(org.org_id).catch((e) => console.error('QuickBooks first sync failed:', e.message));
+  return redirect('/settings?msg=QuickBooks+connected#quickbooks', clear);
+});
+route('POST', '/settings/quickbooks/sync', async ({ org }) => {
+  const r = await qbo.syncOrg(org.org_id);
+  const msg = r.busy ? 'A sync is already running' : r.error ? 'QuickBooks sync stopped. See the error below.'
+    : `Sent ${r.jobs} job${r.jobs === 1 ? '' : 's'} and ${r.payments} payment${r.payments === 1 ? '' : 's'} to QuickBooks`;
+  return redirect(`/settings?msg=${encodeURIComponent(msg)}#quickbooks`);
+});
+route('POST', '/settings/quickbooks/sync-from', async ({ org, form }) => {
+  const from = str(form.get('sync_from'), 20);
+  if (!isDate(from)) return redirect('/settings?msg=Enter+a+valid+date#quickbooks');
+  await pool.query('UPDATE qbo_connections SET sync_from = $2 WHERE org_id = $1', [org.org_id, from]);
+  return redirect('/settings?msg=Saved#quickbooks');
+});
+route('POST', '/settings/quickbooks/disconnect', async ({ org }) => {
+  await qbo.disconnect(org.org_id);
+  return redirect('/settings?msg=QuickBooks+disconnected#quickbooks');
 });
 
 // Linking the company's own Stripe account (Stripe Connect). The account row is written by the server as the
@@ -1364,7 +1412,8 @@ async function health() {
         to_regclass('public.invoices') IS NOT NULL AS invoices,
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
         to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
-        to_regclass('public.time_entries') IS NOT NULL AS time_clock`);
+        to_regclass('public.time_entries') IS NOT NULL AS time_clock,
+        to_regclass('public.qbo_connections') IS NOT NULL AS quickbooks`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1374,6 +1423,7 @@ async function health() {
       if (!r.rows[0].crew) throw new Error('Run supabase/migrations/0010_crew_jobs.sql in the Supabase SQL Editor.');
       if (!r.rows[0].receipts) throw new Error('Run supabase/migrations/0011_expense_receipts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].time_clock) throw new Error('Run supabase/migrations/0013_time_clock_photos.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].quickbooks) throw new Error('Run supabase/migrations/0014_quickbooks.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1639,5 +1689,6 @@ const server = http.createServer((req, res) => {
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Keystone running on http://localhost:${PORT}`));
   mailer.startAutomations();
+  qbo.startSync();
 }
 module.exports = { server };
