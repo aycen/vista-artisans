@@ -167,6 +167,10 @@ select pg_temp.expect((select count(*) from invoices) = 0, 'other companies cann
 do $$ begin perform record_stripe_payment(current_setting('t.vista')::uuid, 1, 'in_test_1', 1000, current_date, '', '', '');
   raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
 select pg_temp.expect(true, 'signed-in users cannot record Stripe payments');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+do $$ begin insert into stripe_accounts (org_id, account_id) values (current_setting('t.vista')::uuid, 'acct_someone_else');
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'admins cannot link a Stripe account directly (only the server can)');
 
 -- Signed-out (anon) gets nothing
 reset role; set role anon;

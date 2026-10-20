@@ -151,6 +151,13 @@ const clientsForSelect = (db, org) => db.all('SELECT id, name FROM clients WHERE
 const loadJob = async (db, org, id) => withJobMath(await db.get(`${JOB_LIST_SQL} WHERE jobs.id = ? AND jobs.org_id = ?`, id, org));
 const jobFor = (db, estimateId) => db.get('SELECT id FROM jobs WHERE estimate_id = ?', estimateId);
 
+// The company's linked Stripe account, if it can take payments (null otherwise).
+async function payoutAccount(db, orgId) {
+  if (!stripe.configured()) return null;
+  const a = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', orgId);
+  return a && a.charges_enabled ? a.account_id : null;
+}
+
 async function renderJob(db, org, id, extra = {}, status = 200) {
   const job = await loadJob(db, org, id);
   if (!job) return notFound();
@@ -163,7 +170,7 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
     crew: await db.all('SELECT * FROM job_team(?)', id),
     members: await db.all('SELECT * FROM org_members(?)', org),
     invoices: await db.all('SELECT * FROM invoices WHERE job_id = ? ORDER BY id DESC', id),
-    invoicing: { enabled: stripe.enabledFor(org), testMode: stripe.testMode(), key: crypto.randomUUID() },
+    invoicing: { enabled: !!(await payoutAccount(db, org)), testMode: stripe.testMode(), key: crypto.randomUUID() },
   }));
 }
 
@@ -423,7 +430,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 route('POST', '/jobs/:id/invoices', async ({ db, org, id, form }) => {
   const job = await loadJob(db, org.org_id, id);
   if (!job) return notFound();
-  if (!stripe.enabledFor(org.org_id)) return renderJob(db, org.org_id, id, { forms: { invoice: { values: {}, errors: { invoice_amount: 'Online invoicing is not set up for this company.' } } } }, 409);
+  const account = await payoutAccount(db, org.org_id);
+  if (!account) return renderJob(db, org.org_id, id, { forms: { invoice: { values: {}, errors: { invoice_amount: 'Online invoicing is not set up for this company.' } } } }, 409);
   const f = formObj(form);
   const values = { invoice_amount: f.invoice_amount ?? '', invoice_email: str(f.invoice_email, 200), days: f.days ?? '14',
     invoice_desc: f.invoice_desc ?? '', key: str(f.key, 64) };
@@ -440,9 +448,11 @@ route('POST', '/jobs/:id/invoices', async ({ db, org, id, form }) => {
   const client = await db.get('SELECT * FROM clients WHERE id = ?', job.client_id);
   let inv;
   try {
-    const customerId = await stripe.ensureCustomer(client, values.invoice_email, org.org_id);
-    if (customerId !== client.stripe_customer_id) await db.run('UPDATE clients SET stripe_customer_id = ? WHERE id = ?', customerId, client.id);
-    inv = await stripe.sendInvoice({ customerId, amountCents: amt.value, description, daysUntilDue: days,
+    const customerId = await stripe.ensureCustomer(account, client, values.invoice_email, org.org_id);
+    if (customerId !== client.stripe_customer_id) {
+      await db.run('UPDATE clients SET stripe_customer_id = ?, stripe_customer_account = ? WHERE id = ?', customerId, account, client.id);
+    }
+    inv = await stripe.sendInvoice({ account, customerId, amountCents: amt.value, description, daysUntilDue: days,
       jobId: id, orgId: org.org_id, key: values.key });
   } catch (e) {
     console.error('Stripe invoice failed:', e.message);
@@ -457,16 +467,17 @@ route('POST', '/jobs/:id/invoices', async ({ db, org, id, form }) => {
 async function invoiceAction(db, org, id, fn, msg) {
   const inv = await db.get('SELECT * FROM invoices WHERE id = ? AND org_id = ?', id, org.org_id);
   if (!inv) return notFound();
-  if (inv.status !== 'open' || !stripe.enabledFor(org.org_id)) return redirect(`/jobs/${inv.job_id}`);
-  try { await fn(inv); } catch (e) {
+  const account = await payoutAccount(db, org.org_id);
+  if (inv.status !== 'open' || !account) return redirect(`/jobs/${inv.job_id}`);
+  try { await fn(inv, account); } catch (e) {
     console.error('Stripe action failed:', e.message);
     return renderJob(db, org.org_id, inv.job_id, { forms: { invoice: { values: {}, errors: { invoice_amount: `Stripe error: ${e.message}` } } } }, 502);
   }
   return redirect(`/jobs/${inv.job_id}?msg=${msg}`);
 }
-route('POST', '/invoices/:id/resend', ({ db, org, id }) => invoiceAction(db, org, id, (inv) => stripe.resendInvoice(inv.stripe_invoice_id), 'Invoice+sent+again'));
-route('POST', '/invoices/:id/void', ({ db, org, id }) => invoiceAction(db, org, id, async (inv) => {
-  await stripe.voidInvoice(inv.stripe_invoice_id);
+route('POST', '/invoices/:id/resend', ({ db, org, id }) => invoiceAction(db, org, id, (inv, account) => stripe.resendInvoice(account, inv.stripe_invoice_id), 'Invoice+sent+again'));
+route('POST', '/invoices/:id/void', ({ db, org, id }) => invoiceAction(db, org, id, async (inv, account) => {
+  await stripe.voidInvoice(account, inv.stripe_invoice_id);
   await db.run("UPDATE invoices SET status = 'void' WHERE id = ?", inv.id);
 }, 'Invoice+voided'));
 
@@ -667,8 +678,43 @@ async function companyFor(db, org) {
 }
 route('GET', '/settings', async ({ db, org, url }) => {
   const c = await companyFor(db, org);
+  const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
   return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'),
-    payments: { enabled: stripe.enabledFor(org.org_id), configured: stripe.configured(), testMode: stripe.testMode() } }));
+    payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
+});
+
+// Linking the company's own Stripe account (Stripe Connect). The account row is written by the server as the
+// database owner, never by people directly, so a company can't point itself at another company's account.
+const baseUrl = (req) => process.env.APP_URL?.replace(/\/$/, '') || `${COOKIE_SECURE ? 'https' : 'http'}://${req.headers.host}`;
+async function connectStripe({ db, org, req }) {
+  if (!stripe.configured()) return redirect('/settings');
+  let acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
+  try {
+    if (!acct) {
+      const p = await db.get('SELECT email FROM company_profiles WHERE org_id = ?', org.org_id);
+      const a = await stripe.createAccount({ orgId: org.org_id, name: org.name, email: p?.email });
+      await pool.query('INSERT INTO stripe_accounts (org_id, account_id) VALUES ($1, $2) ON CONFLICT (org_id) DO NOTHING', [org.org_id, a.id]);
+      acct = { account_id: (await pool.query('SELECT account_id FROM stripe_accounts WHERE org_id = $1', [org.org_id])).rows[0].account_id };
+    }
+    return redirect(await stripe.onboardingLink(acct.account_id, baseUrl(req)));
+  } catch (e) {
+    console.error('Stripe connect failed:', e.message);
+    return page(502, v.messagePage('Could not reach Stripe', `Stripe said: ${e.message}. Please try again from Company profile.`));
+  }
+}
+route('POST', '/settings/stripe/connect', connectStripe);
+route('GET', '/settings/stripe/connect', connectStripe); // Stripe sends people here when an onboarding link expires
+route('GET', '/settings/stripe/return', async ({ db, org }) => {
+  const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
+  if (!acct) return redirect('/settings');
+  try {
+    const a = await stripe.getAccount(acct.account_id);
+    await pool.query('SELECT update_stripe_account($1, $2, $3)', [acct.account_id, !!a.charges_enabled, !!a.details_submitted]);
+    return redirect(`/settings?msg=${a.charges_enabled ? 'Stripe+connected.+You+can+send+invoices+now.' : 'Stripe+needs+a+bit+more+information+before+you+can+send+invoices.'}`);
+  } catch (e) {
+    console.error('Stripe account check failed:', e.message);
+    return redirect('/settings?msg=Could+not+check+with+Stripe+yet.+Refresh+in+a+minute.');
+  }
 });
 route('GET', '/settings/logo', async ({ db, org }) => {
   const p = await db.get('SELECT logo, logo_type FROM company_profiles WHERE org_id = ?', org.org_id);
@@ -828,9 +874,15 @@ async function stripeWebhook(req) {
   const event = stripe.verifyEvent(raw, req.headers['stripe-signature']);
   if (!event) return { status: 400, body: 'Invalid signature', headers: { 'Content-Type': 'text/plain' } };
   const obj = event.data?.object || {};
-  const orgId = obj.metadata?.org_id; const jobId = Number(obj.metadata?.job_id);
   const ack = { status: 200, body: '{"received":true}', headers: { 'Content-Type': 'application/json' } };
-  if (orgId !== stripe.ORG_ID || !Number.isInteger(jobId)) return ack; // not one of ours
+  if (event.type === 'account.updated') {
+    await pool.query('SELECT update_stripe_account($1, $2, $3)', [obj.id, !!obj.charges_enabled, !!obj.details_submitted]);
+    return ack;
+  }
+  // Invoice events come from a company's connected account; only trust jobs of the company that owns that account.
+  const owner = event.account ? (await pool.query('SELECT org_for_stripe_account($1) AS org', [event.account])).rows[0].org : null;
+  const orgId = obj.metadata?.org_id; const jobId = Number(obj.metadata?.job_id);
+  if (!owner || orgId !== owner || !Number.isInteger(jobId)) return ack; // not one of ours
   if (event.type === 'invoice.paid') {
     const paidAt = new Date(((obj.status_transitions && obj.status_transitions.paid_at) || event.created || Date.now() / 1000) * 1000);
     const paidOn = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TIMEZONE }).format(paidAt);

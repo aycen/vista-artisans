@@ -62,22 +62,27 @@ On a phone, use the browser's **Add to Home Screen** to get an app icon that ope
 
 The `starter` plan stays awake; Render's free plan also works but sleeps when idle and takes a while to wake up.
 
-## Online invoicing with Stripe
+## Online invoicing with Stripe Connect
 
-Admins can email an invoice from any job with money owed. Stripe sends the client a pay link (card or bank transfer),
-and when the invoice is paid Stripe calls `/stripe/webhook`, which records the payment on the job. All money goes to one
-Stripe account, so invoicing is turned on for one company, named by `STRIPE_ORG_ID`.
+Each company links **its own** Stripe account from **Account → Company profile → Connect Stripe** (Stripe's hosted
+sign-up). Admins then email invoices from any job with money owed: Stripe sends the client a pay link (card or bank
+transfer), the money goes straight to that company's Stripe account, and that company pays Stripe's fees. When an
+invoice is paid, Stripe calls `/stripe/webhook` and the payment is recorded on the job.
 
-1. Create a Stripe account and stay in **test mode** to try it.
-2. **Developers → API keys:** copy the secret key into Render as `STRIPE_SECRET_KEY`. (A restricted key with write access
-   to Customers and Invoices also works.)
-3. **Developers → Webhooks → Add endpoint:** URL `https://<your site>/stripe/webhook`, events `invoice.paid`,
-   `invoice.voided` and `invoice.marked_uncollectible`. Copy its signing secret into Render as `STRIPE_WEBHOOK_SECRET`.
-4. In the app, **Account → Company profile** shows your company ID; put it in Render as `STRIPE_ORG_ID`.
-5. In Stripe, set your logo and colors under **Settings → Branding**; they appear on Stripe's invoice emails and pay page.
+One-time setup by whoever runs the app (the "platform"), in the platform's own Stripe account:
 
-Test mode moves no real money and Stripe doesn't email clients, but the invoice's **View** link opens the pay page,
-where Stripe's test card `4242 4242 4242 4242` pays it. To go live, swap in the live-mode key and a live-mode webhook secret.
+1. Turn on **Connect** (Stripe dashboard → Connect → Get started) and complete the platform profile. Stay in **test mode** to try it.
+2. **Developers → API keys:** copy the secret key into Render as `STRIPE_SECRET_KEY`.
+3. **Developers → Webhooks → Add endpoint:** URL `https://<your site>/stripe/webhook`, choose **Events on Connected accounts**,
+   and select `invoice.paid`, `invoice.voided`, `invoice.marked_uncollectible` and `account.updated`.
+   Copy its signing secret into Render as `STRIPE_WEBHOOK_SECRET`.
+4. Optional: `APP_URL` (for example `https://vista-artisans.onrender.com`) if Stripe's return links should use a different address.
+
+Each company sets its logo and colors for invoice emails in its own Stripe dashboard (**Settings → Branding**).
+Test mode moves no real money and Stripe doesn't email clients, but an invoice's **View** link opens the pay page,
+where the test card `4242 4242 4242 4242` pays it. To go live, use live-mode keys and a live-mode webhook.
+Security: the link between a company and its Stripe account is written only by the server, and webhook events are
+accepted only with a valid signature and only for jobs of the company that owns the sending Stripe account.
 
 ## Tests
 
@@ -132,5 +137,5 @@ deleting estimates and clients (and refusing for converted ones), moving an esti
 - **Joining:** each company has an 8-character join code (shown as XXXX-XXXX on the Team page, admins only). Joining
   with it makes you a worker. An admin can make a new code, which stops the old one working. Ten wrong codes in an hour
   locks that person out of joining for the hour.
-- **Invoices:** see *Online invoicing with Stripe* above. Payments received outside the app are still entered by hand.
+- **Invoices:** see *Online invoicing with Stripe Connect* above. Payments received outside the app are still entered by hand.
 - **Organizations:** a person can belong to several companies and switch between them on the **Account** page.

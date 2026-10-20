@@ -463,26 +463,55 @@ test('full workflow', async () => {
   assert.equal((await getPage('/')).location, '/login');
 });
 
-test('invoices through Stripe: send, pay by webhook, void', async () => {
+test('invoices through Stripe Connect: connect, send, pay by webhook, void', async () => {
   const fakeStripe = await startFakeStripe('sk_test_fake');
   const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
   const kitchen = Number((await dbClient.query("SELECT id FROM jobs WHERE project_name = 'Kitchen remodel'")).rows[0].id);
   const deck = Number((await dbClient.query("SELECT id FROM jobs WHERE project_name = 'Deck'")).rows[0].id);
   as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
 
-  // Not set up: the job explains it, and sending is refused
+  // Stripe not switched on for the app: the job and the profile page say so, and sending is refused
   let page = (await getPage(`/jobs/${kitchen}`)).body;
   assert.match(page, /Online invoicing isn(&#39;|')t set up yet/);
+  assert.match((await getPage('/settings')).body, /Not available yet/);
   assert.equal((await post(`/jobs/${kitchen}/invoices`, { invoice_amount: '10', invoice_email: 'jane@example.com', days: '14' })).status, 409);
 
   const WHSEC = 'whsec_test_secret';
   await stop();
-  await start({ STRIPE_SECRET_KEY: 'sk_test_fake', STRIPE_WEBHOOK_SECRET: WHSEC, STRIPE_ORG_ID: vista, STRIPE_API_BASE: fakeStripe.url });
+  await start({ STRIPE_SECRET_KEY: 'sk_test_fake', STRIPE_WEBHOOK_SECRET: WHSEC, STRIPE_API_BASE: fakeStripe.url });
+  const event = (type, obj, account) => JSON.stringify({ id: `evt_${crypto.randomUUID()}`, type, account, created: Math.floor(Date.now() / 1000), data: { object: obj } });
+  const sign = (body, secret = WHSEC) => { const t = Math.floor(Date.now() / 1000); return `t=${t},v1=${crypto.createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`; };
+  const hook = (body, sig) => fetch(`${BASE}/stripe/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': sig }, body });
   try {
+    // Each company connects its own Stripe account
+    page = (await getPage('/settings')).body;
+    assert.match(page, /Connect Stripe/); assert.match(page, /test mode/);
+    assert.equal((await post(`/jobs/${kitchen}/invoices`, { invoice_amount: '10', invoice_email: 'jane@example.com', days: '14' })).status, 409);
+    let r = await post('/settings/stripe/connect', {});
+    assert.equal(r.status, 303); assert.match(r.location, /^https:\/\/connect\.stripe\.test\/setup\/acct_/);
+    assert.match(decodeURIComponent(r.location), /\/settings\/stripe\/return$/);
+    const vistaAcct = (await dbClient.query('SELECT account_id FROM stripe_accounts WHERE org_id = $1', [vista])).rows[0].account_id;
+    const a = fakeStripe.state.accounts.get(vistaAcct);
+    assert.equal(a.controller_dashboard, 'full'); assert.equal(a.fee_payer, 'account', 'the company owns its account and pays Stripe fees');
+    // Clicking again reuses the same account
+    r = await post('/settings/stripe/connect', {}); assert.match(r.location, new RegExp(vistaAcct));
+    assert.equal(fakeStripe.state.accounts.size, 1);
+    // Back from Stripe before onboarding is finished: still not ready
+    r = await getPage('/settings/stripe/return'); assert.match(r.location, /more\+information/);
+    assert.match((await getPage('/settings')).body, /Continue Stripe setup/);
+    // Stripe says the account can take payments (via the account.updated webhook)
+    a.charges_enabled = true; a.details_submitted = true;
+    const upd = event('account.updated', a, vistaAcct);
+    assert.equal((await hook(upd, sign(upd))).status, 200);
+    assert.match((await getPage('/settings')).body, /Stripe connected/);
+    // Admins can't point their company at another Stripe account directly
+    await assert.rejects(dbClient.query(`SET ROLE authenticated; SELECT set_config('request.jwt.claim.sub', (SELECT id::text FROM auth.users WHERE email = 'alice@vista.test'), false);
+      UPDATE stripe_accounts SET account_id = 'acct_evil'`).finally(() => dbClient.query('RESET ROLE')));
+
     page = (await getPage(`/jobs/${kitchen}`)).body;
     assert.match(page, /Send an invoice/); assert.match(page, /value="2000.00"/); assert.match(page, /Test mode/);
     // Validation keeps input; can't bill more than is owed
-    let r = await post(`/jobs/${kitchen}/invoices`, { invoice_amount: '2500', invoice_email: 'jane@example.com', days: '14', key: crypto.randomUUID() });
+    r = await post(`/jobs/${kitchen}/invoices`, { invoice_amount: '2500', invoice_email: 'jane@example.com', days: '14', key: crypto.randomUUID() });
     assert.equal(r.status, 422); assert.match(r.body, /more than the outstanding balance/);
     r = await post(`/jobs/${kitchen}/invoices`, { invoice_amount: '100', invoice_email: 'nope', days: '14', key: crypto.randomUUID() });
     assert.equal(r.status, 422); assert.match(r.body, /Enter the email address/); assert.match(r.body, /value="100"/);
@@ -491,26 +520,25 @@ test('invoices through Stripe: send, pay by webhook, void', async () => {
     assert.equal(r.status, 502); assert.match(r.body, /Stripe didn(&#39;|')t accept the invoice/);
     assert.equal((await dbClient.query('SELECT count(*)::int AS n FROM invoices')).rows[0].n, 0);
 
-    // Send a $1,500 deposit invoice; a double-submit (same form key) makes only one
+    // Send a $1,500 deposit invoice on Vista's own account; a double-submit (same form key) makes only one
     const key = crypto.randomUUID();
     const form = { invoice_amount: '1500', invoice_email: 'jane@example.com', days: '7', invoice_desc: 'Kitchen deposit', key };
-    const [a, b] = await Promise.all([post(`/jobs/${kitchen}/invoices`, form), post(`/jobs/${kitchen}/invoices`, form)]);
-    assert.equal(a.status, 303); assert.equal(b.status, 303);
-    assert.equal(fakeStripe.state.sent.length >= 1, true);
+    const [x, y] = await Promise.all([post(`/jobs/${kitchen}/invoices`, form), post(`/jobs/${kitchen}/invoices`, form)]);
+    assert.equal(x.status, 303); assert.equal(y.status, 303);
     const invs = (await dbClient.query('SELECT * FROM invoices')).rows;
     assert.equal(invs.length, 1, 'one invoice despite two clicks');
     const inv = invs[0];
+    assert.equal(fakeStripe.state.invoices.get(inv.stripe_invoice_id).account, vistaAcct, 'invoice lives on the company account');
     assert.equal(Number(inv.amount_cents), 150000); assert.equal(inv.status, 'open'); assert.equal(inv.sent_to, 'jane@example.com');
     page = (await getPage(`/jobs/${kitchen}`)).body;
     assert.match(page, /Kitchen deposit/); assert.match(page, /\$1,500\.00/); assert.match(page, />Sent</);
+    assert.match(page, /value="500.00"/, 'next invoice defaults to the unbilled remainder');
     assert.equal(stat(page, 'balance'), '$2,000.00', 'sending an invoice does not change the balance');
 
     // Stripe reports it paid: payment recorded once, even if the event repeats
-    const event = (type, obj) => JSON.stringify({ id: `evt_${crypto.randomUUID()}`, type, created: Math.floor(Date.now() / 1000), data: { object: obj } });
-    const sign = (body, secret = WHSEC) => { const t = Math.floor(Date.now() / 1000); return `t=${t},v1=${crypto.createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`; };
-    const hook = (body, sig) => fetch(`${BASE}/stripe/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': sig }, body });
-    const paid = event('invoice.paid', { id: inv.stripe_invoice_id, object: 'invoice', amount_paid: 150000, number: inv.number,
-      status_transitions: { paid_at: Math.floor(Date.now() / 1000) }, metadata: { job_id: String(kitchen), org_id: vista } });
+    const paidObj = { id: inv.stripe_invoice_id, object: 'invoice', amount_paid: 150000, number: inv.number,
+      status_transitions: { paid_at: Math.floor(Date.now() / 1000) }, metadata: { job_id: String(kitchen), org_id: vista } };
+    const paid = event('invoice.paid', paidObj, vistaAcct);
     assert.equal((await hook(paid, sign(paid, 'whsec_wrong'))).status, 400, 'bad signature rejected');
     assert.equal((await hook(paid, 'garbage')).status, 400);
     assert.equal((await hook(paid, sign(paid))).status, 200);
@@ -518,12 +546,22 @@ test('invoices through Stripe: send, pay by webhook, void', async () => {
     page = (await getPage(`/jobs/${kitchen}`)).body;
     assert.equal(stat(page, 'balance'), '$500.00'); assert.match(page, /Paid online/); assert.match(page, />Paid</);
     assert.equal((await dbClient.query('SELECT count(*)::int AS n FROM payments WHERE job_id = $1 AND amount_cents = 150000', [kitchen])).rows[0].n, 1);
-    // Events for another company's job are ignored
-    const foreign = event('invoice.paid', { id: 'in_other', amount_paid: 999, metadata: { job_id: String(kitchen), org_id: crypto.randomUUID() } });
-    assert.equal((await hook(foreign, sign(foreign))).status, 200);
-    assert.equal((await dbClient.query("SELECT count(*)::int AS n FROM invoices WHERE stripe_invoice_id = 'in_other'")).rows[0].n, 0);
+
+    // Bob's company connects its own account; an event from Bob's account can't touch Vista's jobs
+    as('bob');
+    await post('/settings/stripe/connect', {});
+    const bobOrg = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Other Co'")).rows[0].id;
+    const bobAcct = (await dbClient.query('SELECT account_id FROM stripe_accounts WHERE org_id = $1', [bobOrg])).rows[0].account_id;
+    assert.notEqual(bobAcct, vistaAcct);
+    const spoof = event('invoice.paid', { ...paidObj, id: 'in_spoof', amount_paid: 999 }, bobAcct);
+    assert.equal((await hook(spoof, sign(spoof))).status, 200);
+    const unknown = event('invoice.paid', { ...paidObj, id: 'in_unknown', amount_paid: 999 }, 'acct_nobody');
+    assert.equal((await hook(unknown, sign(unknown))).status, 200);
+    assert.equal((await dbClient.query("SELECT count(*)::int AS n FROM payments WHERE amount_cents = 999")).rows[0].n, 0);
+    assert.equal((await post(`/invoices/${inv.id}/resend`, {})).status, 404);
 
     // Void an open invoice on the deck job
+    as('alice');
     r = await post(`/jobs/${deck}/invoices`, { invoice_amount: '300', invoice_email: 'sam@example.com', days: '0', key: crypto.randomUUID() });
     assert.equal(r.status, 303);
     const deckInv = (await dbClient.query('SELECT id FROM invoices WHERE job_id = $1', [deck])).rows[0].id;
@@ -532,13 +570,11 @@ test('invoices through Stripe: send, pay by webhook, void', async () => {
     assert.equal((await dbClient.query('SELECT status FROM invoices WHERE id = $1', [deckInv])).rows[0].status, 'void');
     assert.match((await getPage(`/jobs/${deck}`)).body, />Voided</);
 
-    // Workers and other companies can't touch invoices
+    // Workers can't touch invoices or Stripe settings
     as('dave');
     assert.equal((await post(`/jobs/${deck}/invoices`, { invoice_amount: '1', invoice_email: 'x@y.z', days: '0' })).status, 404);
     assert.equal((await post(`/invoices/${deckInv}/void`, {})).status, 404);
-    as('bob');
-    assert.equal((await post(`/invoices/${deckInv}/resend`, {})).status, 404);
-    assert.equal((await post(`/jobs/${kitchen}/invoices`, { invoice_amount: '1', invoice_email: 'x@y.z', days: '0' })).status, 404);
+    assert.equal((await post('/settings/stripe/connect', {})).status, 404);
   } finally {
     await fakeStripe.close();
   }

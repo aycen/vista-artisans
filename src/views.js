@@ -467,15 +467,24 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
     </div>
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
   </form>
-  ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">
-    ${payments.enabled ? html`<strong>Stripe is connected${payments.testMode ? ' (test mode)' : ''}.</strong>
-      <div class="hint">Send invoices from any job with money owed. Paid invoices are recorded on the job automatically.</div>`
-    : html`<strong>Not set up yet.</strong>
-      <div class="hint">To email invoices with a pay link, add your Stripe keys in Render along with this company ID:</div>
-      <div class="code" style="font-size:15px;letter-spacing:0;overflow-wrap:anywhere">${org.org_id}</div>
-      ${payments.configured ? html`<div class="hint">Stripe is set up for a different company.</div>` : ''}`}
-  </div>` : ''}
+  ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
+}
+
+function paymentsCard({ configured, testMode, account }) {
+  if (!configured) {
+    return html`<strong>Not available yet.</strong><div class="hint">Online invoicing hasn't been switched on for this app. See "Online invoicing with Stripe" in the README.</div>`;
+  }
+  const test = testMode ? ' (test mode)' : '';
+  if (account && account.charges_enabled) {
+    return html`<div class="row" style="justify-content:space-between"><strong>Stripe connected${test}</strong><span class="pill completed">Ready</span></div>
+      <div class="hint">Send invoices from any job with money owed. Clients pay your Stripe account directly, and paid invoices are recorded on the job automatically.</div>
+      <div class="actions" style="margin:12px 0 0"><a class="btn secondary" href="https://dashboard.stripe.com" target="_blank" rel="noopener">Open Stripe dashboard</a></div>`;
+  }
+  return html`<strong>${account ? `Finish setting up Stripe${test}` : `Get paid online${test}`}</strong>
+    <div class="hint">${account ? 'Stripe still needs some details before you can send invoices.'
+      : 'Connect a Stripe account to email clients invoices they can pay by card or bank transfer. Money goes straight to your account; Stripe charges its standard fees per payment.'}</div>
+    <form method="post" action="/settings/stripe/connect" style="margin-top:12px"><button type="submit" class="block" id="connect-stripe">${account ? 'Continue Stripe setup' : 'Connect Stripe'}</button></form>`;
 }
 
 // Shrinks the chosen image in the browser (max 800px wide) and sends it as a data URL.
@@ -986,7 +995,7 @@ function invoiceSection(job, client, invoices, invoicing, vf) {
   </div>`;
   })}</div>` : '';
   if (!invoicing.enabled) {
-    return html`${list}<div class="empty" style="text-align:left">Online invoicing isn't set up yet. Once it is, you can email the client an invoice with a pay link and the payment is recorded here automatically. See <a href="/settings">Company profile</a>.</div>`;
+    return html`${list}<div class="empty" style="text-align:left">Online invoicing isn't set up yet. <a href="/settings#online-payments">Connect Stripe</a> in Company profile to email clients an invoice they can pay online; payments are then recorded here automatically.</div>`;
   }
   if (job.balance_cents <= 0) return html`${list}${invoices.length ? '' : html`<div class="empty">Nothing is owed on this job.</div>`}`;
   const unbilled = Math.max(0, job.balance_cents - invoices.filter((i) => i.status === 'open').reduce((t, i) => t + i.amount_cents, 0));
