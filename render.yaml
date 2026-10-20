@@ -1,0 +1,22 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Oregon matches the Supabase project's region (us-west-2), keeping database calls fast.
+services:
+  - type: web
+    name: vista-artisans
+    runtime: node
+    region: oregon
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: SUPABASE_URL
+        value: https://mkzdkkggzyipimhwiqqz.supabase.co
+      - key: SUPABASE_ANON_KEY
+        value: sb_publishable_bJ9C17wbphjYHaa0a8lN1A_7eOOX9H4
+      - key: DATABASE_URL
+        sync: false # Render asks for it when you create the service; it contains the database password

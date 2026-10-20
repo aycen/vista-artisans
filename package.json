@@ -1,0 +1,16 @@
+{
+  "name": "vista-artisans",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Clients, estimates, jobs, costs and payments for Vista Artisans",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --no-warnings src/server.js",
+    "test": "node --no-warnings --test test/*.test.js"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  }
+}
