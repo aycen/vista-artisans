@@ -203,6 +203,19 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .bar-area{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
 .bar-col.on .bar,.bar-col:hover .bar{opacity:1}.bar-col.on .bar-l{color:var(--text);font-weight:700}
 .bar-l{font-size:11px;height:14px;line-height:14px;white-space:nowrap;border-top:1px solid var(--line);width:100%;text-align:center;padding-top:6px;box-sizing:content-box}
+.photos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.photo{position:relative;aspect-ratio:1;border-radius:12px;overflow:hidden;background:var(--surface-2)}
+.photo img{width:100%;height:100%;object-fit:cover;display:block}
+.photo form{position:absolute;top:4px;right:4px;margin:0}
+.photo-del{width:28px;height:28px;min-height:0;padding:0;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:18px;line-height:1;box-shadow:none}
+.photo-add{cursor:pointer}
+.billed{margin:6px 0 14px}.billed-bar{display:flex;height:10px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
+.billed-bar .paid,.billed-k i.paid{background:var(--green)}.billed-bar .sent,.billed-k i.sent{background:var(--accent);opacity:.55}
+.billed-k{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--text-2);margin-top:6px}
+.billed-k i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.progress-presets{margin:4px 0 10px;padding:0;flex-wrap:wrap}.progress-presets .chip{min-height:36px;padding:6px 14px;box-shadow:none;background:var(--surface-2);color:var(--text);border:1px solid var(--line)}.progress-presets .chip.on{background:var(--accent);color:var(--on-accent)}
+.clock{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.clock .t{font-weight:700}.clock .s{font-size:13px;color:var(--text-2)}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .delta{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:13px;font-weight:700;background:rgba(255,255,255,.2);color:#fff;margin-top:8px}
 .stat .delta{background:var(--gray-soft);color:var(--text-2);margin-top:6px;font-size:12px}
@@ -292,6 +305,8 @@ details.decline{margin:16px 2px}details.decline summary{color:var(--text-2);curs
 .seg{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;margin:6px 0 14px}
 .seg a{flex:1;text-align:center;padding:9px 10px;border-radius:9px;color:var(--text-2);font-weight:600;text-decoration:none;font-size:15px}
 .seg a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.pay-type label{flex:1;text-align:center;padding:9px 6px;border-radius:9px;color:var(--text-2);font-weight:600;font-size:15px;margin:0;cursor:pointer}
+.pay-type label.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}.pay-type input{position:absolute;opacity:0;pointer-events:none}
 .seg .save{color:var(--green);font-size:12px;margin-left:4px}
 .plans{display:grid;gap:14px;grid-template-columns:1fr;margin-bottom:14px}
 @media(min-width:900px){.plans{grid-template-columns:repeat(3,1fr)}}
@@ -373,6 +388,10 @@ function dateRange(start, end) {
   return fmtDate(start || end);
 }
 // '14:30:00' -> '2:30 PM'
+// Minutes as "3h 25m".
+const fmtHours = (min) => { const m = Math.max(0, Math.round(Number(min) || 0)); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
+const PAY_TYPES = { sub: 'Subcontractor', w2: 'W-2 employee' };
+const payLabel = (m) => (m.pay_type === 'w2' ? `W-2${m.hourly_rate_cents != null ? ` · ${fmt(m.hourly_rate_cents)}/hr` : ''}` : 'Subcontractor');
 const fmtTime = (t) => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
 const pill = (status, labels) => html`<span class="pill ${status}">${labels[status] || status}</span>`;
 
@@ -384,11 +403,12 @@ function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle, d
   return html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f3f4f8" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0d14" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Keystone">
-<link rel="manifest" href="/static/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/static/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <title>${docTitle || `${title} · Keystone`}</title><style>${raw(CSS)}</style></head>
 <body>
@@ -735,7 +755,7 @@ function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, 
   <div class="list">${members.map((m) => (admin ? html`<a class="li" href="/team/${m.user_id}">
     <span class="avatar">${initialOf(m)}</span>
     <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
-      <div class="s">${ROLES[m.role]} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}${m.full_name ? ` · ${m.email}` : ''}</div></div>
+      <div class="s">${ROLES[m.role]} · ${payLabel(m)} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}</div></div>
     <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
   </a>` : html`<a class="li" href="mailto:${m.email}">
     <span class="avatar">${initialOf(m)}</span>
@@ -754,7 +774,7 @@ function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, 
   </form>` : ''}`, { flash });
 }
 
-function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
+function memberPage({ org, member, me, jobs, totals, pay = { pay_type: 'sub' }, errors = {}, flash }) {
   const open = jobs.filter((j) => j.status !== 'completed');
   const done = jobs.filter((j) => j.status === 'completed');
   const rows = (list, empty) => (list.length ? html`<div class="list">${list.map((j) => html`<a class="li" href="/jobs/${j.id}">
@@ -779,6 +799,19 @@ function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
   </div>
   <h2>Open jobs</h2>${rows(open, 'No open jobs assigned.')}
   <h2>Completed jobs</h2>${rows(done, 'No completed jobs yet.')}
+  <h2 id="pay">Pay</h2>
+  <form method="post" action="/team/${member.user_id}/pay" class="form-card" novalidate>
+    <div class="seg pay-type" role="radiogroup" aria-label="How they're paid">
+      ${Object.entries(PAY_TYPES).map(([k, l]) => html`<label class="${pay.pay_type === k ? 'on' : ''}"><input type="radio" name="pay_type" value="${k}" ${pay.pay_type === k ? raw('checked') : ''}>${l}</label>`)}
+    </div>
+    <div class="hint" data-for="sub">Paid a fixed amount per job, set on each job.</div>
+    <div class="hint" data-for="w2">Clocks in and out on their jobs from their phone. Hours × hourly rate count as labor on the job automatically.</div>
+    <div data-for="w2">${input('hourly_rate', 'Hourly rate ($)', { hourly_rate: pay.hourly_rate_cents != null ? plainCents(pay.hourly_rate_cents) : '' }, {}, { inputmode: 'decimal' })}</div>
+    <div class="form-actions"><button type="submit" class="secondary">Save pay</button></div>
+  </form>
+  <script>${raw(`(function(){var f=document.querySelector('.pay-type').closest('form');function sync(){var v=f.pay_type.value;f.querySelectorAll('[data-for]').forEach(function(e){e.style.display=e.dataset.for===v?'':'none'});
+    f.querySelectorAll('.pay-type label').forEach(function(l){l.classList.toggle('on',l.querySelector('input').checked)});}
+    f.querySelectorAll('input[name=pay_type]').forEach(function(r){r.addEventListener('change',sync)});sync();})();`)}</script>
   <h2>Role</h2>
   <form method="post" action="/team/role" class="form-card" novalidate>
     <input type="hidden" name="user_id" value="${member.user_id}">
@@ -809,7 +842,10 @@ function crewHomePage({ jobs, today, year, flash }) {
   const next = todays[0] || open.find((j) => j.start_date && j.start_date > today) || open[0];
   const later = open.filter((j) => !todays.includes(j));
   const sum = (list) => list.reduce((t, j) => t + Number(j.my_payout_cents || 0), 0);
+  const clocked = jobs.find((j) => j.clocked_in_at);
   return layout('Overview', html`
+  ${clocked ? html`<a class="card clock" id="clocked-in" href="/schedule/${clocked.job_id}" style="color:inherit">
+    <div><div class="t">You're clocked in</div><div class="s">${clocked.project_name}</div></div><span class="btn danger sm">Clock out</span></a>` : ''}
   <div class="hero" id="next-job">
     <div class="k">${next && onDay(next, today) ? 'Today' : 'Next job'}</div>
     ${next ? html`<a href="/schedule/${next.job_id}" style="color:inherit;display:block">
@@ -851,19 +887,29 @@ function schedulePage({ jobs, flash }) {
   return layout('Schedule', crewList(jobs, 'No open jobs.'), { flash, sub: 'Open jobs' });
 }
 
-function scheduleJobPage({ job }) {
+function scheduleJobPage({ job, me, photos = [], flash }) {
+  const hourly = job.my_pay_type === 'w2';
   return layout(job.project_name, html`
   <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)}</p>
   ${job.my_payout_cents == null ? '' : html`<div class="hero"><div class="k">Your pay for this job</div>
-    <div class="v" data-k="my-pay">${fmt(job.my_payout_cents)}</div></div>`}
+    <div class="v" data-k="my-pay">${fmt(job.my_payout_cents)}</div>
+    ${hourly ? html`<div class="s" data-k="my-hours">${fmtHours(job.my_minutes)} worked</div>` : ''}</div>`}
+  ${hourly && job.my_payout_cents != null && (job.status !== 'completed' || job.clocked_in_at) ? html`<div class="card clock" id="clock">
+    <div><div class="t">${job.clocked_in_at ? 'You\'re clocked in' : 'Time clock'}</div>
+      <div class="s">${job.clocked_in_at ? html`Since <span data-local-time="${job.clocked_in_at}">${job.clocked_in_at.slice(11, 16)}</span>` : 'Clock in when you start work here.'}</div></div>
+    <form method="post" action="/schedule/${job.job_id}/${job.clocked_in_at ? 'clock-out' : 'clock-in'}">
+      <button type="submit" class="${job.clocked_in_at ? 'danger' : ''}" id="clock-btn">${job.clocked_in_at ? 'Clock out' : 'Clock in'}</button></form>
+  </div>
+  <script>${raw(`document.querySelectorAll('[data-local-time]').forEach(function(e){e.textContent=new Date(e.dataset.localTime).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})});`)}</script>` : ''}
   <div class="list">
     <div class="kv"><span class="k">Dates</span><span class="v">${dateRange(job.start_date, job.end_date) || 'Not scheduled yet'}</span></div>
     <div class="kv"><span class="k">Client</span><span class="v">${job.client_name}</span></div>
     <div class="kv"><span class="k">Address</span><span class="v">${job.address ? html`<a href="https://maps.google.com/?q=${encodeURIComponent(job.address)}">${job.address}</a>` : '—'}</span></div>
   </div>
   <h2>Scope of work</h2><div class="card pre">${job.scope || '—'}</div>
-  ${job.notes ? html`<h2>Notes</h2><div class="card pre">${job.notes}</div>` : ''}`,
-  { back: { href: '/schedule', label: 'Jobs' } });
+  ${job.notes ? html`<h2>Notes</h2><div class="card pre">${job.notes}</div>` : ''}
+  ${job.my_payout_cents == null ? '' : html`<h2 id="photos">Photos</h2>${photoSection(job.job_id, photos, (p) => p.uploaded_by === me)}`}`,
+  { flash, back: { href: '/schedule', label: 'Jobs' } });
 }
 
 // ---------- Home ----------
@@ -1471,16 +1517,18 @@ function jobsPage({ jobs, status, cal }) {
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
 
-function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, forms = {}, emails = [], flash }) {
+function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes, address: job.address }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
   const af = forms.assign || { values: {}, errors: {} };
   const vf = forms.invoice || { values: {}, errors: {} };
+  const tf = forms.time || { values: { work_date: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
+  const w2 = members.filter((m) => m.pay_type === 'w2');
   const final = job.status === 'completed';
   return layout(job.project_name, html`
   <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)} ${dateRange(job.start_date, job.end_date) ? html`<span class="muted" style="margin-left:6px">${dateRange(job.start_date, job.end_date)}</span>` : ''}</p>
-  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors })}
+  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors, ...tf.errors })}
   <div class="stats" id="job-summary">
     <div class="stat"><div class="k">Contract total</div><div class="v" data-k="contract">${fmt(job.contract_cents)}</div></div>
     <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
@@ -1515,18 +1563,43 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
   <h2>Crew & payouts</h2>
   ${crew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
     <span class="avatar">${initialOf(c)}</span>
-    <div class="main-t"><div class="t">${who(c)}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : ROLES[c.role]}</div></div>
-    <div class="r"><span class="amt">${fmt(c.payout_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?user_id=${c.user_id}">Work order</a> · <a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></span></div>
+    <div class="main-t"><div class="t">${who(c)}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : `${ROLES[c.role]} · ${payLabel(c)}`}${c.pay_type === 'w2' || c.minutes ? ` · ${fmtHours(c.minutes)} worked` : ''}</div></div>
+    <div class="r"><span class="amt">${fmt(c.payout_cents + c.labor_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?user_id=${c.user_id}">Work order</a> · <a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></span></div>
   </div>`)}</div>` : html`<div class="empty">Nobody assigned yet.</div>`}
   ${members.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="form-card" novalidate>
     <div class="two stack"><div><label for="assign_user">Person</label>
       <select id="assign_user" name="user_id" class="${inv(af.errors, 'user_id')}">
-        <option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}" ${af.values.user_id === m.user_id ? raw('selected') : ''}>${who(m)} (${ROLES[m.role]})</option>`)}
+        <option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}" ${af.values.user_id === m.user_id ? raw('selected') : ''}>${who(m)} (${m.pay_type === 'w2' ? 'W-2' : 'Sub'})</option>`)}
       </select>${fieldErr(af.errors, 'user_id')}</div>
-    <div>${input('payout', 'Payout ($)', af.values, af.errors, { required: true, inputmode: 'decimal' })}</div></div>
-    <div class="hint">What they'll be paid for this job. They see only their own amount. Records only; nothing is paid through the app.</div>
+    <div>${input('payout', 'Fixed payout ($)', af.values, af.errors, { inputmode: 'decimal' })}</div></div>
+    <div class="hint">Subcontractors: the fixed amount for this job. W-2 employees: leave blank; they clock in and their hours × hourly rate count automatically. Each person sees only their own pay. Records only; nothing is paid through the app.</div>
     <div class="form-actions"><button type="submit" class="secondary">Assign / update payout</button></div>
   </form>` : ''}
+
+  ${time.length || w2.length ? html`<h2 id="time">Time clock</h2>
+  ${time.length ? html`<div class="list" id="time-entries">${time.map((t) => {
+    const c = crew.find((x) => x.user_id === t.user_id) || members.find((x) => x.user_id === t.user_id) || {};
+    return html`<div class="li">
+    <div class="main-t"><div class="t">${who(c) || 'Former teammate'}</div>
+      <div class="s">${fmtDate(t.day)} · ${fmtTime(t.start_t)} – ${t.open ? html`<strong style="color:var(--green)">clocked in now</strong>` : fmtTime(t.end_t)} · ${fmtHours(t.minutes)} at ${fmt(t.rate_cents)}/hr</div>
+      <div class="row" style="gap:12px;margin-top:6px;font-size:14px">
+        ${t.open ? html`<form method="post" action="/time/${t.id}/end"><button type="submit" class="link" style="font-size:14px">Clock out now</button></form>` : ''}
+        <form method="post" action="/time/${t.id}/delete" data-confirm="Delete this time entry?"><button type="submit" class="link" style="font-size:14px;color:var(--red)">Delete</button></form></div></div>
+    <div class="r"><span class="amt">${t.open ? '—' : fmt(t.cost_cents)}</span></div></div>`;
+  })}</div>` : html`<div class="empty">No time recorded yet. W-2 crew assigned to this job clock in from their phone.</div>`}
+  ${w2.length ? html`<form method="post" action="/jobs/${job.id}/time" class="form-card" novalidate>
+    <h3>Add time by hand</h3>
+    <div class="hint">For a missed clock-in. Uses the person's current hourly rate.</div>
+    <label for="time_user">Person</label>
+    <select id="time_user" name="user_id" class="${inv(tf.errors, 'time_user')}"><option value="">Choose…</option>
+      ${w2.map((m) => html`<option value="${m.user_id}" ${tf.values.user_id === m.user_id ? raw('selected') : ''}>${who(m)}${m.hourly_rate_cents != null ? ` (${fmt(m.hourly_rate_cents)}/hr)` : ''}</option>`)}</select>${fieldErr(tf.errors, 'time_user')}
+    ${input('work_date', 'Date', tf.values, tf.errors, { type: 'date' })}
+    <div class="two"><div>${input('start_time', 'Start', tf.values, tf.errors, { type: 'time' })}</div><div>${input('end_time', 'End', tf.values, tf.errors, { type: 'time' })}</div></div>
+    <div class="form-actions"><button type="submit" class="secondary">Add time</button></div>
+  </form>` : ''}` : ''}
+
+  <h2 id="photos">Photos</h2>
+  ${photoSection(job.id, photos, () => true)}
 
   <h2>Expenses</h2>
   ${entryList(expenses, 'expenses', (e) => e.description, 'No expenses recorded.')}
@@ -1551,6 +1624,52 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
   </form>
   ${emailHistory(emails)}`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
+
+// Job photos: a grid of thumbnails (tap to open full size) plus an "Add photos" button.
+function photoSection(jobId, photos, canDelete) {
+  return html`${photos.length ? html`<div class="photos" id="photo-grid">${photos.map((p) => html`<div class="photo">
+    <a href="/photos/${p.id}" target="_blank" rel="noopener"><img src="/photos/${p.id}" alt="Job photo from ${fmtDate(p.created_at.slice(0, 10))}" loading="lazy"></a>
+    ${canDelete(p) ? html`<form method="post" action="/photos/${p.id}/delete" data-confirm="Delete this photo?"><button type="submit" class="photo-del" aria-label="Delete photo">×</button></form>` : ''}
+  </div>`)}</div>` : html`<div class="empty">No photos yet.</div>`}
+  <label class="btn secondary block photo-add" style="margin-top:10px">${icon('camera')}<span>Add photos</span>
+    <input type="file" accept="image/*" multiple hidden data-photo-upload="/jobs/${jobId}/photos"></label>
+  <script>${raw(PHOTO_JS)}</script>`;
+}
+// Shrinks each chosen photo to JPEG (1600px on the long side) and uploads them one by one, then reloads.
+const PHOTO_JS = `
+(function () {
+  document.querySelectorAll('[data-photo-upload]').forEach(function (inp) {
+    if (inp.dataset.ready) return; inp.dataset.ready = '1';
+    var label = inp.closest('label').querySelector('span');
+    function shrink(f) {
+      return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.onload = function () {
+          var scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+          var c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+          var ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+          URL.revokeObjectURL(img.src); resolve(c.toDataURL('image/jpeg', 0.82));
+        };
+        img.onerror = function () { reject(new Error('read')); };
+        img.src = URL.createObjectURL(f);
+      });
+    }
+    inp.addEventListener('change', async function () {
+      var files = Array.prototype.slice.call(inp.files); if (!files.length) return;
+      var failed = 0;
+      for (var i = 0; i < files.length; i++) {
+        label.textContent = 'Uploading ' + (i + 1) + ' of ' + files.length + '…';
+        try {
+          var data = await shrink(files[i]);
+          var r = await fetch(inp.dataset.photoUpload, { method: 'POST', body: new URLSearchParams({ photo_data: data }) });
+          if (!r.ok) failed++;
+        } catch (e) { failed++; }
+      }
+      if (failed) alert(failed + ' photo' + (failed > 1 ? 's' : '') + " couldn't be added. Use JPG or PNG photos.");
+      location.hash = 'photos'; location.reload();
+    });
+  });
+})();`;
 
 const INVOICE_STATUS = { open: 'Sent', paid: 'Paid', void: 'Voided', uncollectible: 'Uncollectible' };
 const INVOICE_PILL = { open: 'sent', paid: 'completed', void: 'declined', uncollectible: 'declined' };
@@ -1582,12 +1701,30 @@ function invoiceSection(job, client, invoices, invoicing, vf) {
     <h3>Send an invoice</h3>
     <div class="hint">Stripe emails the client a secure link to pay by card or bank transfer. When they pay, it's recorded under Payments received.${invoicing.testMode ? ' Test mode: no real money moves and Stripe does not email clients.' : ''}</div>
     <input type="hidden" name="key" value="${values.key}">
+    ${progressBar(job, invoices)}
+    <label>Progress invoice</label>
+    <div class="chips progress-presets" id="progress-presets">${[10, 25, 33, 50].map((pct) => {
+      const cents = Math.min(job.balance_cents, Math.round(job.contract_cents * pct / 100));
+      return html`<button type="button" class="chip" data-amount="${plainCents(cents)}" data-desc="${job.project_name}: progress payment (${pct}% of ${fmt(job.contract_cents)})">${pct}%</button>`;
+    })}<button type="button" class="chip" data-amount="${plainCents(job.balance_cents)}" data-desc="${job.project_name}: final payment">Remaining</button></div>
     <div class="two stack"><div>${input('invoice_amount', 'Amount ($)', values, vf.errors, { required: true, inputmode: 'decimal', hint: `Outstanding: ${fmt(job.balance_cents)}` })}</div>
     <div><label for="days">Payment due</label><select id="days" name="days">${options({ 0: 'On receipt', 7: 'In 7 days', 14: 'In 14 days', 30: 'In 30 days' }, String(values.days))}</select></div></div>
     ${input('invoice_email', 'Send to', values, vf.errors, { type: 'email', required: true, inputmode: 'email' })}
     ${input('invoice_desc', 'Description on the invoice', values, vf.errors)}
     <div class="form-actions"><button type="submit">Send invoice</button></div>
-  </form>`;
+  </form>
+  <script>${raw(`document.querySelectorAll('#progress-presets .chip').forEach(function (b) { b.addEventListener('click', function () {
+    document.getElementById('invoice_amount').value = b.dataset.amount; document.getElementById('invoice_desc').value = b.dataset.desc;
+    document.querySelectorAll('#progress-presets .chip').forEach(function (x) { x.classList.toggle('on', x === b); }); }); });`)}</script>`;
+}
+// How much of the contract has been paid, and how much more is on open invoices.
+function progressBar(job, invoices) {
+  const sent = invoices.filter((i) => i.status === 'open').reduce((t, i) => t + i.amount_cents, 0);
+  const pct = (c) => (job.contract_cents ? Math.min(100, (c / job.contract_cents) * 100) : 0);
+  return html`<div class="billed" id="billed-progress">
+    <div class="billed-bar"><span class="paid" style="width:${pct(job.payments_cents).toFixed(1)}%"></span><span class="sent" style="width:${Math.min(pct(sent), 100 - pct(job.payments_cents)).toFixed(1)}%"></span></div>
+    <div class="billed-k"><span><i class="paid"></i>Paid ${fmt(job.payments_cents)}</span><span><i class="sent"></i>Invoiced, not paid ${fmt(sent)}</span><span>Contract ${fmt(job.contract_cents)}</span></div>
+  </div>`;
 }
 const plainCents = (c) => `${Math.floor(c / 100)}.${String(c % 100).padStart(2, '0')}`;
 

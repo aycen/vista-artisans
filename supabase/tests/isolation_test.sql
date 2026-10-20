@@ -12,6 +12,9 @@ create function pg_temp.expect(ok boolean, msg text) returns void language plpgs
 
 create function pg_temp.fails(q text) returns boolean language plpgsql as
   $$ begin execute q; return false; exception when sqlstate 'VA001' then return true; end $$;
+-- True when the database refuses the statement (row-level security, privileges or a cross-org key).
+create function pg_temp.denied(q text) returns boolean language plpgsql as
+  $$ begin execute q; return false; exception when insufficient_privilege or foreign_key_violation or check_violation then return true; end $$;
 
 set role authenticated;
 
@@ -91,6 +94,22 @@ select pg_temp.expect((select count(*) || '|' || max(my_payout_cents) from crew_
 do $$ begin perform add_member_by_email((select org_id from memberships limit 1), 'bob@other.test', 'admin');
   raise exception 'should fail'; exception when sqlstate 'VA001' then null; end $$;
 select pg_temp.expect(true, 'worker cannot add people to the org');
+-- Time clock: only W-2 crew with a rate clock in, one entry at a time; crew can't write time or read rates
+select pg_temp.expect(pg_temp.fails(format('select clock_in(%s)', :job)), 'a subcontractor cannot clock in');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000c');
+insert into member_pay (org_id, user_id, pay_type, hourly_rate_cents) values (:'vista', '00000000-0000-0000-0000-00000000000d', 'w2', 3000);
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from member_pay) = 0, 'crew cannot read pay rates');
+select clock_in(:job);
+select pg_temp.expect(pg_temp.fails(format('select clock_in(%s)', :job)), 'only one open clock-in at a time');
+select pg_temp.expect(pg_temp.denied(format('insert into time_entries (org_id, job_id, user_id, clock_in, clock_out, rate_cents) values (%L, %s, %L, now() - interval ''9 hours'', now(), 100000)', :'vista', :job, '00000000-0000-0000-0000-00000000000d')),
+  'crew cannot write time entries directly');
+update time_entries set rate_cents = 1;
+select clock_out();
+select pg_temp.expect((select count(*) || '|' || max(rate_cents) from time_entries where clock_out is not null) = '1|3000', 'crew see their own closed entry at their real rate');
+-- Photos: crew on the job can add one
+insert into job_photos (org_id, job_id, data, content_type) values (:'vista', :job, '\x89504e47', 'image/png');
+select pg_temp.expect((select count(*) from job_photos) = 1, 'crew see photos on their job');
 do $$ begin update jobs set contract_cents = 1; delete from payments; end $$;
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
 select pg_temp.expect((select contract_cents from jobs) = 395208 and (select count(*) from payments) = 1, 'worker could not change money');
@@ -119,6 +138,11 @@ do $$ begin
   raise exception 'should fail';
 exception when foreign_key_violation or insufficient_privilege or check_violation or unique_violation then null; end $$;
 select pg_temp.expect(true, 'cannot attach a receipt to another org''s expense');
+select pg_temp.expect((select count(*) from job_photos) + (select count(*) from time_entries) + (select count(*) from member_pay) = 0,
+  'other org sees no photos, time or pay rates');
+select pg_temp.expect(pg_temp.denied(format('insert into job_photos (org_id, job_id, data, content_type) values (%L, %s, %L, %L)',
+  (select id from organizations), :job, '\x89504e47', 'image/png')), 'cannot add a photo to another org''s job');
+select pg_temp.expect(pg_temp.fails(format('select clock_in(%s)', :job)), 'cannot clock in on another org''s job');
 update clients set name = 'hacked'; delete from payments;
 do $$ begin insert into clients (org_id, name) select id, 'x' from organizations where name = 'Vista Artisans';
   if found then raise exception 'should fail'; end if; end $$;

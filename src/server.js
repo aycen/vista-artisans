@@ -205,7 +205,10 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
     payments: await db.all(`SELECT payments.*, invoices.number AS invoice_number FROM payments
       LEFT JOIN invoices ON invoices.payment_id = payments.id WHERE payments.job_id = ? ORDER BY payments.paid_on, payments.id`, id),
     crew: await db.all('SELECT * FROM job_team(?)', id),
-    members: await db.all('SELECT * FROM org_members(?)', org),
+    members: await db.all(`SELECT m.*, coalesce(p.pay_type, 'sub') AS pay_type, p.hourly_rate_cents FROM org_members(?) m
+      LEFT JOIN member_pay p ON p.org_id = ? AND p.user_id = m.user_id`, org, org),
+    photos: await photosFor(db, id),
+    time: await timeFor(db, id),
     invoices: await db.all('SELECT * FROM invoices WHERE job_id = ? ORDER BY id DESC', id),
     invoicing: { enabled: !!(await payoutAccount(db, org)), testMode: stripe.testMode(), key: crypto.randomUUID() },
     emails: await db.all('SELECT * FROM email_log WHERE job_id = ? ORDER BY id DESC LIMIT 20', id),
@@ -567,6 +570,95 @@ route('GET', '/expenses/:id/receipt', async ({ db, org, id }) => {
   const name = (rc.filename || `receipt-${id}.${ext}`).replace(/[^\w.\- ]+/g, '_');
   return { status: 200, headers: { 'Content-Type': rc.content_type, 'Content-Disposition': `inline; filename="${name}"` }, body: rc.data };
 });
+// Job photos: admins and the crew assigned to a job add them (RLS decides who); photos are shrunk to JPEG in the browser.
+function parsePhoto(data) {
+  const mm = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/=]+)$/.exec(data || '');
+  const buf = mm ? Buffer.from(mm[2], 'base64') : null;
+  const type = !buf ? null : buf[0] === 0xff && buf[1] === 0xd8 ? 'image/jpeg'
+    : buf.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) ? 'image/png' : null;
+  if (!type) return { error: 'Photos must be JPG or PNG images.' };
+  if (buf.length > RECEIPT_MAX) return { error: 'That photo is too large. Use one under 5 MB.' };
+  return { photo: { data: buf, type } };
+}
+const jobHref = (org, jobId) => (org.role === 'admin' ? `/jobs/${jobId}` : `/schedule/${jobId}`);
+route('POST', '/jobs/:id/photos', async ({ db, org, id, form }) => {
+  const ph = parsePhoto(form.get('photo_data'));
+  if (ph.error) return page(422, ph.error, { 'Content-Type': 'text/plain; charset=utf-8' });
+  const r = await attempt(db, () => db.run('INSERT INTO job_photos (org_id, job_id, data, content_type) VALUES (?, ?, ?, ?)',
+    org.org_id, id, ph.photo.data, ph.photo.type));
+  if (r.error) return page(404, 'You can only add photos to your own jobs.', { 'Content-Type': 'text/plain; charset=utf-8' });
+  return redirect(`${jobHref(org, id)}?msg=Photo+added#photos`);
+}, { worker: true, maxBody: RECEIPT_BODY });
+route('GET', '/photos/:id', async ({ db, org, id }) => {
+  const ph = await db.get('SELECT data, content_type FROM job_photos WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!ph) return notFound();
+  return { status: 200, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=604800' }, body: ph.data };
+}, { worker: true });
+route('POST', '/photos/:id/delete', async ({ db, org, id }) => {
+  const ph = await db.get('SELECT job_id FROM job_photos WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!ph) return notFound();
+  const n = (await db.run('DELETE FROM job_photos WHERE id = ?', id)).changes;
+  return redirect(`${jobHref(org, ph.job_id)}?msg=${n ? 'Photo+deleted' : 'Only+the+person+who+added+a+photo+can+delete+it'}#photos`);
+}, { worker: true });
+const photosFor = (db, jobId) => db.all(`SELECT id, uploaded_by, created_at FROM job_photos WHERE job_id = ? ORDER BY created_at DESC, id DESC`, jobId);
+
+// Time clock: W-2 crew clock in and out on their own jobs; admins can add, end or delete entries.
+route('POST', '/schedule/:id/clock-in', async ({ db, org, id }) => {
+  const r = await attempt(db, () => db.get('SELECT clock_in(?) AS id', id));
+  if (r.error) {
+    const msg = dbMessage(r.error); if (!msg) throw r.error;
+    return redirect(`${jobHref(org, id)}?msg=${encodeURIComponent(msg)}`);
+  }
+  return redirect(`/schedule/${id}?msg=Clocked+in`);
+}, { worker: true });
+route('POST', '/schedule/:id/clock-out', async ({ db, id }) => {
+  await db.run('SELECT clock_out()');
+  return redirect(`/schedule/${id}?msg=Clocked+out`);
+}, { worker: true });
+route('POST', '/jobs/:id/time', async ({ db, org, id, form }) => {
+  const f = formObj(form);
+  const values = { user_id: str(f.user_id, 64), work_date: str(f.work_date, 20), start_time: str(f.start_time, 10), end_time: str(f.end_time, 10) };
+  const errors = {};
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!UUID_RE.test(values.user_id)) errors.time_user = 'Choose who worked.';
+  if (!isDate(values.work_date)) errors.work_date = 'Enter the date worked.';
+  if (!time.test(values.start_time)) errors.start_time = 'Enter a start time.';
+  if (!time.test(values.end_time)) errors.end_time = 'Enter an end time.';
+  if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { time: { values, errors } } }, 422);
+  const pay = await db.get('SELECT hourly_rate_cents FROM member_pay WHERE org_id = ? AND user_id = ?::uuid', org.org_id, values.user_id);
+  if (!pay || pay.hourly_rate_cents == null) {
+    return renderJob(db, org.org_id, id, { forms: { time: { values, errors: { time_user: 'Set an hourly rate for this person on their Team page first.' } } } }, 422);
+  }
+  // An end time earlier than the start means the shift ran past midnight.
+  const r = await attempt(db, () => db.run(`INSERT INTO time_entries (org_id, job_id, user_id, clock_in, clock_out, rate_cents)
+    SELECT ?, ?, ?::uuid, s, CASE WHEN e > s THEN e ELSE e + interval '1 day' END, ?
+    FROM (SELECT (?::date + ?::time) AT TIME ZONE ? AS s, (?::date + ?::time) AT TIME ZONE ? AS e) t`,
+  org.org_id, id, values.user_id, pay.hourly_rate_cents, values.work_date, values.start_time, APP_TIMEZONE, values.work_date, values.end_time, APP_TIMEZONE));
+  if (r.error) {
+    const msg = dbMessage(r.error); if (!msg) { console.error(r.error); return renderJob(db, org.org_id, id, { forms: { time: { values, errors: SAVE_FAILED } } }, 500); }
+    return renderJob(db, org.org_id, id, { forms: { time: { values, errors: { time_user: msg } } } }, 422);
+  }
+  return redirect(`/jobs/${id}?msg=Time+added#time`);
+});
+async function timeEntry(db, org, id) { return db.get('SELECT * FROM time_entries WHERE id = ? AND org_id = ?', id, org.org_id); }
+route('POST', '/time/:id/end', async ({ db, org, id }) => {
+  const t = await timeEntry(db, org, id); if (!t) return notFound();
+  await db.run(`UPDATE time_entries SET clock_out = least(greatest(now(), clock_in + interval '1 second'), clock_in + interval '24 hours')
+    WHERE id = ? AND clock_out IS NULL`, id);
+  return redirect(`/jobs/${t.job_id}?msg=Clocked+out#time`);
+});
+route('POST', '/time/:id/delete', async ({ db, org, id }) => {
+  const t = await timeEntry(db, org, id); if (!t) return notFound();
+  await db.run('DELETE FROM time_entries WHERE id = ?', id);
+  return redirect(`/jobs/${t.job_id}?msg=Time+entry+deleted#time`);
+});
+const timeFor = (db, jobId) => db.all(`SELECT t.id, t.user_id, t.rate_cents, t.clock_out IS NULL AS open,
+    to_char(t.clock_in AT TIME ZONE ?, 'YYYY-MM-DD') AS day, to_char(t.clock_in AT TIME ZONE ?, 'HH24:MI') AS start_t,
+    to_char(t.clock_out AT TIME ZONE ?, 'HH24:MI') AS end_t,
+    (extract(epoch from (coalesce(t.clock_out, now()) - t.clock_in)) / 60)::int AS minutes,
+    labor_cents(t.clock_in, t.clock_out, t.rate_cents) AS cost_cents
+  FROM time_entries t WHERE t.job_id = ? ORDER BY t.clock_in DESC`, APP_TIMEZONE, APP_TIMEZONE, APP_TIMEZONE, jobId);
+
 route('POST', '/jobs/:id/payments', async ({ db, org, id, form }) => {
   const f = formObj(form);
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
@@ -644,7 +736,7 @@ route('POST', '/jobs/:id/assignments', async ({ db, org, id, form }) => {
   const values = { user_id: str(form.get('user_id'), 64), payout: form.get('payout') ?? '' };
   const errors = {};
   if (!UUID_RE.test(values.user_id)) errors.user_id = 'Choose who to assign.';
-  const amt = parseMoney(values.payout, 'Payout');
+  const amt = String(values.payout).trim() === '' ? { value: 0 } : parseMoney(values.payout, 'Payout');
   if (amt.error) errors.payout = amt.error;
   if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { assign: { values, errors } } }, 422);
   const r = await attempt(db, () => db.run(`INSERT INTO job_assignments (org_id, job_id, user_id, payout_cents) VALUES (?, ?, ?, ?)
@@ -749,10 +841,12 @@ route('GET', '/schedule', async ({ db, org, url }) => {
   const view = url.searchParams.get('view') === 'week' ? 'week' : 'month';
   return ok(v.crewJobsPage({ jobs, cal: { month: day.slice(0, 7), day, today, byDay, view }, flash: url.searchParams.get('msg') }));
 }, { worker: true });
-route('GET', '/schedule/:id', async ({ db, org, id }) => {
+route('GET', '/schedule/:id', async (ctx) => {
+  const { db, org, id, url } = ctx;
   const job = org.role === 'admin' ? await db.get('SELECT * FROM worker_schedule(?) WHERE job_id = ?', org.org_id, id)
     : (await crewJobs(db, org)).find((j) => Number(j.job_id) === id);
-  return job ? ok(v.scheduleJobPage({ job })) : notFound();
+  if (!job) return notFound();
+  return ok(v.scheduleJobPage({ job, me: ctx.user.id, photos: await photosFor(db, id), flash: url.searchParams.get('msg') }));
 }, { worker: true });
 
 // Deleting estimates and clients (with a confirmation page first)
@@ -805,8 +899,11 @@ async function renderTeam(db, org, user, extra = {}, status = 200) {
   const members = await db.all(`SELECT m.*,
       (SELECT count(*)::int FROM job_assignments a WHERE a.org_id = ? AND a.user_id = m.user_id) AS job_count,
       (SELECT coalesce(sum(a.payout_cents), 0) FROM job_assignments a JOIN jobs j ON j.id = a.job_id
-        WHERE a.org_id = ? AND a.user_id = m.user_id AND j.status = 'completed') AS earned_cents
-    FROM org_members(?) m`, org.org_id, org.org_id, org.org_id);
+        WHERE a.org_id = ? AND a.user_id = m.user_id AND j.status = 'completed')
+      + (SELECT coalesce(sum(labor_cents(t.clock_in, t.clock_out, t.rate_cents)), 0) FROM time_entries t JOIN jobs j ON j.id = t.job_id
+        WHERE t.org_id = ? AND t.user_id = m.user_id AND j.status = 'completed') AS earned_cents,
+      coalesce(p.pay_type, 'sub') AS pay_type, p.hourly_rate_cents
+    FROM org_members(?) m LEFT JOIN member_pay p ON p.org_id = ? AND p.user_id = m.user_id`, org.org_id, org.org_id, org.org_id, org.org_id, org.org_id);
   const joinCode = org.role === 'admin' ? (await db.get('SELECT org_join_code(?) AS code', org.org_id)).code : null;
   const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
   return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, ...extra }));
@@ -835,7 +932,8 @@ route('GET', '/team/:uid', async ({ db, org, user, uid, url }) => {
   const member = await db.get('SELECT * FROM org_members(?) WHERE user_id = ?::uuid', org.org_id, uid);
   if (!member) return notFound();
   const jobs = await db.all(`SELECT jobs.id, jobs.project_name, jobs.status, jobs.start_date, jobs.end_date, jobs.completed_at,
-      clients.name AS client_name, a.payout_cents
+      clients.name AS client_name, a.payout_cents + (SELECT coalesce(sum(labor_cents(t.clock_in, t.clock_out, t.rate_cents)), 0)
+        FROM time_entries t WHERE t.job_id = jobs.id AND t.user_id = a.user_id) AS payout_cents
     FROM job_assignments a JOIN jobs ON jobs.id = a.job_id JOIN clients ON clients.id = jobs.client_id
     WHERE a.org_id = ? AND a.user_id = ?::uuid
     ORDER BY jobs.status = 'completed', coalesce(jobs.end_date, jobs.start_date) DESC NULLS LAST, jobs.id DESC`, org.org_id, uid);
@@ -846,7 +944,26 @@ route('GET', '/team/:uid', async ({ db, org, user, uid, url }) => {
     earned: sum(done), upcoming: sum(jobs.filter((j) => j.status !== 'completed')), yearLabel: year,
     year: sum(done.filter((j) => j.completed_at && new Date(j.completed_at).toLocaleString('en-CA', { timeZone: APP_TIMEZONE, year: 'numeric' }) === year)),
   };
-  return ok(v.memberPage({ org, member, me: user.id, jobs, totals, flash: url.searchParams.get('msg') }));
+  const pay = (await db.get('SELECT pay_type, hourly_rate_cents FROM member_pay WHERE org_id = ? AND user_id = ?::uuid', org.org_id, uid))
+    || { pay_type: 'sub', hourly_rate_cents: null };
+  return ok(v.memberPage({ org, member, me: user.id, jobs, totals, pay, flash: url.searchParams.get('msg') }));
+});
+// Subcontractor (fixed payout per job) or W-2 employee (clocks in; hours x hourly rate).
+route('POST', '/team/:uid/pay', async ({ db, org, uid, form }) => {
+  const member = await db.get('SELECT user_id FROM org_members(?) WHERE user_id = ?::uuid', org.org_id, uid);
+  if (!member) return notFound();
+  const type = form.get('pay_type') === 'w2' ? 'w2' : 'sub';
+  const raw = String(form.get('hourly_rate') ?? '').trim();
+  let rate = null;
+  if (type === 'w2') {
+    const amt = parseMoney(raw, 'Hourly rate', { allowZero: false });
+    if (amt.error) return redirect(`/team/${uid}?msg=${encodeURIComponent(amt.error)}#pay`);
+    rate = amt.value;
+  }
+  await db.run(`INSERT INTO member_pay (org_id, user_id, pay_type, hourly_rate_cents) VALUES (?, ?::uuid, ?, ?)
+    ON CONFLICT (org_id, user_id) DO UPDATE SET pay_type = excluded.pay_type,
+      hourly_rate_cents = coalesce(excluded.hourly_rate_cents, member_pay.hourly_rate_cents), updated_at = now()`, org.org_id, uid, type, rate);
+  return redirect(`/team/${uid}?msg=Pay+saved#pay`);
 });
 route('POST', '/team/code', async ({ db, org }) => {
   await db.get('SELECT regenerate_join_code(?) AS code', org.org_id);
@@ -1246,7 +1363,8 @@ async function health() {
         to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles,
         to_regclass('public.invoices') IS NOT NULL AS invoices,
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
-        to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts`);
+        to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
+        to_regclass('public.time_entries') IS NOT NULL AS time_clock`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1255,6 +1373,7 @@ async function health() {
       if (!r.rows[0].emails) throw new Error('Run supabase/migrations/0008_estimate_approval_and_emails.sql in the Supabase SQL Editor.');
       if (!r.rows[0].crew) throw new Error('Run supabase/migrations/0010_crew_jobs.sql in the Supabase SQL Editor.');
       if (!r.rows[0].receipts) throw new Error('Run supabase/migrations/0011_expense_receipts.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].time_clock) throw new Error('Run supabase/migrations/0013_time_clock_photos.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1490,7 +1609,9 @@ function respond(res, out, req) {
     body = body.replace('<!--NAV-->', n.nav).replace('<!--AVATAR-->', n.avatar);
     const theme = req ? themeOf(req) : '';
     if (theme && body.startsWith('<!doctype html>')) {
+      // "only light/dark" also stops phone browsers from auto-darkening (or lightening) the page.
       body = body.replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`)
+        .replace('<meta name="color-scheme" content="light dark">', `<meta name="color-scheme" content="only ${theme}">`)
         .replace(/<meta name="theme-color" content="[^"]*" media="\(prefers-color-scheme: (light|dark)\)">/g,
           (tag, scheme) => (scheme === theme ? tag.replace(/ media="[^"]*"/, '') : ''));
     }

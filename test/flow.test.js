@@ -1037,3 +1037,72 @@ test('week view, scope from line items with options, expense receipts', async ()
   as('dave'); assert.equal((await getPage(`/expenses/${exp}/receipt`)).status, 404);
   assert.match((await getPage('/schedule?view=week')).body, /id="week"/);
 });
+
+test('W-2 time clock vs subcontractor payouts, job photos, appearance stops forced dark', async () => {
+  as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
+  const dave = (await dbClient.query("SELECT id FROM auth.users WHERE email = 'dave@vista.test'")).rows[0].id;
+  const deck = (await dbClient.query(`SELECT j.id FROM jobs j JOIN job_assignments a ON a.job_id = j.id
+    WHERE a.user_id = $1 AND j.project_name = 'Deck'`, [dave])).rows[0].id;
+  await dbClient.query("UPDATE jobs SET status = 'in_progress', completed_at = null WHERE id = $1", [deck]);
+
+  // Subcontractors can't clock in
+  as('dave'); await post('/login', { email: 'dave@vista.test', password: 'dave-password' });
+  let page = (await getPage(`/schedule/${deck}`)).body;
+  assert.doesNotMatch(page, /id="clock"/);
+  let r = await post(`/schedule/${deck}/clock-in`, {}); assert.match(r.location, /Only%20W-2/);
+
+  // Admin makes Dave a W-2 employee at $30/hr
+  as('alice');
+  r = await post(`/team/${dave}/pay`, { pay_type: 'w2', hourly_rate: 'abc' }); assert.match(r.location, /Hourly/);
+  r = await post(`/team/${dave}/pay`, { pay_type: 'w2', hourly_rate: '30' }); assert.equal(r.status, 303);
+  assert.match((await getPage('/team')).body, /W-2 · \$30\.00\/hr/);
+  assert.match((await getPage(`/team/${dave}`)).body, /value="w2" checked/);
+
+  // Dave clocks in (once), works two hours, clocks out: labor = $60 on top of his $350 payout
+  as('dave');
+  r = await post(`/schedule/${deck}/clock-in`, {}); assert.equal(r.location, `/schedule/${deck}?msg=Clocked+in`);
+  r = await post(`/schedule/${deck}/clock-in`, {}); assert.match(r.location, /already%20clocked%20in/);
+  assert.match((await getPage('/')).body, /id="clocked-in"/);
+  assert.match((await getPage(`/schedule/${deck}`)).body, /Clock out/);
+  await dbClient.query("UPDATE time_entries SET clock_in = now() - interval '2 hours' WHERE user_id = $1 AND clock_out IS NULL", [dave]);
+  r = await post(`/schedule/${deck}/clock-out`, {}); assert.equal(r.status, 303);
+  page = (await getPage(`/schedule/${deck}`)).body;
+  assert.match(page, /data-k="my-hours">2h 00m worked/); assert.equal(stat(page, 'my-pay'), '$410.00');
+
+  // Admin sees the entry and labor in job costs, and can add time by hand ($30 x 4h = $120)
+  as('alice');
+  const payouts = async () => stat((await getPage(`/jobs/${deck}`)).body, 'payouts');
+  assert.equal(await payouts(), '$410.00');
+  page = (await getPage(`/jobs/${deck}`)).body;
+  assert.match(page, /id="time-entries"/); assert.match(page, /2h 00m at \$30\.00\/hr/);
+  r = await post(`/jobs/${deck}/time`, { user_id: dave, work_date: '2026-11-10', start_time: '8am', end_time: '12:00' }); assert.equal(r.status, 422);
+  r = await post(`/jobs/${deck}/time`, { user_id: dave, work_date: '2026-11-10', start_time: '08:00', end_time: '12:00' }); assert.equal(r.status, 303);
+  assert.equal(await payouts(), '$530.00');
+  // A changed rate doesn't rewrite past entries
+  await post(`/team/${dave}/pay`, { pay_type: 'w2', hourly_rate: '40' });
+  assert.equal(await payouts(), '$530.00');
+  const entry = (await dbClient.query('SELECT id FROM time_entries WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [deck])).rows[0].id;
+  r = await post(`/time/${entry}/delete`, {}); assert.equal(r.status, 303);
+  assert.equal(await payouts(), '$410.00');
+  as('bob'); assert.equal((await post(`/time/${entry - 1}/delete`, {})).status, 404);
+
+  // Photos: crew on the job add and see them; other companies can't
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  as('dave');
+  r = await post(`/jobs/${deck}/photos`, { photo_data: 'data:image/svg+xml;base64,PHN2Zz4=' }); assert.equal(r.status, 422);
+  r = await post(`/jobs/${deck}/photos`, { photo_data: png }); assert.equal(r.status, 303);
+  const photo = (await dbClient.query('SELECT id FROM job_photos WHERE job_id = $1', [deck])).rows[0].id;
+  assert.equal((await getPage(`/photos/${photo}`)).status, 200);
+  assert.match((await getPage(`/schedule/${deck}`)).body, new RegExp(`/photos/${photo}/delete`));
+  as('alice'); assert.match((await getPage(`/jobs/${deck}`)).body, new RegExp(`src="/photos/${photo}"`));
+  as('bob');
+  assert.equal((await getPage(`/photos/${photo}`)).status, 404);
+  assert.equal((await post(`/jobs/${deck}/photos`, { photo_data: png })).status, 404);
+  as('dave'); r = await post(`/photos/${photo}/delete`, {}); assert.match(r.location, /Photo\+deleted/);
+
+  // Picking Light or Dark tells the browser not to recolor the page
+  await post('/account/theme', { theme: 'light' });
+  assert.match((await getPage('/')).body, /<meta name="color-scheme" content="only light">/);
+  await post('/account/theme', { theme: 'system' });
+  assert.match((await getPage('/')).body, /<meta name="color-scheme" content="light dark">/);
+});
