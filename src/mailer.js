@@ -2,6 +2,7 @@
 // The emails Keystone sends for a company (estimates, follow-ups, reminders, review requests, notices to the company),
 // their wording, the log of what was sent, and the background loop that sends the automatic ones.
 const email = require('./email');
+const sms = require('./sms');
 const { asServer } = require('./db');
 const { fmt } = require('./money');
 
@@ -38,8 +39,10 @@ ${note ? `<tr><td style="font-size:13px;color:#64748b;line-height:1.5;padding-bo
 async function companyOf(db, orgId) {
   return db.get(`SELECT o.name, coalesce(p.phone, '') AS phone, coalesce(p.email, '') AS email, coalesce(p.address, '') AS address,
       coalesce(p.estimate_followup_days, 3) AS estimate_followup_days, coalesce(p.appointment_reminders, true) AS appointment_reminders,
-      coalesce(p.review_requests, false) AS review_requests, coalesce(p.review_url, '') AS review_url
-    FROM organizations o LEFT JOIN company_profiles p ON p.org_id = o.id WHERE o.id = ?`, orgId);
+      coalesce(p.review_requests, false) AS review_requests, coalesce(p.review_url, '') AS review_url,
+      coalesce(p.sms_estimate_followups, false) AS sms_estimate_followups, coalesce(p.sms_appointment_reminders, false) AS sms_appointment_reminders,
+      coalesce(p.sms_review_requests, false) AS sms_review_requests, s.messaging_service_sid AS sms_sender
+    FROM organizations o LEFT JOIN company_profiles p ON p.org_id = o.id LEFT JOIN sms_senders s ON s.org_id = o.id WHERE o.id = ?`, orgId);
 }
 
 // Sends one email and records it in email_log (sent or failed). `db` must be able to write email_log (asServer).
@@ -56,6 +59,36 @@ async function deliver(db, { orgId, kind, to, subject, content, company, estimat
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, orgId, kind, to, subject, estimateId, jobId, error ? 'failed' : 'sent', error, providerId);
   return { ok: !error, error };
 }
+
+// Who can get a text from this company: texting set up for it, the client agreed, hasn't replied STOP, and has a US number.
+const textable = (company, client) => (sms.configured() && company.sms_sender && client.sms_consent && !client.sms_opted_out_at && sms.e164(client.phone)) || null;
+
+// Sends one text and records it in the message history. A STOP reply found at send time is saved on the client.
+async function deliverText(db, { orgId, kind, client, body, company, estimateId = null, jobId = null }) {
+  const to = sms.e164(client.phone);
+  let providerId = ''; let error = '';
+  try {
+    providerId = await sms.send({ messagingServiceSid: company.sms_sender, to, body });
+  } catch (e) {
+    error = e.message.slice(0, 500);
+    if (e.code === sms.UNSUBSCRIBED) await db.run('UPDATE clients SET sms_opted_out_at = now() WHERE id = ?', client.id);
+    console.error(`Text (${kind}) to client ${client.id} failed:`, error);
+  }
+  await db.run(`INSERT INTO email_log (org_id, kind, to_email, subject, estimate_id, job_id, status, error, provider_id, channel)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sms')`, orgId, kind, to, body.slice(0, 300), estimateId, jobId, error ? 'failed' : 'sent', error, providerId);
+  return { ok: !error, error };
+}
+
+// Texts are short, name the company first and always say how to opt out (carriers require both).
+const STOP = 'Reply STOP to opt out.';
+const texts = {
+  estimate_reminder: ({ company, estimate, client, base }) =>
+    `${company.name}: Hi ${firstName(client.name)}, just checking in on your estimate for ${estimate.project_name}. Review and approve here: ${estimateLink(base, estimate)} ${STOP}`,
+  appointment_reminder: ({ company, job, client }) =>
+    `${company.name}: Hi ${firstName(client.name)}, a reminder that we're scheduled to start ${job.project_name} on ${longDate(job.start_date)}.${company.phone ? ` Questions? Call ${company.phone}.` : ''} ${STOP}`,
+  review_request: ({ company, job, client }) =>
+    `${company.name}: Thanks for choosing us for ${job.project_name}, ${firstName(client.name)}! If you were happy with the work, a quick review would mean a lot: ${company.review_url} ${STOP}`,
+};
 
 const estimateLink = (base, e) => `${base}/e/${e.public_token}`;
 const amountLine = (o) => (o.options.length > 1 ? `Options from ${fmt(Math.min(...o.options.map((x) => x.total)))}` : `Total: ${fmt(o.total)}`);
@@ -133,57 +166,82 @@ const todayIn = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).forma
 const addDay = (s) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
 
 async function runAutomations() {
-  if (!email.configured() || !appUrl()) return { skipped: true };
-  const sent = { estimate_reminder: 0, appointment_reminder: 0, review_request: 0 };
+  if (!(email.configured() || sms.configured()) || !appUrl()) return { skipped: true };
+  const sent = { estimate_reminder: 0, appointment_reminder: 0, review_request: 0, texts: 0 };
+  const canEmail = email.configured();
+  // Texts only where the company turned that text on and has a registered sender.
+  const textOn = (flag) => (sms.configured() ? `(p.${flag} AND EXISTS (SELECT 1 FROM sms_senders s WHERE s.org_id = p.org_id))` : 'false');
   await asServer(async (db) => {
     if (!(await db.get('SELECT pg_try_advisory_xact_lock(?) AS ok', LOCK)).ok) return;
     const base = appUrl();
 
     // Estimate follow-ups: after N days, and again after 2N days, while the estimate is still waiting.
-    const due = await db.all(`SELECT e.*, coalesce(p.estimate_followup_days, 3) AS days FROM estimates e
+    // By email when that's on (N = the chosen days), by text when that's on (every 3 days if the email follow-up is off).
+    const emailFollowup = canEmail ? "(coalesce(p.estimate_followup_days, 3) > 0 AND e.sent_to <> '')" : 'false';
+    const due = await db.all(`SELECT e.* FROM estimates e
       LEFT JOIN company_profiles p ON p.org_id = e.org_id
-      WHERE e.status = 'sent' AND e.sent_at IS NOT NULL AND e.sent_to <> '' AND e.reminders_sent < 2
-        AND coalesce(p.estimate_followup_days, 3) > 0
+      WHERE e.status = 'sent' AND e.sent_at IS NOT NULL AND e.reminders_sent < 2
+        AND (${emailFollowup} OR ${textOn('sms_estimate_followups')})
         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.estimate_id = e.id)
-        AND e.sent_at <= now() - make_interval(days => coalesce(p.estimate_followup_days, 3) * (e.reminders_sent + 1))
+        AND e.sent_at <= now() - make_interval(days => coalesce(nullif(p.estimate_followup_days, 0), 3) * (e.reminders_sent + 1))
       ORDER BY e.id LIMIT 50`);
     for (const e of due) {
       const company = await companyOf(db, e.org_id);
       const client = await db.get('SELECT * FROM clients WHERE id = ?', e.client_id);
-      const t = templates.estimate_reminder({ company, estimate: e, client, totals: await estimateTotals(db, e.id), base });
       await db.run('UPDATE estimates SET reminders_sent = reminders_sent + 1, last_reminded_at = now() WHERE id = ?', e.id);
-      await deliver(db, { orgId: e.org_id, kind: 'estimate_reminder', to: e.sent_to, ...t, company, estimateId: e.id });
-      sent.estimate_reminder++;
+      if (canEmail && company.estimate_followup_days > 0 && e.sent_to) {
+        const t = templates.estimate_reminder({ company, estimate: e, client, totals: await estimateTotals(db, e.id), base });
+        await deliver(db, { orgId: e.org_id, kind: 'estimate_reminder', to: e.sent_to, ...t, company, estimateId: e.id });
+        sent.estimate_reminder++;
+      }
+      if (company.sms_estimate_followups && textable(company, client)) {
+        await deliverText(db, { orgId: e.org_id, kind: 'estimate_reminder', client, body: texts.estimate_reminder({ company, estimate: e, client, base }), company, estimateId: e.id });
+        sent.texts++;
+      }
     }
 
     // Appointment reminders: the day before a job starts.
+    const emailReminder = canEmail ? "(c.email <> '' AND coalesce(p.appointment_reminders, true))" : 'false';
     const jobs = await db.all(`SELECT j.*, c.email AS client_email FROM jobs j JOIN clients c ON c.id = j.client_id
       LEFT JOIN company_profiles p ON p.org_id = j.org_id
-      WHERE j.status <> 'completed' AND j.start_date IS NOT NULL AND c.email <> '' AND coalesce(p.appointment_reminders, true)
+      WHERE j.status <> 'completed' AND j.start_date IS NOT NULL AND (${emailReminder} OR ${textOn('sms_appointment_reminders')})
         AND j.start_date = ?::date AND j.reminder_sent_for IS DISTINCT FROM j.start_date
       ORDER BY j.id LIMIT 50`, addDay(todayIn(APP_TIMEZONE)));
     for (const j of jobs) {
       const company = await companyOf(db, j.org_id);
       const client = await db.get('SELECT * FROM clients WHERE id = ?', j.client_id);
-      const t = templates.appointment_reminder({ company, job: j, client });
       await db.run('UPDATE jobs SET reminder_sent_for = start_date WHERE id = ?', j.id);
-      await deliver(db, { orgId: j.org_id, kind: 'appointment_reminder', to: j.client_email, ...t, company, jobId: j.id });
-      sent.appointment_reminder++;
+      if (canEmail && company.appointment_reminders && j.client_email) {
+        const t = templates.appointment_reminder({ company, job: j, client });
+        await deliver(db, { orgId: j.org_id, kind: 'appointment_reminder', to: j.client_email, ...t, company, jobId: j.id });
+        sent.appointment_reminder++;
+      }
+      if (company.sms_appointment_reminders && textable(company, client)) {
+        await deliverText(db, { orgId: j.org_id, kind: 'appointment_reminder', client, body: texts.appointment_reminder({ company, job: j, client }), company, jobId: j.id });
+        sent.texts++;
+      }
     }
 
     // Review requests: an hour after a job is completed (time to undo a mistaken click), within the last week.
+    const emailReview = canEmail ? "(c.email <> '' AND p.review_requests)" : 'false';
     const done = await db.all(`SELECT j.*, c.email AS client_email FROM jobs j JOIN clients c ON c.id = j.client_id
       JOIN company_profiles p ON p.org_id = j.org_id
-      WHERE j.status = 'completed' AND j.review_requested_at IS NULL AND c.email <> '' AND p.review_requests AND p.review_url <> ''
+      WHERE j.status = 'completed' AND j.review_requested_at IS NULL AND p.review_url <> '' AND (${emailReview} OR ${textOn('sms_review_requests')})
         AND j.completed_at <= now() - interval '1 hour' AND j.completed_at > now() - interval '7 days'
       ORDER BY j.id LIMIT 50`);
     for (const j of done) {
       const company = await companyOf(db, j.org_id);
       const client = await db.get('SELECT * FROM clients WHERE id = ?', j.client_id);
-      const t = templates.review_request({ company, job: j, client });
       await db.run('UPDATE jobs SET review_requested_at = now() WHERE id = ?', j.id);
-      await deliver(db, { orgId: j.org_id, kind: 'review_request', to: j.client_email, ...t, company, jobId: j.id });
-      sent.review_request++;
+      if (canEmail && company.review_requests && j.client_email) {
+        const t = templates.review_request({ company, job: j, client });
+        await deliver(db, { orgId: j.org_id, kind: 'review_request', to: j.client_email, ...t, company, jobId: j.id });
+        sent.review_request++;
+      }
+      if (company.sms_review_requests && textable(company, client)) {
+        await deliverText(db, { orgId: j.org_id, kind: 'review_request', client, body: texts.review_request({ company, job: j, client }), company, jobId: j.id });
+        sent.texts++;
+      }
     }
   });
   return sent;
@@ -195,4 +253,4 @@ function startAutomations(intervalMs = Number(process.env.AUTOMATION_INTERVAL_MS
   setInterval(tick, intervalMs).unref();
 }
 
-module.exports = { templates, deliver, companyOf, estimateTotals, runAutomations, startAutomations, appUrl, render };
+module.exports = { templates, texts, deliver, deliverText, companyOf, estimateTotals, runAutomations, startAutomations, appUrl, render };

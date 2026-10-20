@@ -840,7 +840,7 @@ function deleteCompanyPage({ org, error }) {
 }
 
 // ---------- Company profile ----------
-function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false }) {
+function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false, texting = {} }) {
   return layout('Company profile', html`
   ${errorBox(errors)}
   <form method="post" action="/settings" id="settings-form" novalidate>
@@ -875,29 +875,37 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
   </form>
   ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
-  ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled) : ''}
+  ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled, texting) : ''}
   <h2>Danger zone</h2>
   <div class="list"><a class="li" href="/settings/delete-company" id="delete-company"><div class="main-t"><div class="t" style="color:var(--red)">Delete company</div>
     <div class="s">Permanently delete ${org.name} and all of its records</div></div>${chev()}</a></div>
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
 }
 
-function emailSettings(ev, errors, enabled) {
+function emailSettings(ev, errors, enabled, texting = {}) {
   const toggle = (name, label, hint) => html`<label class="check"><input type="checkbox" name="${name}" ${ev[name] ? raw('checked') : ''}>
     <span>${label}<div class="hint" style="font-weight:400;margin:2px 0 0">${hint}</div></span></label>`;
-  return html`<h2 id="emails">Automatic emails & approvals</h2>
+  // Each follow-up has its own email and text switch; texts can be switched on only once texting is set up for the company.
+  const textToggle = (name) => html`<label class="check" style="margin-top:0"><input type="checkbox" name="${name}" ${ev[name] ? raw('checked') : ''} ${texting.ready ? '' : raw('disabled')}>
+    <span>Also by text${texting.ready ? '' : html` <span class="muted" style="font-weight:400">(not set up yet)</span>`}</span></label>`;
+  return html`<h2 id="emails">Automatic follow-ups</h2>
   ${errorBox(errors)}
   <form method="post" action="/settings/emails" class="form-card" novalidate id="email-settings">
     ${enabled ? '' : html`<div class="notice">Emailing isn't switched on for this app yet, so nothing will be sent. You can still set these up now.</div>`}
-    <div class="hint" style="margin:0 0 8px">Emails come from your company name, and replies go to your business email above.</div>
+    <div class="hint" style="margin:0 0 8px">Every follow-up is optional. Emails come from your company name, and replies go to your business email above.
+      ${texting.ready ? html`Texts come from your company's number ${texting.phone} and go only to clients marked "OK to text".`
+        : html`Texting needs a one-time registration of your business with the phone carriers. To turn it on, email <a href="mailto:support@keystonefsm.com">support@keystonefsm.com</a>.`}</div>
     <label for="estimate_followup_days">Follow up on estimates that haven't been approved</label>
-    <select id="estimate_followup_days" name="estimate_followup_days">${[['0', 'Off'], ['2', 'After 2 days, then 4'], ['3', 'After 3 days, then 6'], ['5', 'After 5 days, then 10'], ['7', 'After 7 days, then 14']]
+    <select id="estimate_followup_days" name="estimate_followup_days">${[['0', 'No email follow-up'], ['2', 'Email after 2 days, then 4'], ['3', 'Email after 3 days, then 6'], ['5', 'Email after 5 days, then 10'], ['7', 'Email after 7 days, then 14']]
       .map(([k, l]) => html`<option value="${k}" ${String(ev.estimate_followup_days) === k ? raw('selected') : ''}>${l}</option>`)}</select>
-    ${toggle('appointment_reminders', 'Appointment reminders', 'The day before a job starts, remind the client by email.')}
-    ${toggle('review_requests', 'Ask for a review', 'An hour after you mark a job completed, ask the client for a review.')}
+    ${textToggle('sms_estimate_followups')}
+    ${toggle('appointment_reminders', 'Appointment reminders by email', 'The day before a job starts, remind the client.')}
+    ${textToggle('sms_appointment_reminders')}
+    ${toggle('review_requests', 'Review requests by email', 'An hour after you mark a job completed, ask the client for a review.')}
+    ${textToggle('sms_review_requests')}
     ${input('review_url', 'Review link', ev, errors, { placeholder: 'https://g.page/r/…', hint: 'Your Google (or Yelp, Facebook…) review page.' })}
     ${input('default_deposit_percent', 'Default deposit for new estimates (%)', ev, errors, { inputmode: 'numeric', hint: 'Clients pay it online when they approve, if Stripe is connected. 0 for none.' })}
-    <div class="form-actions"><button type="submit" class="secondary">Save email settings</button></div>
+    <div class="form-actions"><button type="submit" class="secondary">Save follow-up settings</button></div>
   </form>`;
 }
 
@@ -1286,7 +1294,10 @@ function clientFields(values, errors, prefix = '') {
     ${input(prefix + 'name', 'Name', v, er, { required: true, autocomplete: 'off' })}
     <div class="two stack"><div>${input(prefix + 'phone', 'Phone', v, er, { type: 'tel', inputmode: 'tel' })}</div>
     <div>${input(prefix + 'email', 'Email', v, er, { type: 'email', inputmode: 'email' })}</div></div>
-    ${input(prefix + 'address', 'Property address', v, er)}`;
+    ${input(prefix + 'address', 'Property address', v, er)}
+    <label class="check"><input type="checkbox" name="${prefix}sms_consent" ${values[prefix + 'sms_consent'] ? raw('checked') : ''}>
+      <span>OK to text<div class="hint" style="font-weight:400;margin:2px 0 0">The client agreed to get texts from you, like reminders and follow-ups. They can reply STOP any time.</div></span></label>
+    ${values[prefix + 'sms_opted_out_at'] ? html`<div class="hint">This client replied STOP, so they won't get texts unless they reply START.</div>` : ''}`;
 }
 
 function clientFormPage({ client, values, errors = {} }) {
@@ -1484,9 +1495,9 @@ const EMAIL_KINDS = { estimate: 'Estimate sent', estimate_reminder: 'Follow-up',
   review_request: 'Review request', estimate_approved: 'Approval notice to you', estimate_declined: 'Decline notice to you' };
 function emailHistory(emails) {
   if (!emails?.length) return '';
-  return html`<h2>Emails</h2><div class="list" id="email-history">${emails.map((m) => html`<div class="li">
-    <span class="icon-bubble">${icon('mail')}</span>
-    <div class="main-t"><div class="t">${EMAIL_KINDS[m.kind] || m.kind}</div><div class="s">${m.to_email} · ${fmtWhen(m.created_at)}</div></div>
+  return html`<h2>Messages</h2><div class="list" id="email-history">${emails.map((m) => html`<div class="li">
+    <span class="icon-bubble">${icon(m.channel === 'sms' ? 'phone' : 'mail')}</span>
+    <div class="main-t"><div class="t">${EMAIL_KINDS[m.kind] || m.kind}${m.channel === 'sms' ? ' (text)' : ''}</div><div class="s">${m.to_email} · ${fmtWhen(m.created_at)}</div></div>
     ${m.status === 'failed' ? html`<span class="pill declined" title="${m.error}">Failed</span>` : html`<span class="pill completed">Sent</span>`}</div>`)}</div>`;
 }
 

@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -1243,4 +1243,79 @@ test('import clients and jobs from a CSV export', async () => {
 
   // Crew can't import
   as('erin'); assert.equal((await getPage('/import')).status, 404);
+});
+
+test('text message follow-ups: optional, only with consent and a registered sender, STOP respected', async () => {
+  const { startFakeTwilio } = require('./fake-twilio');
+  const twilio = await startFakeTwilio('ACtest', 'twilio-token');
+  const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
+  const waitFor = async (fn, what) => {
+    for (let i = 0; i < 60; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 150)); }
+    assert.fail(`timed out waiting for ${what}`);
+  };
+  await stop();
+  await start({ TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url, APP_URL: BASE, AUTOMATION_INTERVAL_MS: '300' });
+  try {
+    as('ivy'); await post('/signup', { email: 'ivy@keystone.test', password: 'ivy-password' });
+    await post('/org/new', { name: 'Ivy Painting' });
+    const org = (await q("SELECT id FROM organizations WHERE name = 'Ivy Painting'"))[0].id;
+    const settings = { estimate_followup_days: '0', default_deposit_percent: '0', sms_estimate_followups: 'on', sms_appointment_reminders: 'on' };
+
+    // Until the company's sender is registered, the text switches are off and can't be turned on
+    let page = (await getPage('/settings')).body;
+    assert.match(page, /name="sms_estimate_followups"  disabled/); assert.match(page, /not set up yet/);
+    await post('/settings/emails', settings);
+    assert.deepEqual((await q('SELECT sms_estimate_followups, sms_appointment_reminders FROM company_profiles WHERE org_id = $1', [org]))[0],
+      { sms_estimate_followups: false, sms_appointment_reminders: false });
+    await q("INSERT INTO sms_senders (org_id, messaging_service_sid, phone) VALUES ($1, 'MG0123456789abcdef0123456789abcdef', '+15550001111')", [org]);
+    page = (await getPage('/settings')).body; assert.match(page, /\+15550001111/); assert.doesNotMatch(page, /not set up yet/);
+    await post('/settings/emails', settings);
+    assert.deepEqual((await q('SELECT sms_estimate_followups, sms_appointment_reminders, sms_review_requests FROM company_profiles WHERE org_id = $1', [org]))[0],
+      { sms_estimate_followups: true, sms_appointment_reminders: true, sms_review_requests: false });
+
+    // Pat agreed to texts; Quinn didn't
+    let r = await post('/clients', { name: 'Pat Lee', phone: '(717) 555-0123', sms_consent: 'on' }); const pat = idFrom(r.location);
+    r = await post('/clients', { name: 'Quinn Diaz', phone: '717-555-0456' }); const quinn = idFrom(r.location);
+    assert.match((await getPage(`/clients/${pat}/edit`)).body, /name="sms_consent" checked/);
+    const jobFor = async (client, addr) => {
+      r = await post('/estimates', new URLSearchParams([['client_id', String(client)], ['status', 'approved'], ['deposit_percent', '0'], ['address', addr],
+        ['item_desc', 'Interior painting'], ['item_qty', '1'], ['item_price', '2000']]));
+      const est = idFrom(r.location); r = await post(`/estimates/${est}/convert`, {});
+      return { est, job: idFrom(r.location) };
+    };
+    const a = await jobFor(pat, '1 Elm St'); const b = await jobFor(quinn, '2 Elm St');
+    await q(`UPDATE jobs SET start_date = (now() AT TIME ZONE 'America/Los_Angeles')::date + 1 WHERE id = ANY($1)`, [[a.job, b.job]]);
+    await waitFor(async () => twilio.sent.length >= 1, 'the day-before text');
+    let m = twilio.sent[0];
+    assert.equal(m.To, '+17175550123'); assert.equal(m.MessagingServiceSid, 'MG0123456789abcdef0123456789abcdef');
+    assert.match(m.Body, /^Ivy Painting: Hi Pat, a reminder that we're scheduled to start 1 Elm St/); assert.match(m.Body, /Reply STOP to opt out\.$/);
+    await waitFor(async () => (await q('SELECT count(*)::int AS n FROM jobs WHERE id = $1 AND reminder_sent_for IS NOT NULL', [b.job]))[0].n === 1, 'Quinn skipped');
+    assert.equal(twilio.sent.filter((x) => x.To === '+17175550456').length, 0, 'no consent, no text');
+    page = (await getPage(`/jobs/${a.job}`)).body; assert.match(page, /Appointment reminder \(text\)/);
+
+    // Estimate follow-up by text (email follow-ups are off): every 3 days while it waits
+    r = await post('/estimates', new URLSearchParams([['client_id', String(pat)], ['status', 'sent'], ['deposit_percent', '0'], ['address', '3 Elm St'],
+      ['item_desc', 'Exterior painting'], ['item_qty', '1'], ['item_price', '5000']]));
+    const est = idFrom(r.location);
+    await q("UPDATE estimates SET sent_at = now() - interval '3 days 1 minute' WHERE id = $1", [est]);
+    await waitFor(async () => twilio.sent.length >= 2, 'the estimate follow-up text');
+    m = twilio.sent[1];
+    assert.match(m.Body, /just checking in on your estimate for 3 Elm St\. Review and approve here: http:\/\/127\.0\.0\.1:\d+\/e\/\w+/);
+
+    // Pat replies STOP: recorded on Pat (Twilio checks its signature), and no more texts
+    const params = new URLSearchParams({ To: '+15550001111', From: '+17175550123', Body: 'Stop ' });
+    const sig = (p) => require('node:crypto').createHmac('sha1', 'twilio-token')
+      .update(`${BASE}/twilio/inbound` + [...p.keys()].sort().map((k) => k + p.get(k)).join('')).digest('base64');
+    let res = await fetch(`${BASE}/twilio/inbound`, { method: 'POST', body: params, headers: { 'x-twilio-signature': 'forged' } });
+    assert.equal(res.status, 403);
+    res = await fetch(`${BASE}/twilio/inbound`, { method: 'POST', body: params, headers: { 'x-twilio-signature': sig(params) } });
+    assert.equal(res.status, 200);
+    assert.ok((await q('SELECT sms_opted_out_at FROM clients WHERE id = $1', [pat]))[0].sms_opted_out_at);
+    assert.match((await getPage(`/clients/${pat}/edit`)).body, /replied STOP/);
+    await q("UPDATE estimates SET sent_at = now() - interval '6 days 1 minute' WHERE id = $1", [est]);
+    await waitFor(async () => (await q('SELECT reminders_sent FROM estimates WHERE id = $1', [est]))[0].reminders_sent === 2, 'second follow-up turn');
+    assert.equal(twilio.sent.length, 2, 'no text after STOP');
+  } finally {
+    await stop(); await start(); await twilio.close();
+  }
 });

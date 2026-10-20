@@ -136,6 +136,22 @@ DNS records to add), create an API key with sending access, and set `RESEND_API_
 `estimates@keystonefsm.com`) in Render. Emails show each company's name as the sender and replies go to the company's
 own email. Links in automatic emails use `APP_URL`, or Render's `RENDER_EXTERNAL_URL`.
 
+## Text messages (optional)
+
+Companies can add text follow-ups (estimate follow-ups, day-before reminders, review requests) next to the emails. Every one is
+off until the company turns it on in Company profile, and texts go only to clients marked "OK to text" who haven't replied STOP.
+
+US carriers require every business that texts customers to be registered (A2P 10DLC). Keystone sends through one Twilio account
+as a software provider (ISV): each company gets its own registered brand, campaign and Messaging Service in Twilio.
+
+1. Set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in Render.
+2. For each company that wants texting, register its brand and a "Customer care" campaign in Twilio (Trust Hub → A2P 10DLC,
+   as a secondary customer profile), buy a number, and put it in a Messaging Service with that campaign.
+3. In the Messaging Service → Integration, set the incoming message webhook to `https://keystonefsm.com/twilio/inbound`.
+4. Connect the company to it in the Supabase SQL Editor:
+   `insert into sms_senders (org_id, messaging_service_sid, phone) values ('<company id>', 'MG…', '+1…');`
+   (find the company id with `select id, name from organizations;`).
+
 ## Tests
 
 Both test suites run against a local Postgres 16 server, not your Supabase project.

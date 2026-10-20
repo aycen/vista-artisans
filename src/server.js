@@ -4,6 +4,7 @@ const { pool, asUser, asServer, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath 
 const auth = require('./auth');
 const { parseMoney, parseQty, plain, fmtQty, fmt } = require('./money');
 const importer = require('./importer');
+const sms = require('./sms');
 const v = require('./views');
 const pdf = require('./pdf');
 const stripe = require('./stripe');
@@ -82,6 +83,8 @@ function validateClient(f, prefix = '') {
   clean.phone = str(f[prefix + 'phone'], 50);
   clean.email = str(f[prefix + 'email'], 200);
   clean.address = str(f[prefix + 'address'], 500);
+  clean.smsConsent = f[prefix + 'sms_consent'] === 'on';
+  values[prefix + 'sms_consent'] = clean.smsConsent;
   if (!clean.name) errors[prefix + 'name'] = 'Client name is required.';
   if (clean.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean.email)) errors[prefix + 'email'] = 'Email address does not look valid.';
   if (clean.phone && !/^[0-9+().\-\s x]{7,}$/i.test(clean.phone)) errors[prefix + 'phone'] = 'Phone number does not look valid.';
@@ -247,8 +250,8 @@ async function saveEstimate(db, org, estimateId, values, clean) {
   let clientId = Number(values.client_id);
   if (clean.newClient) {
     const c = clean.newClient;
-    clientId = (await db.run('INSERT INTO clients (org_id, name, phone, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
-      org, c.name, c.phone, c.email, c.address)).id;
+    clientId = (await db.run('INSERT INTO clients (org_id, name, phone, email, address, sms_consent) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      org, c.name, c.phone, c.email, c.address, c.smsConsent)).id;
   }
   // The job site defaults to the client's address, and the address is the project's name (the client's name if there's no address).
   const cl = await db.get('SELECT name, address FROM clients WHERE id = ?', clientId);
@@ -333,8 +336,8 @@ route('GET', '/clients/new', () => ok(v.clientFormPage({ values: {} })));
 route('POST', '/clients', async ({ db, org, form }) => {
   const { values, errors, clean } = validateClient(formObj(form));
   if (hasErrors(errors)) return page(422, v.clientFormPage({ values, errors }));
-  const r = await attempt(db, () => db.run('INSERT INTO clients (org_id, name, phone, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
-    org.org_id, clean.name, clean.phone, clean.email, clean.address));
+  const r = await attempt(db, () => db.run('INSERT INTO clients (org_id, name, phone, email, address, sms_consent) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+    org.org_id, clean.name, clean.phone, clean.email, clean.address, clean.smsConsent));
   if (r.error) { console.error(r.error); return page(500, v.clientFormPage({ values, errors: SAVE_FAILED })); }
   return redirect(`/clients/${r.value.id}?msg=Client+saved`);
 });
@@ -356,9 +359,11 @@ route('POST', '/clients/:id', async ({ db, org, id, form }) => {
   const client = await db.get('SELECT * FROM clients WHERE id = ? AND org_id = ?', id, org.org_id);
   if (!client) return notFound();
   const { values, errors, clean } = validateClient(formObj(form));
-  if (hasErrors(errors)) return page(422, v.clientFormPage({ client, values, errors }));
-  const r = await attempt(db, () => db.run('UPDATE clients SET name = ?, phone = ?, email = ?, address = ?, updated_at = now() WHERE id = ?',
-    clean.name, clean.phone, clean.email, clean.address, id));
+  if (hasErrors(errors)) return page(422, v.clientFormPage({ client, values: { ...values, sms_opted_out_at: client.sms_opted_out_at }, errors }));
+  // A STOP reply belongs to the number it came from, so a new number starts fresh.
+  const r = await attempt(db, () => db.run(`UPDATE clients SET name = ?, phone = ?, email = ?, address = ?, sms_consent = ?,
+      sms_opted_out_at = CASE WHEN phone = ? THEN sms_opted_out_at END, updated_at = now() WHERE id = ?`,
+    clean.name, clean.phone, clean.email, clean.address, clean.smsConsent, clean.phone, id));
   if (r.error) { console.error(r.error); return page(500, v.clientFormPage({ client, values, errors: SAVE_FAILED })); }
   return redirect(`/clients/${id}?msg=Client+saved`);
 });
@@ -1068,13 +1073,20 @@ route('POST', '/settings/delete-company', async ({ db, org, form }) => {
   await db.run('SELECT delete_organization(?)', org.org_id);
   return redirect(`/account?msg=${encodeURIComponent(`${org.name} was deleted.`)}`);
 });
+// Texting is ready once the app has Twilio and this company's registered sender has been added (sms_senders).
+async function textingFor(db, orgId) {
+  const s = await db.get('SELECT phone FROM sms_senders WHERE org_id = ?', orgId);
+  return { ready: !!(s && sms.configured()), phone: s?.phone || '' };
+}
 route('GET', '/settings', async ({ db, org, url }) => {
   const c = await companyFor(db, org);
   const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
   const ep = (await db.get('SELECT * FROM company_profiles WHERE org_id = ?', org.org_id)) || {};
   const emailValues = { estimate_followup_days: ep.estimate_followup_days ?? 3, appointment_reminders: ep.appointment_reminders ?? true,
+    sms_estimate_followups: !!ep.sms_estimate_followups, sms_appointment_reminders: !!ep.sms_appointment_reminders, sms_review_requests: !!ep.sms_review_requests,
     review_requests: ep.review_requests ?? false, review_url: ep.review_url || '', default_deposit_percent: String(ep.default_deposit_percent ?? 0) };
   return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'), emailValues, emailEnabled: email.configured(),
+    texting: await textingFor(db, org.org_id),
     payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
 });
 
@@ -1151,24 +1163,33 @@ route('POST', '/settings/emails', async ({ db, org, form }) => {
   const values = {
     estimate_followup_days: ['0', '2', '3', '5', '7'].includes(f.estimate_followup_days) ? Number(f.estimate_followup_days) : 3,
     appointment_reminders: f.appointment_reminders === 'on', review_requests: f.review_requests === 'on',
+    sms_estimate_followups: f.sms_estimate_followups === 'on', sms_appointment_reminders: f.sms_appointment_reminders === 'on', sms_review_requests: f.sms_review_requests === 'on',
     review_url: str(f.review_url, 500), default_deposit_percent: str(f.default_deposit_percent, 5),
   };
   const errors = {};
   if (values.review_url && !/^https?:\/\/\S+\.\S+/i.test(values.review_url)) errors.review_url = 'Review link must be a web address starting with https://';
-  if (values.review_requests && !values.review_url) errors.review_url = 'Add your review link (for example your Google review page) to send review requests.';
+  if ((values.review_requests || values.sms_review_requests) && !values.review_url) errors.review_url = 'Add your review link (for example your Google review page) to send review requests.';
   const dep = /^\d{1,3}$/.test(values.default_deposit_percent) ? Number(values.default_deposit_percent) : NaN;
   if (!(dep >= 0 && dep <= 100)) errors.default_deposit_percent = 'Deposit must be a whole percent from 0 to 100.';
   if (hasErrors(errors)) {
     const c = await companyFor(db, org);
     const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
     return page(422, v.settingsPage({ org, values: c, hasLogo: !!c.logo, emailValues: values, emailErrors: errors, emailEnabled: email.configured(),
+      texting: await textingFor(db, org.org_id),
       payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
   }
-  await db.run(`INSERT INTO company_profiles (org_id, estimate_followup_days, appointment_reminders, review_requests, review_url, default_deposit_percent)
-    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (org_id) DO UPDATE SET estimate_followup_days = excluded.estimate_followup_days,
+  // Text switches only stick once texting is set up for the company (a disabled checkbox isn't sent, so keep what's saved).
+  const ready = (await textingFor(db, org.org_id)).ready;
+  await db.run(`INSERT INTO company_profiles (org_id, estimate_followup_days, appointment_reminders, review_requests, review_url, default_deposit_percent,
+      sms_estimate_followups, sms_appointment_reminders, sms_review_requests)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (org_id) DO UPDATE SET estimate_followup_days = excluded.estimate_followup_days,
       appointment_reminders = excluded.appointment_reminders, review_requests = excluded.review_requests, review_url = excluded.review_url,
-      default_deposit_percent = excluded.default_deposit_percent, updated_at = now()`,
-  org.org_id, values.estimate_followup_days, values.appointment_reminders, values.review_requests, values.review_url, dep);
+      default_deposit_percent = excluded.default_deposit_percent,
+      sms_estimate_followups = CASE WHEN ? THEN excluded.sms_estimate_followups ELSE company_profiles.sms_estimate_followups END,
+      sms_appointment_reminders = CASE WHEN ? THEN excluded.sms_appointment_reminders ELSE company_profiles.sms_appointment_reminders END,
+      sms_review_requests = CASE WHEN ? THEN excluded.sms_review_requests ELSE company_profiles.sms_review_requests END, updated_at = now()`,
+  org.org_id, values.estimate_followup_days, values.appointment_reminders, values.review_requests, values.review_url, dep,
+  ready && values.sms_estimate_followups, ready && values.sms_appointment_reminders, ready && values.sms_review_requests, ready, ready, ready);
   return redirect('/settings?msg=Email+settings+saved#emails');
 });
 
@@ -1468,6 +1489,16 @@ async function stripeWebhook(req) {
   }
   return ack;
 }
+// Twilio tells us about replies to a company's number. STOP and START are recorded on the matching client;
+// Twilio itself blocks further texts and sends the carrier-required confirmation.
+async function twilioInbound(req, url) {
+  const params = await readBody(req);
+  const signed = `${process.env.APP_URL?.replace(/\/$/, '') || `https://${req.headers.host}`}${url.pathname}`;
+  if (!sms.validSignature(signed, params, req.headers['x-twilio-signature'])) return { status: 403, body: 'Invalid signature', headers: { 'Content-Type': 'text/plain' } };
+  const k = sms.keyword(params.get('Body'));
+  if (k) await pool.query('SELECT record_sms_reply($1, $2, $3)', [str(params.get('To'), 20), str(params.get('From'), 20), k === 'stop']);
+  return { status: 200, body: '<Response></Response>', headers: { 'Content-Type': 'text/xml' } };
+}
 function readRaw(req) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
@@ -1494,7 +1525,8 @@ async function health() {
         to_regclass('public.invoices') IS NOT NULL AS invoices,
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
         to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
-        to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion`);
+        to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion,
+        to_regclass('public.sms_senders') IS NOT NULL AS texting`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1505,6 +1537,7 @@ async function health() {
       if (!r.rows[0].receipts) throw new Error('Run supabase/migrations/0011_expense_receipts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].time_clock) throw new Error('Run supabase/migrations/0013_time_clock_photos.sql in the Supabase SQL Editor.');
       if (!r.rows[0].deletion) throw new Error('Run supabase/migrations/0014_account_deletion.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].texting) throw new Error('Run supabase/migrations/0015_text_messages.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1677,6 +1710,7 @@ async function handle(req, res) {
   }
 
   if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(req);
+  if (url.pathname === '/twilio/inbound' && req.method === 'POST') return twilioInbound(req, url);
 
   // Reject cross-site form posts (defence in depth on top of SameSite cookies).
   if (req.method === 'POST' && req.headers.origin) {
