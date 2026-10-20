@@ -61,6 +61,7 @@ select pg_temp.expect((select count(*) from clients) = 1, 'a client with a job c
 select pg_temp.expect(true, 'converted estimate and its line items are locked');
 
 insert into expenses (org_id, job_id, description, amount_cents) values (:'vista', :job, 'Cabinet order', 180010);
+insert into expense_receipts (expense_id, org_id, data, content_type) select id, org_id, '\xffd8ff', 'image/jpeg' from expenses;
 insert into payments (org_id, job_id, amount_cents, paid_on) values (:'vista', :job, 200000, '2026-10-01');
 
 -- Carol (admin of Vista) sees Vista's data
@@ -82,7 +83,7 @@ select pg_temp.expect((select count(*) from job_team(:job)) = 2, 'admin sees who
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
 select pg_temp.expect((select count(*) from clients) + (select count(*) from estimates) + (select count(*) from jobs)
   + (select count(*) from expenses) + (select count(*) from payments) + (select count(*) from job_totals)
-  + (select count(*) from job_assignments) + (select count(*) from job_team(:job)) = 0, 'worker sees no business tables');
+  + (select count(*) from job_assignments) + (select count(*) from job_team(:job)) + (select count(*) from expense_receipts) = 0, 'worker sees no business tables');
 select pg_temp.expect((select count(*) from worker_schedule(:'vista')) = 1, 'worker sees the job on the schedule');
 select pg_temp.expect((select my_payout_cents from worker_schedule(:'vista')) = 40000, 'worker sees only his own payout');
 select pg_temp.expect((select address || '|' || scope from worker_schedule(:'vista')) = '12 Oak St|Cabinets', 'worker sees address and scope');
@@ -112,6 +113,12 @@ select pg_temp.expect((select count(*) from job_totals) + (select count(*) from 
 select pg_temp.expect((select count(*) from organizations) = 1, 'other org sees only its own organization');
 select pg_temp.expect((select count(*) from worker_schedule(:'vista')) = 0, 'other org cannot read the schedule');
 select pg_temp.expect((select count(*) from crew_jobs(:'vista')) = 0, 'other org cannot read crew jobs');
+select pg_temp.expect((select count(*) from expense_receipts) = 0, 'other org sees no receipts');
+do $$ begin
+  insert into expense_receipts (expense_id, org_id, data, content_type) values (1, (select id from organizations), '\xffd8ff', 'image/jpeg');
+  raise exception 'should fail';
+exception when foreign_key_violation or insufficient_privilege or check_violation or unique_violation then null; end $$;
+select pg_temp.expect(true, 'cannot attach a receipt to another org''s expense');
 update clients set name = 'hacked'; delete from payments;
 do $$ begin insert into clients (org_id, name) select id, 'x' from organizations where name = 'Vista Artisans';
   if found then raise exception 'should fail'; end if; end $$;

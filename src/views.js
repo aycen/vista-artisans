@@ -210,6 +210,21 @@ input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:blo
 .cal-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin:-4px 4px 4px}
 .cal-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
 @media (hover:hover){a.cal-day:hover{background:var(--surface-2)}}
+.view-switch{margin:0 0 12px}
+.seg a{flex:1;min-height:36px;border-radius:9px;display:grid;place-items:center;color:var(--text-2);font-weight:600;font-size:14px}
+.seg a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.wk-day{display:flex;gap:12px;padding:10px 6px;border-top:1px solid var(--line)}
+.wk-day:first-of-type{border-top:0}
+.wk-date{width:44px;flex:none;text-align:center;color:var(--text-2)}
+.wk-date span{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.wk-date strong{display:block;font-size:20px;color:var(--text);font-variant-numeric:tabular-nums}
+.wk-day.today .wk-date strong{color:var(--accent)}
+.wk-items{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;justify-content:center}
+.wk-item{display:block;padding:7px 10px;border-radius:10px;background:var(--surface-2);color:var(--text);font-weight:600;font-size:14px;border-left:4px solid var(--amber);min-width:0}
+.wk-item small{display:block;font-weight:400;color:var(--text-2);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wk-item.in_progress{border-left-color:var(--blue)} .wk-item.completed{border-left-color:var(--green)}
+.wk-item.visit{border-left-color:var(--accent);background:var(--accent-soft)}
+.wk-none{color:var(--text-3);font-size:14px;padding:8px 0}
 table.lines{width:100%;border-collapse:collapse}
 table.lines td,table.lines th{padding:12px 16px;text-align:left;font-size:15px}
 table.lines th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:600}
@@ -308,6 +323,7 @@ const ICONS = {
   team: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   calendar: '<rect x="3" y="4.5" width="18" height="16.5" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
   chev: '<path d="m9 6 6 6-6 6"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/>',
@@ -797,12 +813,17 @@ function crewJobsPage({ jobs, cal, flash }) {
   const [y, m, d] = cal.day.split('-').map(Number);
   const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
   const dayJobs = jobs.filter((j) => onDay(j, cal.day));
+  const legend = html`<div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
+    <span><i style="background:var(--green)"></i>Completed</span></div>`;
+  const week = cal.view === 'week';
   return layout('Jobs', html`
-  ${calendar({ ...cal, base: '/schedule' })}
-  <div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
-    <span><i style="background:var(--green)"></i>Completed</span></div>
-  <h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
-  ${crewList(dayJobs, 'Nothing scheduled for you this day.')}
+  ${viewSwitch('/schedule', week ? 'week' : 'month', cal.day)}
+  ${week ? weekView({ day: cal.day, today: cal.today, base: '/schedule',
+    items: (dd) => jobs.filter((j) => onDay(j, dd)).map((j) => ({ href: `/schedule/${j.job_id}`, cls: j.status, title: j.project_name, sub: j.address || j.client_name })) })
+    : calendar({ ...cal, base: '/schedule' })}
+  ${legend}
+  ${week ? '' : html`<h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
+  ${crewList(dayJobs, 'Nothing scheduled for you this day.')}`}
   <h2>Open jobs</h2>${crewList(jobs.filter((j) => j.status !== 'completed'), 'No open jobs assigned to you.')}
   <h2>Completed</h2>${crewList(jobs.filter((j) => j.status === 'completed'), 'No completed jobs yet.')}`, { flash, sub: 'Jobs you\'re assigned to' });
 }
@@ -979,7 +1000,6 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
         <div>${input('visit_time', 'Time', values, errors, { type: 'time' })}</div>
       </div>
       <div class="hint">Optional. Puts the estimate visit on your calendar.</div>
-      ${textarea('scope', 'Scope of work', values, errors, { placeholder: 'What the job includes…' })}
       <label for="status">Status</label>
       <select id="status" name="status">${options(ESTIMATE_STATUS, values.status)}</select>
     </div>
@@ -987,7 +1007,8 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
     ${errors.items ? html`<div class="field-error" style="margin:0 4px 8px">${errors.items}</div>` : ''}
     ${errors.options ? html`<div class="field-error" style="margin:0 4px 8px">${errors.options}</div>` : ''}
     <p class="hint" style="margin:0 4px 8px">Want to offer choices? Put an option name like <strong>Good</strong>, <strong>Better</strong> or <strong>Best</strong> on lines;
-      the client picks one when approving. Lines with no option are included in every choice.</p>
+      the client picks one when approving. Lines with no option are included in every choice.
+      The descriptions also become the job's scope of work.</p>
     <datalist id="option-names"><option value="Good"><option value="Better"><option value="Best"></datalist>
     <div class="form-card" style="padding-top:6px">
       <div id="items">${all.map((it, i) => itemRow(it, errors[`item_${i}`]))}</div>
@@ -1150,7 +1171,6 @@ function estimatePage({ estimate, client, items, totalCents, job, options = [], 
     ${estimate.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(estimate.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Job address</div><div class="t">${estimate.address}</div></div></a>` : ''}
     ${estimate.visit_date ? html`<a class="li" href="/jobs?day=${estimate.visit_date}"><span class="icon-bubble">${icon('calendar')}</span><div class="main-t"><div class="s">Appointment</div><div class="t" id="appointment">${fmtDate(estimate.visit_date)}${estimate.visit_time ? ` at ${fmtTime(estimate.visit_time)}` : ''}</div></div>${chev()}</a>` : ''}
   </div>
-  <h2>Scope of work</h2><div class="card pre">${estimate.scope || html`<span class="muted">—</span>`}</div>
   <h2>Line items</h2>
   <div class="card flush"><table class="lines">
     ${groups.length && shared.length ? html`<tbody><tr class="grp"><td colspan="2">Included in every option</td></tr></tbody>` : ''}
@@ -1165,7 +1185,7 @@ function estimatePage({ estimate, client, items, totalCents, job, options = [], 
     ${locked ? '' : html`<a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
     <a class="btn danger" href="/estimates/${estimate.id}/delete">Delete</a>`}</div>
   ${emailHistory(emails)}
-  <p class="hint">The PDF and the client's page show your company profile, the client, scope and line items. Your internal cost and profit are never included.</p>
+  <p class="hint">The PDF and the client's page show your company profile, the client and line items. Your internal cost and profit are never included.</p>
   <script>${raw(COPY_LINK_JS)}</script>`,
   { flash, back: { href: '/estimates', label: 'Estimates' } });
 }
@@ -1214,7 +1234,6 @@ function publicEstimatePage({ estimate, company, hasLogo, client, items, totals,
     <div class="hint" style="margin-top:10px">${company.name} will be in touch to schedule the work.</div>
   </div>` : ''}
   ${estimate.status === 'declined' && open ? html`<div class="notice">You declined this estimate. Changed your mind? You can still approve it below.</div>` : ''}
-  ${estimate.scope ? html`<h2>Scope of work</h2><div class="card pre">${estimate.scope}</div>` : ''}
   <form method="post" action="${base}/approve" id="approve-form" novalidate>
   ${groups.length ? html`
     ${shared.length ? html`<h2>Included in every option</h2><div class="card flush"><table class="lines"><tbody>${itemRows(shared)}</tbody></table></div>` : ''}
@@ -1320,20 +1339,64 @@ function calendar({ month, day, today, byDay, base = '/jobs' }) {
   </div>`;
 }
 
+// Month / Week switch above the calendar.
+const viewSwitch = (base, view, day) => html`<div class="seg view-switch" role="tablist" aria-label="Calendar view">
+  <a href="${base}?day=${day}" class="${view === 'week' ? '' : 'on'}" role="tab" aria-selected="${view === 'week' ? 'false' : 'true'}">Month</a>
+  <a href="${base}?view=week&day=${day}" class="${view === 'week' ? 'on' : ''}" role="tab" aria-selected="${view === 'week' ? 'true' : 'false'}">Week</a></div>`;
+
+// One week (Sunday first), each day listing what's on it. items(day) returns [{ href, cls, title, sub }].
+function weekView({ day, today, base, items }) {
+  const start = addDays(day, -new Date(day + 'T00:00:00Z').getUTCDay());
+  const end = addDays(start, 6);
+  const [sy, sm, sd] = start.split('-').map(Number); const [ey, em, ed] = end.split('-').map(Number);
+  const label = `${MONTHS[sm - 1]} ${sd}${sy !== ey ? `, ${sy}` : ''} – ${em !== sm ? `${MONTHS[em - 1]} ` : ''}${ed}, ${ey}`;
+  const thisWeek = today >= start && today <= end;
+  return html`<div class="cal" id="week">
+    <div class="cal-head">
+      <a class="prev" href="${base}?view=week&day=${addDays(start, -7)}" aria-label="Previous week">${icon('chev', 'sm')}</a>
+      <strong>${label}</strong>
+      <span class="row" style="gap:6px">${thisWeek ? '' : html`<a class="today-link" href="${base}?view=week">Today</a>`}
+        <a href="${base}?view=week&day=${addDays(start, 7)}" aria-label="Next week">${icon('chev', 'sm')}</a></span>
+    </div>
+    ${[0, 1, 2, 3, 4, 5, 6].map((i) => {
+      const d = addDays(start, i); const list = items(d);
+      return html`<div class="wk-day ${d === today ? 'today' : ''}" data-day="${d}">
+        <div class="wk-date"><span>${DOW[i]}</span><strong>${Number(d.slice(8))}</strong></div>
+        <div class="wk-items">${list.length ? list.map((x) => html`<a class="wk-item ${x.cls}" href="${x.href}">${x.title}<small>${x.sub}</small></a>`)
+          : html`<span class="wk-none">—</span>`}</div></div>`;
+    })}
+  </div>`;
+}
+
 function jobsPage({ jobs, status, cal }) {
   const [y, m, d] = cal.day.split('-').map(Number);
   const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
+  const legend = html`<div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
+    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate appointment</span></div>`;
+  if (cal.view === 'week') {
+    const items = (d) => [
+      ...cal.weekVisits.filter((e) => e.visit_date === d).map((e) => ({ href: `/estimates/${e.id}`, cls: 'visit',
+        title: `${e.visit_time ? `${fmtTime(e.visit_time)} · ` : ''}Estimate: ${e.project_name}`, sub: `${e.client_name}${e.address ? ` · ${e.address}` : ''}` })),
+      ...cal.weekJobs.filter((j) => j.start_date <= d && (j.end_date || j.start_date) >= d).map((j) => ({ href: `/jobs/${j.id}`, cls: j.status,
+        title: j.project_name, sub: `${j.client_name}${j.address ? ` · ${j.address}` : ''}` })),
+    ];
+    return layout('Jobs', html`
+    ${viewSwitch('/jobs', 'week', cal.day)}
+    ${weekView({ day: cal.day, today: cal.today, base: '/jobs', items })}
+    ${legend}
+    <h2>All jobs</h2>
+    ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
+  }
   return layout('Jobs', html`
+  ${viewSwitch('/jobs', 'month', cal.day)}
   ${calendar(cal)}
-  <div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
-    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate appointment</span></div>
+  ${legend}
   <h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
   ${cal.dayVisits?.length ? html`<div class="list" id="day-visits">${cal.dayVisits.map((e) => html`<a class="li" href="/estimates/${e.id}">
     <span class="icon-bubble" style="background:var(--accent-soft);color:var(--accent)">${icon('file')}</span>
     <div class="main-t"><div class="t">${e.visit_time ? `${fmtTime(e.visit_time)} · ` : ''}Estimate: ${e.project_name}</div>
       <div class="s">${e.client_name}${e.address ? ` · ${e.address}` : ''}</div></div>${pill(e.status, ESTIMATE_STATUS)}${chev()}</a>`)}</div>` : ''}
   ${cal.dayJobs.length || !cal.dayVisits?.length ? jobList(cal.dayJobs, 'No jobs scheduled this day.') : ''}
-  <div class="actions"><a class="btn secondary sm" href="/estimates/new?date=${cal.day}">${icon('plus')}Estimate appointment this day</a></div>
   <h2>All jobs</h2>
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
@@ -1400,8 +1463,10 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
   <form method="post" action="/jobs/${job.id}/expenses" class="form-card" novalidate>
     <div class="two stack"><div>${input('description', 'Expense description', ef.values, ef.errors, { required: true })}</div>
     <div>${input('amount', 'Amount ($)', ef.values, ef.errors, { required: true, inputmode: 'decimal' })}</div></div>
+    ${receiptField(ef.errors)}
     <div class="form-actions"><button type="submit" class="secondary">Add expense</button></div>
   </form>
+  <script>${raw(RECEIPT_JS)}</script>
 
   <h2>Invoices</h2>
   ${invoiceSection(job, client, invoices, invoicing, vf)}
@@ -1456,11 +1521,49 @@ function invoiceSection(job, client, invoices, invoicing, vf) {
 }
 const plainCents = (c) => `${Math.floor(c / 100)}.${String(c % 100).padStart(2, '0')}`;
 
+const receiptField = (errors, current) => html`<label for="receipt-file">Receipt</label>
+  <div class="row receipt-pick" style="align-items:center;gap:10px">
+    <label class="btn sm secondary" for="receipt-file" style="margin:0;color:var(--accent)">${icon('camera')}${current ? 'Replace' : 'Add photo or PDF'}</label>
+    <span class="muted receipt-name" style="font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${current || ''}</span>
+  </div>
+  <input type="file" id="receipt-file" accept="image/*,application/pdf" style="display:none">
+  <input type="hidden" name="receipt_data" id="receipt_data" value=""><input type="hidden" name="receipt_name" id="receipt_name" value="">
+  ${fieldErr(errors, 'receipt')}`;
+
+// Photos are shrunk in the browser (longest side 1600px, JPEG) before sending; PDFs go as they are, up to 5 MB.
+const RECEIPT_JS = `
+(function () {
+  var file = document.getElementById('receipt-file'); if (!file) return;
+  var form = file.form || file.closest('form');
+  function done(data, name) {
+    document.getElementById('receipt_data').value = data; document.getElementById('receipt_name').value = name;
+    document.querySelector('.receipt-name').textContent = name;
+  }
+  file.addEventListener('change', function () {
+    var f = file.files[0]; if (!f) return;
+    if (f.type === 'application/pdf') {
+      if (f.size > 5 * 1024 * 1024) { alert('That PDF is over 5 MB. Try a smaller file or a photo.'); file.value = ''; return; }
+      var rd = new FileReader(); rd.onload = function () { done(rd.result, f.name); }; rd.readAsDataURL(f); return;
+    }
+    var img = new Image();
+    img.onload = function () {
+      var scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+      var c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      var ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+      done(c.toDataURL('image/jpeg', 0.82), (f.name || 'receipt').replace(/\\.[^.]+$/, '') + '.jpg');
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = function () { alert('That file could not be read. Use a photo (JPG or PNG) or a PDF.'); file.value = ''; };
+    img.src = URL.createObjectURL(f);
+  });
+})();`;
+
 function entryList(rows, kind, title, empty) {
   if (!rows.length) return html`<div class="empty">${empty}</div>`;
   return html`<div class="list">${rows.map((r) => html`<div class="li">
     <div class="main-t"><div class="t">${title(r)}</div>
-      <div class="s"><a href="/${kind}/${r.id}/edit">Edit</a> · <a href="/${kind}/${r.id}/delete">Delete</a></div></div>
+      <div class="s">${r.has_receipt ? html`<a href="/expenses/${r.id}/receipt" target="_blank" rel="noopener" class="receipt-link">${icon('file', 'sm')}Receipt</a> · ` : ''}<a href="/${kind}/${r.id}/edit">Edit</a> · <a href="/${kind}/${r.id}/delete">Delete</a></div></div>
     <div class="r"><span class="amt">${fmt(r.amount_cents)}</span></div>
   </div>`)}</div>`;
 }
@@ -1474,9 +1577,12 @@ function entryFormPage({ kind, entry, job, values, errors = {} }) {
       ${isExpense ? input('description', 'Description', values, errors, { required: true }) : ''}
       ${input('amount', 'Amount ($)', values, errors, { required: true, inputmode: 'decimal' })}
       ${isExpense ? '' : input('paid_on', 'Date received', values, errors, { type: 'date', required: true })}
+      ${isExpense ? html`${receiptField(errors, entry.has_receipt ? 'Receipt attached' : '')}
+        ${entry.has_receipt ? html`<div class="row" style="gap:14px;margin-top:8px"><a href="/expenses/${entry.id}/receipt" target="_blank" rel="noopener">View receipt</a>
+          <label style="margin:0;display:flex;gap:6px;align-items:center;font-weight:500"><input type="checkbox" name="remove_receipt" value="1" style="width:18px;min-height:0;height:18px">Remove receipt</label></div>` : ''}` : ''}
     </div>
     <div class="form-actions"><a class="btn secondary" href="/jobs/${job.id}">Cancel</a><button type="submit">Save</button></div>
-  </form>`, { back: { href: `/jobs/${job.id}`, label: job.project_name }, sub: html`For ${job.project_name}` });
+  </form>${isExpense ? html`<script>${raw(RECEIPT_JS)}</script>` : ''}`, { back: { href: `/jobs/${job.id}`, label: job.project_name }, sub: html`For ${job.project_name}` });
 }
 
 function confirmPage({ title, message, action, cancelHref, button = 'Yes, delete it' }) {

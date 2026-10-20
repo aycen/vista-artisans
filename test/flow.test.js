@@ -195,7 +195,7 @@ test('full workflow', async () => {
   // Job carries client, address, scope and approved price
   r = await getPage(`/jobs/${jobId}`);
   assert.match(r.body, /Jane Rivera/); assert.match(r.body, /12 Oak St, Austin TX/);
-  assert.match(r.body, /Replace cabinets and counters/);
+  assert.match(r.body, /• Cabinets\n• Labor hours/, 'scope of work is the line item descriptions');
   assert.equal(stat(r.body, 'contract'), '$4,552.50');
   assert.match(r.body, /\(provisional\)/);
 
@@ -952,4 +952,59 @@ test('crew overview counts completed jobs; light and dark appearance', async () 
   assert.match((await getPage('/')).body, /data-theme="dark"/);
   await post('/account/theme', { theme: 'system' });
   assert.match((await getPage('/')).body, /<html lang="en">/);
+});
+
+test('week view, scope from line items with options, expense receipts', async () => {
+  as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
+  const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
+  const jane = (await dbClient.query("SELECT id FROM clients WHERE org_id = $1 AND name = 'Jane Rivera'", [vista])).rows[0].id;
+
+  // Week view: Sunday to Saturday around the chosen day, with jobs and estimate appointments; no "appointment this day" button
+  let page = (await getPage('/jobs?view=week&day=2026-12-03')).body;
+  assert.match(page, /id="week"/); assert.match(page, /Nov 29 – Dec 5, 2026/);
+  assert.match(page, /data-day="2026-12-03"[\s\S]*?Estimate: Garage door/);
+  assert.match(page, /href="\/jobs\?view=week(&amp;|&)day=2026-12-06"/); assert.doesNotMatch(page, /appointment this day/);
+  assert.doesNotMatch((await getPage('/jobs?day=2026-12-03')).body, /appointment this day/);
+
+  // Scope: every option until one is chosen, then shared lines plus the chosen option; the job copies it
+  let r = await post('/estimates', [['client_id', String(jane)], ['project_name', 'Bath'], ['status', 'sent'], ['deposit_percent', '0'],
+    ['item_desc', 'Demo'], ['item_qty', '1'], ['item_price', '500'], ['item_option', ''],
+    ['item_desc', 'Tile shower'], ['item_qty', '1'], ['item_price', '4000'], ['item_option', 'Good'],
+    ['item_desc', 'Stone shower'], ['item_qty', '1'], ['item_price', '7000'], ['item_option', 'Best']]);
+  const bath = idFrom(r.location);
+  const scope = async () => (await dbClient.query('SELECT scope FROM estimates WHERE id = $1', [bath])).rows[0].scope;
+  assert.equal(await scope(), '• Demo\n• Good: Tile shower\n• Best: Stone shower');
+  await post(`/estimates/${bath}/status`, { status: 'approved', chosen_option: 'Best' });
+  assert.equal(await scope(), '• Demo\n• Stone shower');
+  const job = idFrom((await post(`/estimates/${bath}/convert`, {})).location);
+  assert.equal((await dbClient.query('SELECT scope FROM jobs WHERE id = $1', [job])).rows[0].scope, '• Demo\n• Stone shower');
+
+  // Receipts: a photo or PDF on an expense, viewable, replaceable and removable; anything else is refused
+  const jpg = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).toString('base64')}`;
+  const pdf = `data:application/pdf;base64,${Buffer.from('%PDF-1.4 receipt').toString('base64')}`;
+  r = await post(`/jobs/${job}/expenses`, { description: 'Tile', amount: '320', receipt_data: 'data:text/html;base64,PGI+', receipt_name: 'x.html' });
+  assert.equal(r.status, 422); assert.match(r.body, /photo \(JPG or PNG\) or a PDF/);
+  r = await post(`/jobs/${job}/expenses`, { description: 'Tile', amount: '320', receipt_data: `data:image/jpeg;base64,${Buffer.from('<svg onload=alert(1)>').toString('base64')}` });
+  assert.equal(r.status, 422, 'the file contents must match');
+  r = await post(`/jobs/${job}/expenses`, { description: 'Tile', amount: '320', receipt_data: jpg, receipt_name: 'tile.jpg' });
+  assert.equal(r.status, 303);
+  const exp = (await dbClient.query("SELECT id FROM expenses WHERE job_id = $1 AND description = 'Tile'", [job])).rows[0].id;
+  page = (await getPage(`/jobs/${job}`)).body;
+  assert.match(page, new RegExp(`href="/expenses/${exp}/receipt"`));
+  r = await getPage(`/expenses/${exp}/receipt`);
+  assert.equal(r.status, 200); assert.equal(r.type, 'image/jpeg');
+  // A big PDF (about 4 MB) fits; replacing it keeps one receipt
+  const bigPdf = `data:application/pdf;base64,${Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(4_000_000, 32)]).toString('base64')}`;
+  r = await post(`/expenses/${exp}`, { description: 'Tile', amount: '320', receipt_data: bigPdf, receipt_name: 'invoice.pdf' });
+  assert.equal(r.status, 303);
+  r = await getPage(`/expenses/${exp}/receipt`); assert.equal(r.type, 'application/pdf');
+  r = await post(`/expenses/${exp}`, { description: 'Tile', amount: '320', receipt_data: pdf });
+  assert.equal((await dbClient.query('SELECT count(*)::int AS n FROM expense_receipts WHERE expense_id = $1', [exp])).rows[0].n, 1);
+  r = await post(`/expenses/${exp}`, { description: 'Tile', amount: '320', remove_receipt: '1' });
+  assert.equal((await getPage(`/expenses/${exp}/receipt`)).status, 404);
+  // Other companies and crew can't see receipts
+  await post(`/expenses/${exp}`, { description: 'Tile', amount: '320', receipt_data: jpg });
+  as('bob'); assert.equal((await getPage(`/expenses/${exp}/receipt`)).status, 404);
+  as('dave'); assert.equal((await getPage(`/expenses/${exp}/receipt`)).status, 404);
+  assert.match((await getPage('/schedule?view=week')).body, /id="week"/);
 });

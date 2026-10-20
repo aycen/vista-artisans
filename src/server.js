@@ -29,12 +29,12 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(
 const SAVE_FAILED = { _save: 'Could not save because of a server error. Your entries are still on this page; please try again.' };
 const hasErrors = (e) => Object.keys(e).length > 0;
 
-function readBody(req) {
+function readBody(req, limit = 1_000_000) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > 1_000_000) { reject(Object.assign(new Error('Body too large'), { status: 413 })); req.destroy(); return; }
+      if (size > limit) { reject(Object.assign(new Error('Body too large'), { status: 413 })); req.destroy(); return; }
       chunks.push(c);
     });
     req.on('end', () => resolve(new URLSearchParams(Buffer.concat(chunks).toString('utf8'))));
@@ -149,6 +149,25 @@ function validateExpense(f) {
   if (amt.error) errors.amount = amt.error;
   return { values, errors, clean: { description, amount: amt.value } };
 }
+// A receipt arrives as a data URL: photos are shrunk to JPEG in the browser, PDFs are sent as they are (5 MB at most).
+const RECEIPT_MAX = 5 * 1024 * 1024;
+const RECEIPT_BODY = 8_000_000; // base64 makes a 5 MB file about 6.7 MB
+function parseReceipt(f) {
+  if (!f.receipt_data) return {};
+  const mm = /^data:(image\/jpeg|image\/png|application\/pdf);base64,([A-Za-z0-9+/=]+)$/.exec(f.receipt_data);
+  const buf = mm ? Buffer.from(mm[2], 'base64') : null;
+  const type = !buf ? null
+    : buf[0] === 0xff && buf[1] === 0xd8 ? 'image/jpeg'
+    : buf.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) ? 'image/png'
+    : buf.subarray(0, 5).toString('latin1') === '%PDF-' ? 'application/pdf' : null;
+  if (!type) return { error: 'The receipt must be a photo (JPG or PNG) or a PDF.' };
+  if (buf.length > RECEIPT_MAX) return { error: 'The receipt is too large. Use a file under 5 MB.' };
+  return { receipt: { data: buf, type, name: str(f.receipt_name, 200) } };
+}
+const saveReceipt = (db, org, expenseId, r) => db.run(`INSERT INTO expense_receipts (expense_id, org_id, data, content_type, filename)
+  VALUES (?, ?, ?, ?, ?) ON CONFLICT (expense_id) DO UPDATE SET data = excluded.data, content_type = excluded.content_type,
+  filename = excluded.filename, created_at = now()`, expenseId, org, r.data, r.type, r.name);
+
 function validatePayment(amount, paidOn) {
   const errors = {};
   const amt = parseMoney(amount, 'Payment amount', { allowZero: false });
@@ -183,7 +202,8 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
   return page(status, v.jobPage({
     job, ...extra,
     client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id),
-    expenses: await db.all('SELECT * FROM expenses WHERE job_id = ? ORDER BY id', id),
+    expenses: await db.all(`SELECT expenses.*, EXISTS (SELECT 1 FROM expense_receipts r WHERE r.expense_id = expenses.id) AS has_receipt
+      FROM expenses WHERE job_id = ? ORDER BY id`, id),
     payments: await db.all(`SELECT payments.*, invoices.number AS invoice_number FROM payments
       LEFT JOIN invoices ON invoices.payment_id = payments.id WHERE payments.job_id = ? ORDER BY payments.paid_on, payments.id`, id),
     crew: await db.all('SELECT * FROM job_team(?)', id),
@@ -209,6 +229,15 @@ async function renderEstimate(db, org, id, extra = {}, status = 200) {
   }));
 }
 
+// The scope of work is the line item descriptions, one per line: shared items plus the chosen option
+// (or every option, labelled, until the client picks one). The job and work order copy it when the estimate is converted.
+const refreshScope = (db, estimateId) => db.run(`UPDATE estimates e SET scope = coalesce((
+    SELECT string_agg('• ' || CASE WHEN li.option_name <> '' AND e.chosen_option IS NULL THEN li.option_name || ': ' ELSE '' END || li.description,
+      E'\n' ORDER BY li.position)
+    FROM line_items li WHERE li.estimate_id = e.id
+      AND (li.option_name = '' OR e.chosen_option IS NULL OR li.option_name = e.chosen_option)), '')
+  WHERE e.id = ? AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.estimate_id = e.id)`, estimateId);
+
 async function saveEstimate(db, org, estimateId, values, clean) {
   let clientId = Number(values.client_id);
   if (clean.newClient) {
@@ -232,6 +261,7 @@ async function saveEstimate(db, org, estimateId, values, clean) {
     await db.run(`INSERT INTO line_items (org_id, estimate_id, position, description, qty_hundredths, unit_price_cents, option_name)
       VALUES (?, ?, ?, ?, ?, ?, ?)`, org, estimateId, i, it.desc, it.qty, it.price, it.option);
   }
+  await refreshScope(db, estimateId);
   return estimateId;
 }
 
@@ -384,6 +414,7 @@ route('POST', '/estimates/:id/status', async ({ db, org, id, form }) => {
   }
   await db.run('UPDATE estimates SET status = ?, chosen_option = ?, updated_at = now() WHERE id = ?',
     status, status === 'approved' && options.length ? chosen : null, id);
+  await refreshScope(db, id);
   return redirect(`/estimates/${id}?msg=Status+updated`);
 });
 // Emailing the estimate to the client: a link to the online approval page.
@@ -446,7 +477,17 @@ route('GET', '/jobs', async ({ db, org, url }) => {
     ORDER BY estimates.visit_time NULLS LAST, estimates.id`, org.org_id, day);
   const dayJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.start_date <= ?::date
     AND coalesce(jobs.end_date, jobs.start_date) >= ?::date ORDER BY jobs.start_date, jobs.id`, org.org_id, day, day)).map(withJobMath);
-  return ok(v.jobsPage({ jobs, status, cal: { month, day, today, byDay, dayJobs, dayVisits } }));
+  const view = url.searchParams.get('view') === 'week' ? 'week' : 'month';
+  let weekJobs = []; let weekVisits = [];
+  if (view === 'week') {
+    // The week (Sunday to Saturday) that holds the chosen day.
+    const ws = (await db.get('SELECT (?::date - extract(dow FROM ?::date)::int)::text AS d', day, day)).d;
+    weekJobs = await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.start_date <= ?::date + 6
+      AND coalesce(jobs.end_date, jobs.start_date) >= ?::date ORDER BY jobs.start_date, jobs.id`, org.org_id, ws, ws);
+    weekVisits = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND estimates.visit_date BETWEEN ?::date AND ?::date + 6
+      ORDER BY estimates.visit_date, estimates.visit_time NULLS LAST, estimates.id`, org.org_id, ws, ws);
+  }
+  return ok(v.jobsPage({ jobs, status, cal: { month, day, today, byDay, dayJobs, dayVisits, view, weekJobs, weekVisits } }));
 });
 route('GET', '/jobs/:id', ({ db, org, id, url }) => renderJob(db, org.org_id, id, { flash: url.searchParams.get('msg') }));
 route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
@@ -469,12 +510,25 @@ route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
 });
 route('POST', '/jobs/:id/expenses', async ({ db, org, id, form }) => {
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
-  const { values, errors, clean } = validateExpense(formObj(form));
+  const f = formObj(form);
+  const { values, errors, clean } = validateExpense(f);
+  const rc = parseReceipt(f);
+  if (rc.error) errors.receipt = rc.error;
   if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { expense: { values, errors } } }, 422);
-  const r = await attempt(db, () => db.run('INSERT INTO expenses (org_id, job_id, description, amount_cents) VALUES (?, ?, ?, ?)',
-    org.org_id, id, clean.description, clean.amount));
+  const r = await attempt(db, async () => {
+    const ex = await db.run('INSERT INTO expenses (org_id, job_id, description, amount_cents) VALUES (?, ?, ?, ?) RETURNING id',
+      org.org_id, id, clean.description, clean.amount);
+    if (rc.receipt) await saveReceipt(db, org.org_id, ex.id, rc.receipt);
+  });
   if (r.error) { console.error(r.error); return renderJob(db, org.org_id, id, { forms: { expense: { values, errors: SAVE_FAILED } } }, 500); }
   return redirect(`/jobs/${id}?msg=Expense+added`);
+}, { maxBody: RECEIPT_BODY });
+route('GET', '/expenses/:id/receipt', async ({ db, org, id }) => {
+  const rc = await db.get('SELECT data, content_type, filename FROM expense_receipts WHERE expense_id = ? AND org_id = ?', id, org.org_id);
+  if (!rc) return notFound();
+  const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'application/pdf': 'pdf' }[rc.content_type];
+  const name = (rc.filename || `receipt-${id}.${ext}`).replace(/[^\w.\- ]+/g, '_');
+  return { status: 200, headers: { 'Content-Type': rc.content_type, 'Content-Disposition': `inline; filename="${name}"` }, body: rc.data };
 });
 route('POST', '/jobs/:id/payments', async ({ db, org, id, form }) => {
   const f = formObj(form);
@@ -590,7 +644,8 @@ route('POST', '/jobs/:id/assignments/remove', async ({ db, org, id, url }) => {
 // Expense / payment correction and deletion
 for (const kind of ['expenses', 'payments']) {
   const load = async (db, org, id) => {
-    const entry = await db.get(`SELECT * FROM ${kind} WHERE id = ? AND org_id = ?`, id, org.org_id);
+    const entry = await db.get(`SELECT *${kind === 'expenses' ? ', EXISTS (SELECT 1 FROM expense_receipts r WHERE r.expense_id = expenses.id) AS has_receipt' : ''}
+      FROM ${kind} WHERE id = ? AND org_id = ?`, id, org.org_id);
     return entry && { entry, job: await db.get('SELECT * FROM jobs WHERE id = ?', entry.job_id) };
   };
   route('GET', `/${kind}/:id/edit`, async ({ db, org, id }) => {
@@ -602,15 +657,22 @@ for (const kind of ['expenses', 'payments']) {
     const f = formObj(form);
     const found = await load(db, org, id); if (!found) return notFound();
     let values; let errors; let clean;
-    if (kind === 'expenses') ({ values, errors, clean } = validateExpense(f));
-    else { values = { amount: f.amount ?? '', paid_on: f.paid_on ?? '' }; ({ errors, clean } = validatePayment(values.amount, values.paid_on)); }
+    let rc = {};
+    if (kind === 'expenses') {
+      ({ values, errors, clean } = validateExpense(f));
+      rc = parseReceipt(f);
+      if (rc.error) errors.receipt = rc.error;
+    } else { values = { amount: f.amount ?? '', paid_on: f.paid_on ?? '' }; ({ errors, clean } = validatePayment(values.amount, values.paid_on)); }
     if (hasErrors(errors)) return page(422, v.entryFormPage({ kind, ...found, values, errors }));
-    const r = await attempt(db, () => (kind === 'expenses'
-      ? db.run('UPDATE expenses SET description = ?, amount_cents = ? WHERE id = ?', clean.description, clean.amount, id)
-      : db.run('UPDATE payments SET amount_cents = ?, paid_on = ? WHERE id = ?', clean.amount, clean.paidOn, id)));
+    const r = await attempt(db, async () => {
+      if (kind !== 'expenses') return db.run('UPDATE payments SET amount_cents = ?, paid_on = ? WHERE id = ?', clean.amount, clean.paidOn, id);
+      await db.run('UPDATE expenses SET description = ?, amount_cents = ? WHERE id = ?', clean.description, clean.amount, id);
+      if (rc.receipt) await saveReceipt(db, org.org_id, id, rc.receipt);
+      else if (f.remove_receipt) await db.run('DELETE FROM expense_receipts WHERE expense_id = ?', id);
+    });
     if (r.error) { console.error(r.error); return page(500, v.entryFormPage({ kind, ...found, values, errors: SAVE_FAILED })); }
     return redirect(`/jobs/${found.job.id}?msg=Entry+updated`);
-  });
+  }, { maxBody: RECEIPT_BODY });
   route('GET', `/${kind}/:id/delete`, async ({ db, org, id }) => {
     const found = await load(db, org, id); if (!found) return notFound();
     return ok(v.confirmDeletePage({ kind, ...found }));
@@ -647,7 +709,8 @@ route('GET', '/schedule', async ({ db, org, url }) => {
       (byDay[d.toISOString().slice(0, 10)] ||= []).push(j.status);
     }
   }
-  return ok(v.crewJobsPage({ jobs, cal: { month: day.slice(0, 7), day, today, byDay }, flash: url.searchParams.get('msg') }));
+  const view = url.searchParams.get('view') === 'week' ? 'week' : 'month';
+  return ok(v.crewJobsPage({ jobs, cal: { month: day.slice(0, 7), day, today, byDay, view }, flash: url.searchParams.get('msg') }));
 }, { worker: true });
 route('GET', '/schedule/:id', async ({ db, org, id }) => {
   const job = org.role === 'admin' ? await db.get('SELECT * FROM worker_schedule(?) WHERE job_id = ?', org.org_id, id)
@@ -1146,7 +1209,7 @@ async function health() {
         to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles,
         to_regclass('public.invoices') IS NOT NULL AS invoices,
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
-        to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew`);
+        to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1154,6 +1217,7 @@ async function health() {
       if (!r.rows[0].plans) throw new Error('Run supabase/migrations/0007_profiles_and_plans.sql in the Supabase SQL Editor.');
       if (!r.rows[0].emails) throw new Error('Run supabase/migrations/0008_estimate_approval_and_emails.sql in the Supabase SQL Editor.');
       if (!r.rows[0].crew) throw new Error('Run supabase/migrations/0010_crew_jobs.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].receipts) throw new Error('Run supabase/migrations/0011_expense_receipts.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1278,6 +1342,7 @@ async function publicEstimate(req, url) {
       signer_ip = ?, signer_agent = ?, decline_reason = NULL, updated_at = now() WHERE id = ?`,
     totals.options.length ? values.option : null, values.signer_name, values.signature || null, clientIp(req),
     str(req.headers['user-agent'], 300), e.id);
+    await refreshScope(db, e.id);
     const jobId = (await db.get('SELECT convert_estimate_to_job(?) AS id', e.id)).id;
     const client = await db.get('SELECT * FROM clients WHERE id = ?', e.client_id);
     const total = (await db.get('SELECT estimate_total(?) AS t', e.id)).t;
@@ -1350,7 +1415,7 @@ async function handle(req, res) {
 
   const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
   if (!r) return notFound();
-  const form = req.method === 'POST' ? await readBody(req) : null;
+  const form = req.method === 'POST' ? await readBody(req, r.maxBody) : null;
   const m = url.pathname.match(r.re);
 
   const result = await asUser(user.id, async (db) => {

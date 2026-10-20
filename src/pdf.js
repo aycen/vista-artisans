@@ -105,7 +105,6 @@ function estimatePdf({ company, estimate, client, items, totalCents, options = [
       ['Prepared for', [client.name, estimate.address || client.address, client.phone, client.email]],
       ['Project', [estimate.project_name]],
     ]);
-    section(doc, 'Scope of work', estimate.scope);
 
     // Line items table
     const left = doc.page.margins.left;
