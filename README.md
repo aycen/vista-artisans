@@ -127,24 +127,6 @@ DNS records to add), create an API key with sending access, and set `RESEND_API_
 `estimates@keystonefsm.com`) in Render. Emails show each company's name as the sender and replies go to the company's
 own email. Links in automatic emails use `APP_URL`, or Render's `RENDER_EXTERNAL_URL`.
 
-## QuickBooks Online
-
-Each company connects its own QuickBooks from **Company profile → QuickBooks**. Keystone only pushes:
-clients become customers, each job becomes one invoice for its contract total once it's completed or paid on,
-and every payment on those jobs is applied to its invoice. Only jobs from the company's "send from" date on are
-sent, so work already in QuickBooks isn't entered twice. Sync runs every 15 minutes, on connect, and on "Sync now".
-Edits or deletions after something was sent are not sent again.
-
-1. At developer.intuit.com, create an app with the **Accounting** scope.
-2. Add these redirect URIs (Keys & credentials): `https://vista-artisans.onrender.com/settings/quickbooks/callback`
-   and, once the custom domain works, `https://keystonefsm.com/settings/quickbooks/callback`.
-3. In Render, set `QBO_CLIENT_ID` and `QBO_CLIENT_SECRET`. With **development** keys, also set
-   `QBO_ENVIRONMENT=sandbox` (they only work with Intuit sandbox companies). For real companies, complete Intuit's
-   production questionnaire, switch to the **production** keys and remove `QBO_ENVIRONMENT`.
-4. Run `supabase/migrations/0014_quickbooks.sql`.
-
-Tokens live in `qbo_connections`, which only the server (database owner) can read or write.
-
 ## Tests
 
 Both test suites run against a local Postgres 16 server, not your Supabase project.

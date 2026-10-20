@@ -489,16 +489,14 @@ const LEGAL = {
     <ul>
       <li><strong>Account details:</strong> your email address and password (stored by our sign-in provider, never in plain text), and the optional name, phone number and ZIP code you add.</li>
       <li><strong>Business records you enter:</strong> your company profile and logo, clients and their contact details, estimates, line items, signatures, jobs, schedules, crew assignments and pay, time clock entries, expenses, receipts, job photos, invoices and payments.</li>
-      <li><strong>Information from connected services:</strong> if you connect Stripe, we store your Stripe account ID and invoice and payment records; card and bank details are handled by Stripe and never reach us. If you connect QuickBooks Online, we store access tokens for your QuickBooks company, its name, and the IDs of the records we create there.</li>
+      <li><strong>Information from connected services:</strong> if you connect Stripe, we store your Stripe account ID and invoice and payment records; card and bank details are handled by Stripe and never reach us.</li>
       <li><strong>Technical data:</strong> sign-in cookies, and basic server logs (such as IP address and pages requested) used to keep the service secure and working.</li>
     </ul>
     <h2>How we use it</h2>
-    <p>Only to provide and improve Keystone: to show your records to the people on your team, send estimates, invoices and reminder emails you set up, process subscription billing, sync to the accounting software you connect, keep accounts secure, and answer support requests. We don't sell personal information or use it for advertising.</p>
-    <h2>QuickBooks Online</h2>
-    <p>When you connect QuickBooks, Keystone creates customers, a service item, invoices and payments in the QuickBooks company you choose, and reads only what it needs to do that (your company name, existing customers with the same name, and an income account). It doesn't read or change your other QuickBooks data. You can disconnect at any time from Company profile in Keystone or from QuickBooks; we then delete the stored tokens. Records already sent stay in your QuickBooks.</p>
+    <p>Only to provide and improve Keystone: to show your records to the people on your team, send estimates, invoices and reminder emails you set up, process subscription billing, keep accounts secure, and answer support requests. We don't sell personal information or use it for advertising.</p>
     <h2>Who can see your data</h2>
     <p>Each company's records are kept separate and are visible only to that company's team. Admins see everything in their company; crew see only the jobs assigned to them and their own pay. Your clients see only the estimates and invoices you send them.</p>
-    <p>We share data with the service providers that run Keystone, only as needed: Supabase (database and sign-in), Render (hosting), Stripe (payments and subscriptions), Resend (email delivery) and Intuit (QuickBooks, if you connect it). We may disclose information if the law requires it.</p>
+    <p>We share data with the service providers that run Keystone, only as needed: Supabase (database and sign-in), Render (hosting), Stripe (payments and subscriptions) and Resend (email delivery). We may disclose information if the law requires it.</p>
     <h2>Keeping and deleting data</h2>
     <p>We keep your records while your company uses Keystone. To delete your account or your company's data, email us and we'll remove it within 30 days, except where we must keep records by law (for example, billing records).</p>
     <h2>Security</h2>
@@ -518,7 +516,7 @@ const LEGAL = {
     <h2>Plans and billing</h2>
     <p>Some features need a paid plan. Paid plans renew automatically each month or year until cancelled, and are billed through Stripe. You can cancel any time from Plan &amp; billing; your plan stays active until the end of the paid period. Except where the law requires, payments aren't refunded. We'll give notice before changing prices.</p>
     <h2>Connected services</h2>
-    <p>Stripe, QuickBooks Online and other services you connect are provided by their own companies under their own terms. Payments you collect go to your own Stripe account; Keystone isn't a party to them. We aren't responsible for those services' availability or for changes you make in them.</p>
+    <p>Stripe and other services you connect are provided by their own companies under their own terms. Payments you collect go to your own Stripe account; Keystone isn't a party to them. We aren't responsible for those services' availability or for changes you make in them.</p>
     <h2>No warranty</h2>
     <p>Keystone is provided "as is". We work to keep it accurate and available but don't promise it will be error-free or uninterrupted. Totals, profit figures and synced records are tools to help you; check them before relying on them for tax, payroll or legal purposes.</p>
     <h2>Limitation of liability</h2>
@@ -639,7 +637,7 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
 }
 
 // ---------- Company profile ----------
-function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, quickbooks = null, emailValues = null, emailErrors = {}, emailEnabled = false }) {
+function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false }) {
   return layout('Company profile', html`
   ${errorBox(errors)}
   <form method="post" action="/settings" id="settings-form" novalidate>
@@ -674,7 +672,6 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit">Save profile</button></div>
   </form>
   ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
-  ${quickbooks ? html`<h2>QuickBooks</h2><div class="card" id="quickbooks">${quickbooksCard(quickbooks)}</div>` : ''}
   ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled) : ''}
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
 }
@@ -712,37 +709,6 @@ function paymentsCard({ configured, testMode, account }) {
     <div class="hint">${account ? 'Stripe still needs some details before you can send invoices.'
       : 'Connect a Stripe account to email clients invoices they can pay by card or bank transfer. Money goes straight to your account; Stripe charges its standard fees per payment.'}</div>
     <form method="post" action="/settings/stripe/connect" style="margin-top:12px"><button type="submit" class="block" id="connect-stripe">${account ? 'Continue Stripe setup' : 'Connect Stripe'}</button></form>`;
-}
-
-function quickbooksCard({ configured, sandbox, today, status }) {
-  if (!configured) {
-    return html`<strong>Not available yet.</strong><div class="hint">QuickBooks hasn't been switched on for this app. See "QuickBooks Online" in the README.</div>`;
-  }
-  const what = 'Keystone sends each job as an invoice once it\'s completed or paid on, along with its payments. Clients are added as customers. Nothing in QuickBooks is changed or deleted.';
-  if (!status) {
-    return html`<strong>Connect QuickBooks Online${sandbox ? ' (sandbox)' : ''}</strong>
-      <div class="hint">${what}</div>
-      <form method="post" action="/settings/quickbooks/connect" style="margin-top:12px" novalidate>
-        ${input('sync_from', 'Send jobs and payments from', { sync_from: today }, {}, { type: 'date', hint: 'Anything earlier is left out, so work already in QuickBooks isn\'t entered twice.' })}
-        <button type="submit" class="block" id="connect-quickbooks">Connect QuickBooks</button></form>`;
-  }
-  return html`<div class="row" style="justify-content:space-between"><strong>${status.company_name || 'QuickBooks'} connected${sandbox ? ' (sandbox)' : ''}</strong>
-      <span class="pill ${status.last_error ? 'declined' : 'completed'}">${status.last_error ? 'Needs attention' : 'Syncing'}</span></div>
-    <div class="hint">${what} It checks every 15 minutes.</div>
-    ${status.last_error ? html`<div class="notice" id="qbo-error" style="margin-top:10px">${status.last_error}</div>` : ''}
-    <div class="list" style="margin-top:12px">
-      <div class="kv"><span class="k">Jobs sent</span><span class="v" id="qbo-jobs">${status.synced_jobs}</span></div>
-      <div class="kv"><span class="k">Payments sent</span><span class="v" id="qbo-payments">${status.synced_payments}</span></div>
-      <div class="kv"><span class="k">Last sync</span><span class="v">${status.last_synced_at ? html`<span data-local-time="${status.last_synced_at}">${fmtDate(status.last_synced_at.slice(0, 10))}</span>` : 'Not yet'}</span></div>
-    </div>
-    <form method="post" action="/settings/quickbooks/sync" style="margin-top:12px"><button type="submit" class="block" id="qbo-sync">Sync now</button></form>
-    <form method="post" action="/settings/quickbooks/sync-from" class="row" style="gap:8px;align-items:flex-end;margin-top:12px" novalidate>
-      <div style="flex:1;min-width:0">${input('sync_from', 'Send jobs and payments from', { sync_from: status.sync_from }, {}, { type: 'date' })}</div>
-      <button type="submit" class="secondary" style="margin-bottom:2px">Save</button></form>
-    <div class="hint">If you change or delete a job or payment after it's been sent, make the same change in QuickBooks.</div>
-    <form method="post" action="/settings/quickbooks/disconnect" data-confirm="Disconnect QuickBooks? Nothing already sent is removed." style="margin-top:12px">
-      <button type="submit" class="link" style="color:var(--red)">Disconnect QuickBooks</button></form>
-    <script>${raw(`document.querySelectorAll('[data-local-time]').forEach(function(e){e.textContent=new Date(e.dataset.localTime).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})});`)}</script>`;
 }
 
 // Shrinks the chosen image in the browser (max 800px wide) and sends it as a data URL.

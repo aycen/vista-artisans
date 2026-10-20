@@ -27,11 +27,6 @@ services:
         sync: false
       - key: STRIPE_BILLING_WEBHOOK_SECRET
         sync: false
-      # QuickBooks Online (optional). See README: "QuickBooks Online".
-      - key: QBO_CLIENT_ID
-        sync: false
-      - key: QBO_CLIENT_SECRET
-        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

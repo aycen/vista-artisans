@@ -11,7 +11,6 @@ const pg = require('pg');
 const { startFakeAuth } = require('./fake-supabase-auth');
 const { fmt } = require('../src/money');
 const { startFakeStripe } = require('./fake-stripe');
-const { startFakeQuickbooks } = require('./fake-quickbooks');
 const { startFakeEmail } = require('./fake-email');
 const crypto = require('node:crypto');
 
@@ -1113,81 +1112,4 @@ test('privacy policy and terms are public', async () => {
     const r = await getPage(p, { auth: false }); assert.equal(r.status, 200); assert.match(r.body, new RegExp(`<h1>${t}</h1>`));
   }
   assert.match((await getPage('/signup', { auth: false })).body, /href="\/terms"/);
-});
-
-test('QuickBooks: connect, push customers, job invoices and payments once, refresh tokens, disconnect', async () => {
-  const fq = await startFakeQuickbooks('qbo-client', 'qbo-secret');
-  const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
-  fq.state.customers.push({ Id: '5', DisplayName: 'Jane Rivera' }); // already in their QuickBooks
-  as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
-  assert.match((await getPage('/settings')).body, /QuickBooks hasn(&#39;|')t been switched on/);
-  await stop();
-  await start(fq.env);
-  const waitFor = async (fn, what) => {
-    for (let i = 0; i < 60; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 150)); }
-    assert.fail(`timed out waiting for ${what}`);
-  };
-  try {
-    let page = (await getPage('/settings')).body;
-    assert.match(page, /id="connect-quickbooks"/);
-    let r = await post('/settings/quickbooks/connect', { sync_from: '2020-01-01' });
-    assert.equal(r.status, 303);
-    const auth = new URL(r.location);
-    assert.equal(auth.origin + auth.pathname, 'https://appcenter.intuit.test/connect/oauth2');
-    assert.equal(auth.searchParams.get('scope'), 'com.intuit.quickbooks.accounting');
-    assert.match(auth.searchParams.get('redirect_uri'), /\/settings\/quickbooks\/callback$/);
-    const state = auth.searchParams.get('state');
-    // A forged or replayed sign-in is refused
-    r = await getPage(`/settings/quickbooks/callback?code=x&state=wrong&realmId=123`); assert.equal(r.status, 400);
-    as('dave'); assert.equal((await post('/settings/quickbooks/connect', {})).status, 404); as('alice');
-    r = await post('/settings/quickbooks/connect', { sync_from: '2020-01-01' }); // fresh state cookie
-    const state2 = new URL(r.location).searchParams.get('state'); assert.notEqual(state2, state);
-    fq.issueCode('code-1');
-    r = await getPage(`/settings/quickbooks/callback?code=code-1&state=${state2}&realmId=4620816365`);
-    assert.equal(r.status, 303); assert.match(r.location, /QuickBooks\+connected/);
-    await waitFor(async () => (await dbClient.query('SELECT last_synced_at FROM qbo_connections WHERE org_id = $1', [vista])).rows[0]?.last_synced_at, 'first sync');
-
-    // Every Vista job that's completed or paid on became one invoice for its contract total; payments are applied to them
-    const expectJobs = (await dbClient.query(`SELECT j.id, j.contract_cents FROM jobs j WHERE j.org_id = $1
-      AND (j.status = 'completed' OR EXISTS (SELECT 1 FROM payments p WHERE p.job_id = j.id)) ORDER BY j.id`, [vista])).rows;
-    assert.ok(expectJobs.length >= 2);
-    assert.equal(fq.state.invoices.length, expectJobs.length);
-    for (const j of expectJobs) {
-      const inv = fq.state.invoices.find((i) => i.PrivateNote.startsWith(`Keystone job #${j.id}:`));
-      assert.ok(inv, `invoice for job ${j.id}`); assert.equal(Math.round(inv.TotalAmt * 100), Number(j.contract_cents));
-    }
-    const payCount = Number((await dbClient.query('SELECT count(*) FROM payments p JOIN jobs j ON j.id = p.job_id WHERE j.org_id = $1', [vista])).rows[0].count);
-    assert.equal(fq.state.payments.length, payCount);
-    assert.equal(fq.state.customers.filter((c) => c.DisplayName === 'Jane Rivera').length, 1, 'existing customer reused');
-    assert.equal(fq.state.items.length, 1); assert.equal(fq.state.items[0].Name, 'Keystone job');
-    page = (await getPage('/settings')).body;
-    assert.match(page, /Books 4620816365 connected/); assert.match(page, new RegExp(`id="qbo-jobs">${expectJobs.length}<`));
-
-    // Nothing is sent twice; a new payment goes on the next sync
-    r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /Sent 0 jobs and 0 payments/);
-    const deck = (await dbClient.query("SELECT j.id FROM jobs j WHERE j.org_id = $1 AND j.project_name = 'Deck'", [vista])).rows[0].id;
-    await post(`/jobs/${deck}/payments`, { payment_amount: '10', paid_on: '2026-10-20' });
-    r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /Sent (0|1) jobs? and 1 payment/);
-
-    // Expired access token: refreshed automatically. Revoked sign-in: shown on the settings page.
-    await dbClient.query("UPDATE qbo_connections SET access_expires_at = now() - interval '1 hour' WHERE org_id = $1", [vista]);
-    const before = fq.state.requests.filter((x) => x === 'POST /token').length;
-    await post(`/jobs/${deck}/payments`, { payment_amount: '5', paid_on: '2026-10-20' });
-    r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /Sent 0 jobs and 1 payment/);
-    assert.equal(fq.state.requests.filter((x) => x === 'POST /token').length, before + 1);
-    await dbClient.query("UPDATE qbo_connections SET access_expires_at = now() - interval '1 hour', refresh_token = 'gone' WHERE org_id = $1", [vista]);
-    await post(`/jobs/${deck}/payments`, { payment_amount: '5', paid_on: '2026-10-20' });
-    r = await post('/settings/quickbooks/sync', {}); assert.match(decodeURIComponent(r.location), /sync stopped/);
-    assert.match((await getPage('/settings')).body, /id="qbo-error"[^>]*>QuickBooks sign-in expired/);
-
-    // Tokens are never readable through the app's database role; other companies see nothing
-    as('bob'); await post('/login', { email: 'bob@other.test', password: 'bob-password' });
-    assert.match((await getPage('/settings')).body, /id="connect-quickbooks"/);
-    as('alice');
-    r = await post('/settings/quickbooks/disconnect', {}); assert.match(r.location, /disconnected/);
-    assert.deepEqual(fq.state.revoked, ['gone']);
-    assert.equal(Number((await dbClient.query('SELECT count(*) FROM qbo_connections')).rows[0].count), 0);
-  } finally {
-    fq.close();
-  }
 });
