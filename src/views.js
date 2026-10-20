@@ -729,9 +729,7 @@ function quickbooksCard({ configured, sandbox, today, status }) {
   return html`<div class="row" style="justify-content:space-between"><strong>${status.company_name || 'QuickBooks'} connected${sandbox ? ' (sandbox)' : ''}</strong>
       <span class="pill ${status.last_error ? 'declined' : 'completed'}">${status.last_error ? 'Needs attention' : 'Syncing'}</span></div>
     <div class="hint">${what} It checks every 15 minutes.</div>
-    ${status.last_error ? html`<div class="notice" id="qbo-error" style="margin-top:10px">${status.last_error}</div>
-      <form method="post" action="/settings/quickbooks/connect" style="margin-top:10px"><input type="hidden" name="sync_from" value="${status.sync_from}">
-        <button type="submit" class="block" id="qbo-reconnect">Reconnect QuickBooks</button></form>` : ''}
+    ${status.last_error ? html`<div class="notice" id="qbo-error" style="margin-top:10px">${status.last_error}</div>` : ''}
     <div class="list" style="margin-top:12px">
       <div class="kv"><span class="k">Jobs sent</span><span class="v" id="qbo-jobs">${status.synced_jobs}</span></div>
       <div class="kv"><span class="k">Payments sent</span><span class="v" id="qbo-payments">${status.synced_payments}</span></div>

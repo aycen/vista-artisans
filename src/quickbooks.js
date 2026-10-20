@@ -10,27 +10,9 @@ const CLIENT_ID = process.env.QBO_CLIENT_ID || '';
 const CLIENT_SECRET = process.env.QBO_CLIENT_SECRET || '';
 const SANDBOX = process.env.QBO_ENVIRONMENT === 'sandbox';
 const API = (process.env.QBO_API_BASE || (SANDBOX ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com')).replace(/\/$/, '');
-// OAuth endpoints come from Intuit's discovery document (cached for a day); these are the fallbacks.
-const DISCOVERY_URL = SANDBOX ? 'https://developer.api.intuit.com/.well-known/openid_sandbox_configuration'
-  : 'https://developer.api.intuit.com/.well-known/openid_configuration';
-const FALLBACK = { authorization_endpoint: 'https://appcenter.intuit.com/connect/oauth2',
-  token_endpoint: 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', revocation_endpoint: 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke' };
-const OVERRIDE = { authorization_endpoint: process.env.QBO_AUTH_URL, token_endpoint: process.env.QBO_TOKEN_URL, revocation_endpoint: process.env.QBO_REVOKE_URL };
-let discovered = null;
-async function endpoints() {
-  if (OVERRIDE.token_endpoint) return { ...FALLBACK, ...Object.fromEntries(Object.entries(OVERRIDE).filter(([, v]) => v)) };
-  if (!discovered || discovered.at < Date.now() - 86_400_000) {
-    try {
-      const d = await (await fetch(DISCOVERY_URL, { headers: { accept: 'application/json' } })).json();
-      if (!d.token_endpoint || !d.authorization_endpoint) throw new Error('incomplete');
-      discovered = { at: Date.now(), value: { ...FALLBACK, ...d } };
-    } catch (e) {
-      console.error('Intuit discovery document unavailable, using known endpoints:', e.message);
-      return discovered?.value || FALLBACK;
-    }
-  }
-  return discovered.value;
-}
+const TOKEN_URL = process.env.QBO_TOKEN_URL || 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+const REVOKE_URL = process.env.QBO_REVOKE_URL || 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke';
+const AUTH_URL = process.env.QBO_AUTH_URL || 'https://appcenter.intuit.com/connect/oauth2';
 const MINOR = 75;
 const ITEM_NAME = 'Keystone job';
 
@@ -39,26 +21,18 @@ const sandbox = () => SANDBOX;
 
 class QboError extends Error {}
 
-const authorizeUrl = async (state, redirectUri) => `${(await endpoints()).authorization_endpoint}?${new URLSearchParams({
+const authorizeUrl = (state, redirectUri) => `${AUTH_URL}?${new URLSearchParams({
   client_id: CLIENT_ID, response_type: 'code', scope: 'com.intuit.quickbooks.accounting', redirect_uri: redirectUri, state })}`;
 
-// Token requests are retried once on a network error or an Intuit server error; a refused grant is not retried.
-async function tokenCall(params, attempt = 1) {
-  let res;
-  try {
-    res = await fetch((await endpoints()).token_endpoint, {
-      method: 'POST',
-      headers: { authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
-        accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params).toString(),
-    });
-  } catch (e) {
-    if (attempt < 2) return tokenCall(params, attempt + 1);
-    throw new QboError(`Could not reach QuickBooks: ${e.message}`);
-  }
+async function tokenCall(params) {
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
+      accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params).toString(),
+  });
   const data = await res.json().catch(() => ({}));
-  if (res.status >= 500 && attempt < 2) return tokenCall(params, attempt + 1);
-  if (!res.ok) throw new QboError(data.error === 'invalid_grant' ? 'invalid_grant' : data.error_description || data.error || `QuickBooks sign-in failed (${res.status})`);
+  if (!res.ok) throw new QboError(data.error_description || data.error || `QuickBooks sign-in failed (${res.status})`);
   return data;
 }
 const tokenRow = (t) => ({
@@ -88,7 +62,7 @@ async function disconnect(orgId) {
   const conn = await load(orgId);
   if (!conn) return;
   try {
-    await fetch((await endpoints()).revocation_endpoint, { method: 'POST', body: JSON.stringify({ token: conn.refresh_token }),
+    await fetch(REVOKE_URL, { method: 'POST', body: JSON.stringify({ token: conn.refresh_token }),
       headers: { authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`, accept: 'application/json', 'content-type': 'application/json' } });
   } catch (e) { console.error('QuickBooks revoke failed:', e.message); }
   await pool.query('DELETE FROM qbo_connections WHERE org_id = $1', [orgId]);
@@ -96,8 +70,8 @@ async function disconnect(orgId) {
 
 const load = async (orgId) => (await pool.query('SELECT * FROM qbo_connections WHERE org_id = $1', [orgId])).rows[0];
 
-async function freshToken(conn, force = false) {
-  if (!force && new Date(conn.access_expires_at) > new Date()) return conn.access_token;
+async function freshToken(conn) {
+  if (new Date(conn.access_expires_at) > new Date()) return conn.access_token;
   const t = tokenRow(await tokenCall({ grant_type: 'refresh_token', refresh_token: conn.refresh_token }));
   await pool.query(`UPDATE qbo_connections SET access_token = $2, refresh_token = $3, access_expires_at = $4,
     refresh_expires_at = coalesce($5, refresh_expires_at) WHERE org_id = $1`,
@@ -106,15 +80,13 @@ async function freshToken(conn, force = false) {
   return t.access_token;
 }
 
-// An access token QuickBooks rejects early (401) is refreshed and the call retried once.
-async function api(conn, method, path, body, retried = false) {
+async function api(conn, method, path, body) {
   const sep = path.includes('?') ? '&' : '?';
   const res = await fetch(`${API}/v3/company/${encodeURIComponent(conn.realm_id)}/${path}${sep}minorversion=${MINOR}`, {
     method,
-    headers: { authorization: `Bearer ${await freshToken(conn, retried)}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { authorization: `Bearer ${await freshToken(conn)}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401 && !retried) return api(conn, method, path, body, true);
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.Fault) {
     const err = data.Fault?.Error?.[0] || data.fault?.error?.[0] || {};
@@ -239,7 +211,7 @@ async function syncOrg(orgId) {
     await pool.query("UPDATE qbo_connections SET last_synced_at = now(), last_error = '' WHERE org_id = $1", [orgId]);
   } catch (e) {
     console.error('QuickBooks sync failed:', e.message);
-    const msg = /invalid_grant/i.test(e.message) ? 'QuickBooks sign-in expired. Reconnect QuickBooks to keep syncing.' : String(e.message).slice(0, 500);
+    const msg = /invalid_grant/i.test(e.message) ? 'QuickBooks sign-in expired. Disconnect and connect again.' : String(e.message).slice(0, 500);
     await pool.query('UPDATE qbo_connections SET last_error = $2 WHERE org_id = $1', [orgId, msg]);
     sent.error = msg;
   } finally {
