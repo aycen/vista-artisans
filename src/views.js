@@ -19,12 +19,18 @@ const CSS = `
   --radius:16px;--radius-sm:12px;--shadow:0 1px 2px rgba(15,23,42,.04),0 4px 16px rgba(15,23,42,.06);
   --tabbar-h:64px;color-scheme:light;
 }
-@media (prefers-color-scheme:dark){:root{
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
   --bg:#0b0d14;--surface:#151823;--surface-2:#1b1f2c;--text:#eef1f7;--text-2:#a5adbf;--text-3:#6b7389;
   --line:#262b3a;--accent:#818cf8;--accent-2:#6366f1;--accent-soft:#232647;--on-accent:#0b0d14;
   --green:#34d399;--green-soft:#0f2a22;--amber:#fbbf24;--amber-soft:#2d2412;--red:#f87171;--red-soft:#321617;
   --blue:#60a5fa;--blue-soft:#14223a;--gray-soft:#20253a;--shadow:0 1px 2px rgba(0,0,0,.3);color-scheme:dark;
 }}
+:root[data-theme=dark]{
+  --bg:#0b0d14;--surface:#151823;--surface-2:#1b1f2c;--text:#eef1f7;--text-2:#a5adbf;--text-3:#6b7389;
+  --line:#262b3a;--accent:#818cf8;--accent-2:#6366f1;--accent-soft:#232647;--on-accent:#0b0d14;
+  --green:#34d399;--green-soft:#0f2a22;--amber:#fbbf24;--amber-soft:#2d2412;--red:#f87171;--red-soft:#321617;
+  --blue:#60a5fa;--blue-soft:#14223a;--gray-soft:#20253a;--shadow:0 1px 2px rgba(0,0,0,.3);color-scheme:dark;
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
@@ -70,6 +76,12 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:14px;letter-spacing:-.02em;
   background:linear-gradient(135deg,#4f46e5,#7c3aed 60%,#db2777)}
 .mark.lg{width:64px;height:64px;border-radius:18px;font-size:24px;margin:0 auto 14px;box-shadow:0 10px 30px rgba(79,70,229,.35)}
+.mark svg{width:100%;height:100%;display:block}
+
+/* Segmented control */
+.seg{display:flex;gap:4px;padding:4px;margin-top:12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.seg button{flex:1;min-height:40px;border:0;border-radius:9px;background:transparent;color:var(--text-2);font-weight:600;box-shadow:none}
+.seg button.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 
 /* Surfaces */
 .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:14px}
@@ -331,6 +343,8 @@ const fmtTime = (t) => { if (!t) return ''; const [h, m] = t.split(':').map(Numb
 const pill = (status, labels) => html`<span class="pill ${status}">${labels[status] || status}</span>`;
 
 // ---------- Layout ----------
+// The Keystone logo: the outline of an arch's keystone (same shape as public/icon.svg).
+const LOGO = raw('<svg viewBox="0 0 512 512" aria-hidden="true"><path d="M120 150 Q256 118 392 150 L340 372 Q256 356 172 372 Z" fill="none" stroke="#fff" stroke-width="52" stroke-linejoin="round"/></svg>');
 // The server fills <!--NAV--> (sidebar + tab bar) and <!--AVATAR--> for the signed-in user.
 function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle, docTitle } = {}) {
   return html`<!doctype html>
@@ -365,18 +379,18 @@ ${fab ? html`<a class="fab" href="${fab.href}">${icon('plus')}${fab.label}</a>` 
 }
 
 const ADMIN_TABS = [['/', 'Home', 'home'], ['/clients', 'Clients', 'users'], ['/estimates', 'Estimates', 'file'], ['/jobs', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
-const WORKER_TABS = [['/', 'Schedule', 'calendar'], ['/account', 'Account', 'account']];
-const activeTab = (path, href) => (href === '/' ? path === '/' || path.startsWith('/schedule') : path.startsWith(href));
+const CREW_TABS = [['/', 'Overview', 'home'], ['/schedule', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
+const activeTab = (path, href) => (href === '/' ? path === '/' : path.startsWith(href));
 
 function nav({ user, org, path = '/' }) {
-  const tabs = !org ? [['/account', 'Account', 'account']] : org.role === 'admin' ? ADMIN_TABS : WORKER_TABS;
+  const tabs = !org ? [['/account', 'Account', 'account']] : org.role === 'admin' ? ADMIN_TABS : CREW_TABS;
   const initial = initialOf(user);
   return {
     nav: html`<nav class="sidebar" aria-label="Main">
-      <a class="brand" href="/"><span class="mark">K</span>${org ? org.name : 'Keystone'}</a>
+      <a class="brand" href="/"><span class="mark">${LOGO}</span>${org ? org.name : 'Keystone'}</a>
       ${tabs.map(([href, label, ic]) => html`<a class="nav ${activeTab(path, href) ? 'on' : ''}" href="${href}">${icon(ic)}${label}</a>`)}
       <span class="grow"></span>
-      ${org && org.role === 'admin' ? html`<a class="nav ${path.startsWith('/account') ? 'on' : ''}" href="/account">${icon('account')}Account</a>` : ''}
+      ${org ? html`<a class="nav ${path.startsWith('/account') ? 'on' : ''}" href="/account">${icon('account')}Account</a>` : ''}
       <div class="who"><span class="avatar">${initial}</span><div style="min-width:0">${who(user)}<small>${org ? ROLES[org.role] : ''}</small></div></div>
     </nav>
     <nav class="tabbar" aria-label="Tabs">${tabs.map(([href, label, ic]) =>
@@ -413,7 +427,7 @@ const roleSelect = (name, selected, id) => html`<select name="${name}" ${id ? ra
 // ---------- Auth & onboarding ----------
 function authPage(title, sub, body) {
   return layout(title, html`<div class="auth">
-    <div class="mark lg">K</div>
+    <div class="mark lg">${LOGO}</div>
     <h1>${title}</h1><p class="sub">${sub}</p>
     ${body}
   </div>`, { bare: true });
@@ -468,7 +482,7 @@ function welcomePage({ errors = {}, values = {}, hasOrgs }) {
   </form>`, { sub: hasOrgs ? null : 'One last step before you start.', back: hasOrgs ? { href: '/account', label: 'Account' } : null });
 }
 
-function accountPage({ user, org, orgs, plan, values = {}, errors = {}, flash }) {
+function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = {}, flash }) {
   return layout('Account', html`
   <div class="list">
     <div class="li"><span class="avatar">${initialOf(user)}</span><div class="main-t"><div class="t">${who(user)}</div>
@@ -482,6 +496,13 @@ function accountPage({ user, org, orgs, plan, values = {}, errors = {}, flash })
     ${input('phone', 'Phone', values, errors, { type: 'tel', autocomplete: 'tel', inputmode: 'tel' })}
     ${input('zip', 'ZIP code', values, errors, { autocomplete: 'postal-code', inputmode: 'numeric' })}
     <div class="form-actions"><button type="submit" class="secondary">Save details</button></div>
+  </form>
+  <form method="post" action="/account/theme" class="form-card" id="appearance">
+    <h3>Appearance</h3>
+    <div class="hint">Saved on this device.</div>
+    <div class="seg" role="radiogroup" aria-label="Appearance">${[['', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) =>
+      html`<button type="submit" name="theme" value="${k || 'system'}" class="${theme === k ? 'on' : ''}" aria-pressed="${theme === k ? 'true' : 'false'}">${l}</button>`)}</div>
+    <div class="hint">Automatic follows your phone or computer's setting.</div>
   </form>
   ${orgs.length > 1 ? html`<h2>Switch company</h2><div class="list">${orgs.map((o) => html`
     <form method="post" action="/org/switch" class="li" style="margin:0">
@@ -677,14 +698,19 @@ function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, 
     <div class="hint">Share this with your crew. After creating an account, they enter it to join ${org.name} as crew.</div>
   </div>` : ''}
   <h2>People</h2>
-  <div class="list">${members.map((m) => html`<a class="li" href="/team/${m.user_id}">
+  <div class="list">${members.map((m) => (admin ? html`<a class="li" href="/team/${m.user_id}">
     <span class="avatar">${initialOf(m)}</span>
     <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
       <div class="s">${ROLES[m.role]} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}${m.full_name ? ` · ${m.email}` : ''}</div></div>
     <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
-  </a>`)}</div>
+  </a>` : html`<a class="li" href="mailto:${m.email}">
+    <span class="avatar">${initialOf(m)}</span>
+    <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
+      <div class="s">${ROLES[m.role]}${m.full_name ? ` · ${m.email}` : ''}</div></div>
+    <span class="icon-bubble">${icon('mail')}</span>
+  </a>`))}</div>
   <p class="hint"><strong>Admins</strong> see and manage everything, including money and the team.
-    <strong>Crew</strong> see only open jobs assigned to them: dates, address, scope of work and their own pay.</p>
+    <strong>Crew</strong> see only the jobs assigned to them (dates, address, scope of work and their own pay) and who is on the team.</p>
   ${admin ? html`<form method="post" action="/team/add" class="form-card" novalidate>
     <h3>Add by email</h3>
     <div class="hint">For someone who already has an account.</div>
@@ -730,17 +756,60 @@ function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
   { flash, back: { href: '/team', label: 'Team' } });
 }
 
-// ---------- Worker schedule ----------
+// ---------- Crew ----------
+// Crew see only jobs they're assigned to (from crew_jobs()): dates, address, scope, notes and their own pay.
+const crewRow = (j) => html`<a class="li" href="/schedule/${j.job_id}">
+  <span class="icon-bubble">${icon('calendar')}</span>
+  <div class="main-t"><div class="t">${j.project_name}</div>
+    <div class="s">${dateRange(j.start_date, j.end_date) || 'Not scheduled yet'} · ${j.address || j.client_name}</div></div>
+  <div class="r">${j.my_payout_cents == null ? '' : html`<span class="amt">${fmt(j.my_payout_cents)}</span>`}${pill(j.status, JOB_STATUS)}</div>
+  ${chev()}
+</a>`;
+const crewList = (list, empty) => (list.length ? html`<div class="list">${list.map(crewRow)}</div>` : html`<div class="empty">${empty}</div>`);
+const onDay = (j, d) => j.start_date && j.start_date <= d && (j.end_date || j.start_date) >= d;
+
+function crewHomePage({ jobs, today, year, flash }) {
+  const open = jobs.filter((j) => j.status !== 'completed');
+  const doneThisYear = jobs.filter((j) => j.status === 'completed' && j.completed_year === year);
+  const todays = open.filter((j) => onDay(j, today));
+  const next = todays[0] || open.find((j) => j.start_date && j.start_date > today) || open[0];
+  const later = open.filter((j) => !todays.includes(j));
+  const sum = (list) => list.reduce((t, j) => t + Number(j.my_payout_cents || 0), 0);
+  return layout('Overview', html`
+  <div class="hero" id="next-job">
+    <div class="k">${next && onDay(next, today) ? 'Today' : 'Next job'}</div>
+    ${next ? html`<a href="/schedule/${next.job_id}" style="color:inherit;display:block">
+      <div style="font-size:26px;font-weight:750;letter-spacing:-.02em;margin:4px 0 2px">${next.project_name}</div>
+      <div class="s">${dateRange(next.start_date, next.end_date) || 'Not scheduled yet'}${next.address ? ` · ${next.address}` : ''}</div></a>`
+    : html`<div style="font-size:22px;font-weight:700;margin:4px 0 2px">Nothing scheduled</div><div class="s">New jobs show here once you're assigned.</div>`}
+  </div>
+  <div class="stats four">
+    <div class="stat"><div class="k">Open jobs</div><div class="v" data-k="open-jobs">${open.length}</div></div>
+    <div class="stat"><div class="k">Pay on open jobs</div><div class="v" data-k="upcoming-pay">${fmt(sum(open))}</div></div>
+    <div class="stat"><div class="k">Jobs done in ${year}</div><div class="v" data-k="done-year">${doneThisYear.length}</div></div>
+    <div class="stat"><div class="k">Pay in ${year}</div><div class="v" data-k="pay-year">${fmt(sum(doneThisYear))}</div><div class="s">From completed jobs</div></div>
+  </div>
+  ${todays.length ? html`<h2>Today</h2>${crewList(todays, '')}` : ''}
+  <h2>Coming up</h2>${crewList(later, 'No other open jobs assigned to you.')}`, { flash, pageTitle: 'Overview' });
+}
+
+function crewJobsPage({ jobs, cal, flash }) {
+  const [y, m, d] = cal.day.split('-').map(Number);
+  const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
+  const dayJobs = jobs.filter((j) => onDay(j, cal.day));
+  return layout('Jobs', html`
+  ${calendar({ ...cal, base: '/schedule' })}
+  <div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
+    <span><i style="background:var(--green)"></i>Completed</span></div>
+  <h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
+  ${crewList(dayJobs, 'Nothing scheduled for you this day.')}
+  <h2>Open jobs</h2>${crewList(jobs.filter((j) => j.status !== 'completed'), 'No open jobs assigned to you.')}
+  <h2>Completed</h2>${crewList(jobs.filter((j) => j.status === 'completed'), 'No completed jobs yet.')}`, { flash, sub: 'Jobs you\'re assigned to' });
+}
+
+// Admins can open /schedule too: every open job, with their own pay where they're assigned.
 function schedulePage({ jobs, flash }) {
-  return layout('Schedule', jobs.length ? html`<div class="list">${jobs.map((j) => html`
-    <a class="li" href="/schedule/${j.job_id}">
-      <span class="icon-bubble">${icon('calendar')}</span>
-      <div class="main-t"><div class="t">${j.project_name}</div>
-        <div class="s">${dateRange(j.start_date, j.end_date) || 'Not scheduled yet'} · ${j.address || j.client_name}</div></div>
-      <div class="r">${j.my_payout_cents == null ? '' : html`<span class="amt">${fmt(j.my_payout_cents)}</span>`}${pill(j.status, JOB_STATUS)}</div>
-      ${chev()}
-    </a>`)}</div>`
-    : html`<div class="empty">No open jobs assigned to you.</div>`, { flash, sub: 'Your upcoming and active jobs' });
+  return layout('Schedule', crewList(jobs, 'No open jobs.'), { flash, sub: 'Open jobs' });
 }
 
 function scheduleJobPage({ job }) {
@@ -755,7 +824,7 @@ function scheduleJobPage({ job }) {
   </div>
   <h2>Scope of work</h2><div class="card pre">${job.scope || '—'}</div>
   ${job.notes ? html`<h2>Notes</h2><div class="card pre">${job.notes}</div>` : ''}`,
-  { back: { href: '/', label: 'Schedule' } });
+  { back: { href: '/schedule', label: 'Jobs' } });
 }
 
 // ---------- Home ----------
@@ -1221,7 +1290,7 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const LONG_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 // Month grid (Sunday first). byDay maps 'YYYY-MM-DD' -> job statuses on that day.
-function calendar({ month, day, today, byDay }) {
+function calendar({ month, day, today, byDay, base = '/jobs' }) {
   const first = month + '-01';
   const [y, m] = month.split('-').map(Number);
   const start = addDays(first, -new Date(first + 'T00:00:00Z').getUTCDay());
@@ -1234,17 +1303,17 @@ function calendar({ month, day, today, byDay }) {
   }
   return html`<div class="cal" id="calendar">
     <div class="cal-head">
-      <a class="prev" href="/jobs?month=${prevMonth}" aria-label="Previous month">${icon('chev', 'sm')}</a>
+      <a class="prev" href="${base}?month=${prevMonth}" aria-label="Previous month">${icon('chev', 'sm')}</a>
       <strong>${LONG_MONTHS[m - 1]} ${y}</strong>
-      <span class="row" style="gap:6px">${today.slice(0, 7) !== month || day !== today ? html`<a class="today-link" href="/jobs">Today</a>` : ''}
-        <a href="/jobs?month=${nextMonth}" aria-label="Next month">${icon('chev', 'sm')}</a></span>
+      <span class="row" style="gap:6px">${today.slice(0, 7) !== month || day !== today ? html`<a class="today-link" href="${base}">Today</a>` : ''}
+        <a href="${base}?month=${nextMonth}" aria-label="Next month">${icon('chev', 'sm')}</a></span>
     </div>
     <div class="cal-grid">
       ${DOW.map((d) => html`<div class="cal-dow">${d.slice(0, 1)}</div>`)}
       ${cells.map((d) => {
         const st = byDay[d] || [];
         const cls = [d.slice(0, 7) !== month ? 'out' : '', d === today ? 'today' : '', d === day ? 'sel' : ''].join(' ');
-        return html`<a class="cal-day ${cls}" href="/jobs?day=${d}" aria-label="${d}${st.length ? `, ${st.length} job${st.length > 1 ? 's' : ''}` : ''}">
+        return html`<a class="cal-day ${cls}" href="${base}?day=${d}" aria-label="${d}${st.length ? `, ${st.length} job${st.length > 1 ? 's' : ''}` : ''}">
           <span class="n">${Number(d.slice(8))}</span><span class="cal-dots">${st.slice(0, 3).map((x) => html`<i class="${x}"></i>`)}</span></a>`;
       })}
     </div>
@@ -1433,7 +1502,7 @@ function messagePage(title, message) {
 }
 
 module.exports = {
-  ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, welcomePage,
+  ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   accountPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };

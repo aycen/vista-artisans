@@ -86,6 +86,7 @@ select pg_temp.expect((select count(*) from clients) + (select count(*) from est
 select pg_temp.expect((select count(*) from worker_schedule(:'vista')) = 1, 'worker sees the job on the schedule');
 select pg_temp.expect((select my_payout_cents from worker_schedule(:'vista')) = 40000, 'worker sees only his own payout');
 select pg_temp.expect((select address || '|' || scope from worker_schedule(:'vista')) = '12 Oak St|Cabinets', 'worker sees address and scope');
+select pg_temp.expect((select count(*) || '|' || max(my_payout_cents) from crew_jobs(:'vista')) = '1|40000', 'crew_jobs lists only his own job and pay');
 do $$ begin perform add_member_by_email((select org_id from memberships limit 1), 'bob@other.test', 'admin');
   raise exception 'should fail'; exception when sqlstate 'VA001' then null; end $$;
 select pg_temp.expect(true, 'worker cannot add people to the org');
@@ -110,6 +111,7 @@ select pg_temp.expect((select count(*) from expenses) + (select count(*) from pa
 select pg_temp.expect((select count(*) from job_totals) + (select count(*) from estimate_totals) = 0, 'other org sees no totals');
 select pg_temp.expect((select count(*) from organizations) = 1, 'other org sees only its own organization');
 select pg_temp.expect((select count(*) from worker_schedule(:'vista')) = 0, 'other org cannot read the schedule');
+select pg_temp.expect((select count(*) from crew_jobs(:'vista')) = 0, 'other org cannot read crew jobs');
 update clients set name = 'hacked'; delete from payments;
 do $$ begin insert into clients (org_id, name) select id, 'x' from organizations where name = 'Vista Artisans';
   if found then raise exception 'should fail'; end if; end $$;

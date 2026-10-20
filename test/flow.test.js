@@ -389,8 +389,13 @@ test('full workflow', async () => {
   assert.equal((await dbClient.query('SELECT count(*)::int AS n FROM join_attempts')).rows[0].n, 1, 'failed attempt is counted');
   r = await post('/org/join', { code: code.toLowerCase() }); assert.equal(r.status, 303);
   page = (await getPage('/')).body;
-  assert.match(page, /Schedule/); assert.doesNotMatch(page, /id="month-revenue"/); assert.doesNotMatch(page, /join-code/);
-  assert.equal((await getPage('/team')).status, 404);
+  assert.match(page, /Overview/); assert.match(page, /Nothing scheduled/); assert.doesNotMatch(page, /id="month-revenue"/);
+  // Crew menu: Overview, Jobs, Team (no Clients or Estimates)
+  assert.match(page, /href="\/schedule"/); assert.match(page, /href="\/team"/);
+  assert.doesNotMatch(page, /href="\/clients"/); assert.doesNotMatch(page, /href="\/estimates"/);
+  page = (await getPage('/team')).body;
+  assert.match(page, /alice@vista\.test/); assert.doesNotMatch(page, /join-code/); assert.doesNotMatch(page, /\$/, 'crew see no pay on the team page');
+  assert.doesNotMatch(page, /href="\/team\//);
   // A new code stops the old one from working
   as('alice'); r = await post('/team/code', {}); assert.equal(r.status, 303);
   assert.notEqual((await getPage('/team')).body.match(/id="join-code">([^<]+)</)[1], code);
@@ -399,14 +404,18 @@ test('full workflow', async () => {
   // Dave (worker) sees only his assigned jobs: date, address, scope and his own pay; no other money, no other pages
   as('dave');
   page = (await getPage('/')).body;
-  assert.match(page, /Schedule/); assert.match(page, /Deck/); assert.match(page, /9 Elm Rd/);
+  assert.match(page, /Overview/); assert.match(page, /Deck/); assert.match(page, /9 Elm Rd/);
   assert.match(page, /datetime="2026-11-10"/); assert.match(page, /datetime="2026-11-12"/);
-  assert.match(page, /\$350\.00/); assert.equal((page.match(/\$/g) || []).length, 1, 'only his own pay is shown');
-  assert.doesNotMatch(page, /Kitchen remodel/);
+  assert.match(page, /data-k="upcoming-pay">\$350\.00</); assert.match(page, /data-k="open-jobs">1</);
+  assert.deepEqual([...new Set(page.match(/\$[\d,.]+/g))].sort(), ['$0.00', '$350.00'], 'only his own pay is shown');
+  assert.doesNotMatch(page, /Kitchen remodel/); assert.doesNotMatch(page, /id="month-revenue"/);
+  page = (await getPage('/schedule?day=2026-11-11')).body;
+  assert.match(page, /id="calendar"/); assert.match(page, /href="\/schedule\?day=2026-11-11"/);
+  assert.match(page, /id="day-jobs">Wed, Nov 11/); assert.match(page, /Deck/); assert.doesNotMatch(page, /Kitchen remodel/);
   page = (await getPage(`/schedule/${deckJob}`)).body;
   assert.match(page, /Deck/); assert.match(page, /Bring the long ladder/);
   assert.match(page, /data-k="my-pay">\$350\.00</); assert.equal((page.match(/\$/g) || []).length, 1);
-  for (const p of ['/clients', '/estimates', '/jobs', `/jobs/${deckJob}`, `/clients/${clientId}`, `/estimates/${deckId}`, '/team',
+  for (const p of ['/clients', '/estimates', '/jobs', `/jobs/${deckJob}`, `/clients/${clientId}`, `/estimates/${deckId}`, `/team/${await uid('carol@vista.test')}`,
     '/settings', '/settings/logo', `/estimates/${deckId}/pdf`, `/jobs/${deckJob}/work-order`]) {
     assert.equal((await getPage(p)).status, 404, `worker gets 404 on ${p}`);
   }
@@ -918,4 +927,29 @@ test('estimate address and appointment on the calendar, job address, client tota
   // "Crew" instead of "Worker"
   page = (await getPage('/team')).body;
   assert.match(page, /Crew ·/); assert.doesNotMatch(page, />Worker</);
+});
+
+test('crew overview counts completed jobs; light and dark appearance', async () => {
+  as('dave'); await post('/login', { email: 'dave@vista.test', password: 'dave-password' });
+  const deck = (await dbClient.query(`SELECT j.id FROM jobs j JOIN job_assignments a ON a.job_id = j.id
+    JOIN auth.users u ON u.id = a.user_id WHERE u.email = 'dave@vista.test' AND j.project_name = 'Deck'`)).rows[0].id;
+  await dbClient.query("UPDATE jobs SET status = 'completed', completed_at = now() WHERE id = $1", [deck]);
+  let page = (await getPage('/')).body;
+  assert.match(page, /data-k="done-year">1</); assert.match(page, /data-k="pay-year">\$350\.00</); assert.match(page, /data-k="open-jobs">0</);
+  page = (await getPage('/schedule')).body;
+  assert.match(page, /<h2>Completed<\/h2><div class="list">[\s\S]*Deck/);
+  assert.match((await getPage(`/schedule/${deck}`)).body, /Bring the long ladder/);
+
+  // Appearance: automatic by default; light or dark is remembered on this device
+  page = (await getPage('/account')).body;
+  assert.match(page, /<html lang="en">/); assert.match(page, /value="system" class="on"/);
+  let r = await post('/account/theme', { theme: 'light' }); assert.equal(r.status, 303);
+  page = (await getPage('/')).body;
+  assert.match(page, /<html lang="en" data-theme="light">/); assert.match(page, /<meta name="theme-color" content="#f3f4f8">/);
+  assert.doesNotMatch(page, /content="#0b0d14"/);
+  assert.match((await getPage('/account')).body, /value="light" class="on"/);
+  await post('/account/theme', { theme: 'dark' });
+  assert.match((await getPage('/')).body, /data-theme="dark"/);
+  await post('/account/theme', { theme: 'system' });
+  assert.match((await getPage('/')).body, /<html lang="en">/);
 });

@@ -13,6 +13,7 @@ const crypto = require('node:crypto');
 const PORT = Number(process.env.PORT || 3000);
 const APP_TIMEZONE = process.env.APP_TIMEZONE || 'America/Los_Angeles'; // decides which payments count as "this month"
 const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
+const CANONICAL = (() => { try { const u = new URL(process.env.APP_URL); return /\.onrender\.com$/i.test(u.hostname) ? null : u; } catch { return null; } })();
 
 // ---------- responses ----------
 // Handlers return a response; it is sent only after the request's database transaction commits.
@@ -53,6 +54,8 @@ const cookie = (name, value, maxAge) =>
   `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${COOKIE_SECURE ? '; Secure' : ''}`;
 const sessionCookies = (s) => [cookie('sa', s.access_token, 60 * 60 * 24 * 30), cookie('sr', s.refresh_token, 60 * 60 * 24 * 30)];
 const clearCookies = [cookie('sa', '', 0), cookie('sr', '', 0)];
+const THEMES = ['light', 'dark'];
+const themeOf = (req) => { const t = parseCookies(req).theme; return THEMES.includes(t) ? t : ''; };
 
 // Runs fn inside a savepoint so a failed save can be reported on the form without aborting the request.
 async function attempt(db, fn) {
@@ -239,7 +242,7 @@ const route = (method, pattern, handler, opts = {}) =>
   routes.push({ method, re: new RegExp('^' + pattern.replace(/:id/g, '(\\d{1,15})').replace(/:uid/g, '([0-9a-f-]{36})') + '$'), handler, uid: pattern.includes(':uid'), ...opts });
 
 route('GET', '/', async (ctx) => {
-  if (ctx.org.role !== 'admin') return schedule(ctx);
+  if (ctx.org.role !== 'admin') return crewHome(ctx);
   const { db, org, url } = ctx;
   const o = org.org_id;
   const openEstimates = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND (estimates.status IN ('draft', 'sent')
@@ -618,13 +621,36 @@ for (const kind of ['expenses', 'payments']) {
   });
 }
 
-// Worker schedule (admins can open it too)
-async function schedule({ db, org, url }) {
-  return ok(v.schedulePage({ jobs: await db.all('SELECT * FROM worker_schedule(?)', org.org_id), flash: url.searchParams.get('msg') }));
+// Crew: an overview and the jobs they're assigned to (open and completed), from crew_jobs().
+const crewJobs = (db, org) => db.all(`SELECT *, start_date::text AS start_date, end_date::text AS end_date,
+    to_char(completed_at AT TIME ZONE ?, 'YYYY') AS completed_year FROM crew_jobs(?)`, APP_TIMEZONE, org.org_id);
+const todayIn = async (db) => (await db.get('SELECT (now() AT TIME ZONE ?)::date::text AS d', APP_TIMEZONE)).d;
+async function crewHome({ db, org, url }) {
+  const today = await todayIn(db);
+  return ok(v.crewHomePage({ jobs: await crewJobs(db, org), today, year: today.slice(0, 4), flash: url.searchParams.get('msg') }));
 }
-route('GET', '/schedule', schedule, { worker: true });
+// Admins can open /schedule too: every open job (worker_schedule()).
+route('GET', '/schedule', async ({ db, org, url }) => {
+  if (org.role === 'admin') {
+    return ok(v.schedulePage({ jobs: await db.all('SELECT * FROM worker_schedule(?)', org.org_id), flash: url.searchParams.get('msg') }));
+  }
+  const jobs = await crewJobs(db, org);
+  const today = await todayIn(db);
+  const dayParam = url.searchParams.get('day'); const monthParam = url.searchParams.get('month');
+  const day = dayParam && isDate(dayParam) ? dayParam
+    : monthParam && /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam) ? (today.startsWith(monthParam) ? today : `${monthParam}-01`) : today;
+  const byDay = {};
+  for (const j of jobs.filter((x) => x.start_date)) {
+    const [a, b] = [j.start_date, j.end_date || j.start_date];
+    for (let d = new Date(`${a}T00:00:00Z`), n = 0; d.toISOString().slice(0, 10) <= b && n < 400; d.setUTCDate(d.getUTCDate() + 1), n++) {
+      (byDay[d.toISOString().slice(0, 10)] ||= []).push(j.status);
+    }
+  }
+  return ok(v.crewJobsPage({ jobs, cal: { month: day.slice(0, 7), day, today, byDay }, flash: url.searchParams.get('msg') }));
+}, { worker: true });
 route('GET', '/schedule/:id', async ({ db, org, id }) => {
-  const job = await db.get('SELECT * FROM worker_schedule(?) WHERE job_id = ?', org.org_id, id);
+  const job = org.role === 'admin' ? await db.get('SELECT * FROM worker_schedule(?) WHERE job_id = ?', org.org_id, id)
+    : (await crewJobs(db, org)).find((j) => Number(j.job_id) === id);
   return job ? ok(v.scheduleJobPage({ job })) : notFound();
 }, { worker: true });
 
@@ -673,6 +699,8 @@ route('POST', '/clients/:id/delete', async ({ db, org, id }) => {
 
 // Team
 async function renderTeam(db, org, user, extra = {}, status = 200) {
+  // Crew see who's on the team (names, roles, email), nothing about pay or the join code.
+  if (org.role !== 'admin') return page(status, v.teamPage({ org, members: await db.all('SELECT * FROM org_members(?)', org.org_id), me: user.id, ...extra }));
   const members = await db.all(`SELECT m.*,
       (SELECT count(*)::int FROM job_assignments a WHERE a.org_id = ? AND a.user_id = m.user_id) AS job_count,
       (SELECT coalesce(sum(a.payout_cents), 0) FROM job_assignments a JOIN jobs j ON j.id = a.job_id
@@ -682,7 +710,7 @@ async function renderTeam(db, org, user, extra = {}, status = 200) {
   const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
   return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, ...extra }));
 }
-route('GET', '/team', ({ db, org, user, url }) => renderTeam(db, org, user, { flash: url.searchParams.get('msg') }));
+route('GET', '/team', ({ db, org, user, url }) => renderTeam(db, org, user, { flash: url.searchParams.get('msg') }), { worker: true });
 route('POST', '/team/add', async ({ db, org, user, form }) => {
   const email = str(form.get('email'), 200);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return renderTeam(db, org, user, { values: { email, role: form.get('role') }, errors: { email: 'Enter a valid email address.' } }, 422);
@@ -874,7 +902,7 @@ route('GET', '/jobs/:id/work-order', async ({ db, org, id, url }) => {
 });
 
 // Joining or creating a company, and the account page (these work before the user belongs to one)
-const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile']);
+const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile', '/account/theme']);
 const orgCookie = (id) => cookie('org', id, 60 * 60 * 24 * 365);
 route('GET', '/welcome', ({ orgs }) => ok(v.welcomePage({ hasOrgs: orgs.length > 0 })), { worker: true });
 route('GET', '/org/new', () => redirect('/welcome'), { worker: true });
@@ -903,11 +931,16 @@ route('POST', '/org/switch', async ({ orgs, form }) => {
   if (!target) return notFound();
   return redirect('/', { 'Set-Cookie': orgCookie(target.org_id) });
 }, { worker: true });
-async function renderAccount({ db, user, org, orgs }, extra = {}, status = 200) {
+async function renderAccount({ req, db, user, org, orgs }, extra = {}, status = 200) {
   const profile = (await db.get('SELECT * FROM profiles WHERE user_id = ?', user.id)) || { full_name: '', phone: '', zip: '' };
   const plan = org && org.role === 'admin' ? (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p : null;
-  return page(status, v.accountPage({ user, org, orgs, plan, values: extra.values || profile, ...extra }));
+  return page(status, v.accountPage({ user, org, orgs, plan, theme: themeOf(req), values: extra.values || profile, ...extra }));
 }
+// Light or dark look, saved per device in a cookie; "system" follows the device setting.
+route('POST', '/account/theme', ({ form }) => {
+  const t = form.get('theme');
+  return redirect('/account?msg=Appearance+saved#appearance', { 'Set-Cookie': THEMES.includes(t) ? cookie('theme', t, 60 * 60 * 24 * 365) : cookie('theme', '', 0) });
+}, { worker: true });
 route('GET', '/account', (ctx) => renderAccount(ctx, { flash: ctx.url.searchParams.get('msg') }), { worker: true });
 route('POST', '/account/profile', async (ctx) => {
   const f = formObj(ctx.form);
@@ -1111,13 +1144,15 @@ async function health() {
       const r = await pool.query(`SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts,
         to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles,
         to_regclass('public.invoices') IS NOT NULL AS invoices,
-        to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails`);
+        to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
+        to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
       if (!r.rows[0].invoices) throw new Error('Run supabase/migrations/0006_invoices.sql in the Supabase SQL Editor.');
       if (!r.rows[0].plans) throw new Error('Run supabase/migrations/0007_profiles_and_plans.sql in the Supabase SQL Editor.');
       if (!r.rows[0].emails) throw new Error('Run supabase/migrations/0008_estimate_approval_and_emails.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].crew) throw new Error('Run supabase/migrations/0010_crew_jobs.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1281,6 +1316,13 @@ async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const cookies = parseCookies(req);
 
+  // Once APP_URL is the custom domain (https://keystonefsm.com), pages opened on the old onrender.com address move there.
+  // Webhooks (POST) and the health check keep working on either address.
+  if (CANONICAL && ['GET', 'HEAD'].includes(req.method) && url.pathname !== '/healthz'
+    && /\.onrender\.com$/i.test(String(req.headers.host || '').split(':')[0]) && req.headers.host !== CANONICAL.host) {
+    return { status: 301, headers: { Location: `${CANONICAL.origin}${url.pathname}${url.search}` } };
+  }
+
   if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(req);
 
   // Reject cross-site form posts (defence in depth on top of SameSite cookies).
@@ -1332,7 +1374,7 @@ async function handle(req, res) {
   return { ...result, headers: { ...result.headers, 'Set-Cookie': [...setCookies, ...existing] } };
 }
 
-function respond(res, out) {
+function respond(res, out, req) {
   const headers = {
     'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'Cache-Control': 'no-store',
     ...out.headers,
@@ -1343,13 +1385,19 @@ function respond(res, out) {
     headers['Content-Type'] ||= 'text/html; charset=utf-8';
     const n = out.nav?.user ? v.nav({ ...out.nav, path: out.path }) : { nav: '', avatar: '' };
     body = body.replace('<!--NAV-->', n.nav).replace('<!--AVATAR-->', n.avatar);
+    const theme = req ? themeOf(req) : '';
+    if (theme && body.startsWith('<!doctype html>')) {
+      body = body.replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`)
+        .replace(/<meta name="theme-color" content="[^"]*" media="\(prefers-color-scheme: (light|dark)\)">/g,
+          (tag, scheme) => (scheme === theme ? tag.replace(/ media="[^"]*"/, '') : ''));
+    }
   }
   res.writeHead(out.status, headers);
   res.end(body);
 }
 
 const server = http.createServer((req, res) => {
-  handle(req, res).then((out) => respond(res, out)).catch((e) => {
+  handle(req, res).then((out) => respond(res, out, req)).catch((e) => {
     console.error(e);
     if (!res.headersSent && ['42P01', '42703', '42883'].includes(e.code)) {
       // Missing table, column or function: the code was deployed before its database migration ran.

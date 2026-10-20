@@ -58,6 +58,14 @@ join as workers and an admin can promote them. Admins can also add someone who a
    confirmation links land on the login page.
 4. Open the site, create your account, and start your company.
 
+### Custom domain (keystonefsm.com)
+
+1. In Render, open the service → **Settings → Custom Domains → Add**, enter `keystonefsm.com` and add the DNS records
+   Render shows at your domain registrar. Render adds `www.keystonefsm.com` too and redirects it. Wait until both show **Verified**.
+2. In Render → **Environment**, set `APP_URL` to `https://keystonefsm.com`. Pages opened on the old `onrender.com` address then
+   move to keystonefsm.com (webhooks and `/healthz` keep working on both).
+3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to `https://keystonefsm.com/login`.
+
 On a phone, use the browser's **Add to Home Screen** to get an app icon that opens full screen.
 
 The `starter` plan stays awake; Render's free plan also works but sleeps when idle and takes a while to wake up.
@@ -76,7 +84,7 @@ One-time setup by whoever runs the app (the "platform"), in the platform's own S
 3. **Developers → Webhooks → Add endpoint:** URL `https://<your site>/stripe/webhook`, choose **Events on Connected accounts**,
    and select `invoice.paid`, `invoice.voided`, `invoice.marked_uncollectible` and `account.updated`.
    Copy its signing secret into Render as `STRIPE_WEBHOOK_SECRET`.
-4. Optional: `APP_URL` (for example `https://vista-artisans.onrender.com`) if Stripe's return links should use a different address.
+4. Optional: `APP_URL` (for example `https://keystonefsm.com`) sets the address used in Stripe return links and emails.
 
 Each company sets its logo and colors for invoice emails in its own Stripe dashboard (**Settings → Branding**).
 Test mode moves no real money and Stripe doesn't email clients, but an invoice's **View** link opens the pay page,
