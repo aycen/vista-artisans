@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -1183,4 +1183,64 @@ test('public home, support and data deletion pages; forgot password; delete comp
   r = await post('/account/delete', { confirm: 'DELETE' }); assert.equal(r.status, 303);
   assert.equal((await dbClient.query("SELECT count(*)::int AS n FROM organizations WHERE name = 'Solo Co'")).rows[0].n, 0);
   assert.equal((await getPage('/account')).location, '/login');
+});
+
+test('importer: CSV parsing, column guesses, dates and statuses', () => {
+  const importer = require('../src/importer');
+  const { headers, rows } = importer.parseCsv('﻿Name,Notes\r\n"Doe, Jane","Line one\nline ""two"""\r\n\r\nBob,\n');
+  assert.deepEqual(headers, ['Name', 'Notes']);
+  assert.deepEqual(rows, [['Doe, Jane', 'Line one\nline "two"'], ['Bob', '']]);
+  const m = importer.guessMapping('clients', ['First Name', 'Last Name', 'Company Name', 'E-mail', 'Main Phone', 'Billing Street 1', 'Billing City', 'Billing State', 'Billing Zip code']);
+  assert.deepEqual(m, { first_name: 0, last_name: 1, company: 2, email: 3, phone: 4, street: 5, city: 6, state: 7, zip: 8 });
+  assert.equal(importer.guessMapping('jobs', ['Customer', 'Job Title', 'Total ($)', 'Scheduled Start', 'Job Status']).amount, 2);
+  assert.equal(importer.parseDate('10/5/26').value, '2026-10-05');
+  assert.equal(importer.parseDate('Oct 5, 2026 3:00 PM').value, '2026-10-05');
+  assert.equal(importer.parseDate('2026-10-05T14:00:00Z').value, '2026-10-05');
+  assert.ok(importer.parseDate('13/45/2026').error);
+  assert.equal(importer.parseStatus('Completed'), 'completed'); assert.equal(importer.parseStatus('In Progress'), 'in_progress');
+  assert.equal(importer.parseStatus('Scheduled'), 'not_started'); assert.equal(importer.parseStatus(''), null);
+});
+
+test('import clients and jobs from a CSV export', async () => {
+  as('hank'); await post('/signup', { email: 'hank@keystone.test', password: 'hank-password' });
+  await post('/org/new', { name: 'Hank Floors' });
+  let page = (await getPage('/clients')).body; assert.match(page, /href="\/import"/);
+  assert.equal((await getPage('/import')).status, 200);
+  assert.equal((await post('/import/preview', { kind: 'clients', csv: '' })).status, 422);
+
+  const clientsCsv = 'First Name,Last Name,Company Name,E-mail,Main Phone,Billing Street 1,Billing City,Billing State,Billing Zip code\n'
+    + 'John,Smith,,john@example.com,555-0100,1 Main St,Lancaster,PA,17602\n'
+    + ',,Acme Builders,office@acme.test,,,,,\n'
+    + ',,,nobody@example.com,,,,,\n';
+  let r = await post('/import/preview', { kind: 'clients', csv: clientsCsv, file_name: 'jobber-clients.csv' });
+  assert.equal(r.status, 200);
+  assert.equal(stat(r.body, 'ready'), '2'); assert.equal(stat(r.body, 'problems'), '1'); assert.match(r.body, /Line 4: no client name/);
+  assert.match(r.body, /<option value="5" selected>Billing Street 1<\/option>/);
+  r = await post('/import/run', { kind: 'clients', csv: clientsCsv, file_name: 'jobber-clients.csv' });
+  assert.equal(r.status, 303); assert.match(decodeURIComponent(r.location), /Imported 2 clients \(1 skipped\)/);
+  const john = (await dbClient.query("SELECT * FROM clients WHERE name = 'John Smith'")).rows[0];
+  assert.equal(john.address, '1 Main St, Lancaster, PA 17602'); assert.equal(john.email, 'john@example.com');
+  r = await post('/import/preview', { kind: 'clients', csv: clientsCsv });
+  assert.equal(stat(r.body, 'ready'), '0'); assert.equal(stat(r.body, 'dupes'), '2');
+
+  // Jobs: the owner fixes a column match (the amount is in "Grand Total"), reuses John Smith, creates a new client
+  const jobsCsv = 'Customer,Job Title,Grand Total,Start,Finish,Job Status,Site\n'
+    + 'John Smith,Install LVP,"$4,500.00",10/1/2026,10/3/2026,Completed,9 Oak Ave\n'
+    + 'Mary Jones,Refinish floors,1200,2026-11-02,,Scheduled,\n'
+    + 'Bad Row,Tile,abc,10/1/2026,,,\n';
+  r = await post('/import/preview', { kind: 'jobs', csv: jobsCsv });
+  assert.equal(stat(r.body, 'ready'), '2'); assert.equal(stat(r.body, 'problems'), '1');
+  const form = { kind: 'jobs', csv: jobsCsv, map_name: '0', map_title: '1', map_amount: '2', map_start_date: '3', map_end_date: '4', map_status: '5', map_job_address: '6' };
+  r = await post('/import/run', form); assert.equal(r.status, 303); assert.match(r.location, /^\/jobs\?msg=Imported%202%20jobs/);
+  const jobs = (await dbClient.query(`SELECT j.*, c.name AS client, (j.completed_at AT TIME ZONE 'America/Los_Angeles')::date::text AS done
+    FROM jobs j JOIN clients c ON c.id = j.client_id JOIN organizations o ON o.id = j.org_id WHERE o.name = 'Hank Floors' ORDER BY j.id`)).rows;
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0].client, 'John Smith'); assert.equal(Number(jobs[0].contract_cents), 450000); assert.equal(jobs[0].status, 'completed');
+  assert.equal(jobs[0].address, '9 Oak Ave'); assert.equal(jobs[0].done, '2026-10-03'); assert.match(jobs[0].scope, /Install LVP/);
+  assert.equal(jobs[1].client, 'Mary Jones'); assert.equal(jobs[1].status, 'not_started'); assert.equal(jobs[1].address, '');
+  assert.equal((await dbClient.query("SELECT count(*)::int AS n FROM clients WHERE name = 'John Smith'")).rows[0].n, 1, 'reuses the client');
+  r = await post('/import/preview', form); assert.equal(stat(r.body, 'dupes'), '2', 'importing the same file again skips its jobs');
+
+  // Crew can't import
+  as('erin'); assert.equal((await getPage('/import')).status, 404);
 });

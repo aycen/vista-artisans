@@ -82,6 +82,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .seg{display:flex;gap:4px;padding:4px;margin-top:12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
 .seg button{flex:1;min-height:40px;border:0;border-radius:9px;background:transparent;color:var(--text-2);font-weight:600;box-shadow:none}
 .seg button.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.seg label{flex:1;min-height:40px;display:grid;place-items:center;margin:0;border-radius:9px;color:var(--text-2);font-weight:600}.seg label.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 
 /* Surfaces */
 .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:14px}
@@ -725,6 +726,8 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
     </form>`)}</div>` : ''}
   ${org && org.role === 'admin' ? html`<div class="list"><a class="li" href="/settings"><span class="icon-bubble">${icon('settings')}</span>
     <div class="main-t"><div class="t">Company profile</div><div class="s">Logo and details on estimates and work orders</div></div>${chev()}</a>
+    <a class="li" href="/import"><span class="icon-bubble">${icon('download')}</span>
+    <div class="main-t"><div class="t">Import</div><div class="s">Clients and jobs from Jobber, Housecall Pro, QuickBooks or a spreadsheet</div></div>${chev()}</a>
     <a class="li" href="/billing"><span class="icon-bubble">${icon('card')}</span>
     <div class="main-t"><div class="t">Plan & billing</div><div class="s">${PLAN_NAMES[plan] || 'Free'} plan</div></div>${chev()}</a></div>` : ''}
   <div class="actions">
@@ -751,6 +754,77 @@ function deleteAccountPage({ user, blockers = [], companies = [], error }) {
     <input id="confirm" name="confirm" autocomplete="off" autocapitalize="characters">
     <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit" class="danger">Delete my account</button></div>
   </form>`}`, { back: { href: '/account', label: 'Account' } });
+}
+
+// Import from another app's CSV export: 1) upload, 2) check the column matches and preview, 3) import.
+const IMPORT_KINDS = { clients: 'Clients', jobs: 'Jobs' };
+function importPage({ kind = 'clients', step = 1, csv = '', fileName = '', headers = [], fields = [], map = {}, preview = [], result = null, error }) {
+  const opt = (sel) => html`<option value="">Not in file</option>${headers.map((h, i) => html`<option value="${i}" ${sel === i ? raw('selected') : ''}>${h || `Column ${i + 1}`}</option>`)}`;
+  return layout('Import', html`
+  ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
+  ${step === 1 ? html`<form method="post" action="/import/preview" class="form-card" id="import-form" novalidate>
+    <h3>1. Export from your old app</h3>
+    <p class="hint">In Jobber, Housecall Pro, QuickBooks or any spreadsheet, export your clients or jobs as a <strong>CSV</strong> file.
+      Excel and Google Sheets: File, then Download or Save as, then CSV.</p>
+    <h3 style="margin-top:16px">2. What's in the file?</h3>
+    <div class="seg" role="radiogroup">${Object.entries(IMPORT_KINDS).map(([k, l]) => html`<label class="${kind === k ? 'on' : ''}" style="flex:1;text-align:center;cursor:pointer">
+      <input type="radio" name="kind" value="${k}" ${kind === k ? raw('checked') : ''} style="display:none">${l}</label>`)}</div>
+    <p class="hint">Jobs also create their clients, so if you have both in one file, choose Jobs.</p>
+    <h3 style="margin-top:16px">3. Choose the file</h3>
+    <label class="btn secondary block" for="csv-file" style="margin:8px 0;color:var(--accent)">${icon('download')}Choose CSV file</label>
+    <input type="file" id="csv-file" accept=".csv,text/csv" style="display:none">
+    <div class="hint" id="file-name">${fileName || 'No file chosen'}</div>
+    <input type="hidden" name="file_name" id="file_name" value="${fileName}">
+    <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">Or paste the CSV text</summary>
+      <textarea name="csv" id="csv" rows="6" placeholder="Name,Email,Phone&#10;Jane Rivera,jane@example.com,555-123-4567">${csv}</textarea></details>
+    <div class="form-actions"><button type="submit">Continue</button></div>
+  </form>
+  <script>${raw(`(function () {
+    var seg = document.querySelectorAll('#import-form .seg label');
+    seg.forEach(function (l) { l.addEventListener('click', function () { seg.forEach(function (x) { x.classList.toggle('on', x === l); }); }); });
+    document.getElementById('csv-file').addEventListener('change', function (e) {
+      var f = e.target.files[0]; if (!f) return;
+      if (f.size > 3000000) { alert('That file is over 3 MB. Split it into smaller files and import each one.'); return; }
+      var r = new FileReader();
+      r.onload = function () { document.getElementById('csv').value = r.result; document.getElementById('file-name').textContent = f.name;
+        document.getElementById('file_name').value = f.name; document.getElementById('import-form').submit(); };
+      r.readAsText(f);
+    });
+  })();`)}</script>` : html`
+  <form method="post" action="/import/preview" id="import-form" novalidate>
+    <input type="hidden" name="kind" value="${kind}"><input type="hidden" name="file_name" value="${fileName}">
+    <textarea name="csv" hidden>${csv}</textarea>
+    <p class="hint" style="margin:0 4px 12px">${fileName ? html`<strong>${fileName}</strong> · ` : ''}${result.total} row${result.total === 1 ? '' : 's'} of ${IMPORT_KINDS[kind].toLowerCase()}.
+      <a href="/import">Start over</a></p>
+    <h2>Match your columns</h2>
+    <p class="hint" style="margin:0 4px 8px">We've matched what we could. Fix any that are wrong, then update the preview.</p>
+    <div class="form-card" id="mapping">${fields.map(([key, label]) => html`<div class="two" style="align-items:center;margin-bottom:6px">
+      <label for="map_${key}" style="margin:0">${label}</label>
+      <select id="map_${key}" name="map_${key}">${opt(map[key])}</select></div>`)}
+      <p class="hint">Client name can come from one column, from first and last name, or from company. Address parts are joined into one address.</p>
+      <div class="form-actions"><button type="submit" class="secondary">Update preview</button></div>
+    </div>
+    <h2>Preview</h2>
+    <div class="stats" id="import-summary">
+      <div class="stat good"><div class="k">Ready to import</div><div class="v" data-k="ready">${result.ok.length}</div></div>
+      <div class="stat"><div class="k">Already in Keystone (skipped)</div><div class="v" data-k="dupes">${result.dupes}</div></div>
+      <div class="stat ${result.problems.length ? 'bad' : ''}"><div class="k">Need fixing (skipped)</div><div class="v" data-k="problems">${result.problems.length}</div></div>
+    </div>
+    ${preview.length ? html`<div class="list">${preview.map((r) => html`<div class="li"><div class="main-t">
+      <div class="t">${r.job ? r.job.title : r.client.name}</div>
+      <div class="s">${r.job ? `${r.client.name}${r.job.address ? ` · ${r.job.address}` : ''} · ${fmt(r.job.amount)}${r.job.start_date ? ` · ${r.job.start_date}` : ''} · ${JOB_STATUS[r.job.status]}`
+        : [r.client.email, r.client.phone, r.client.address].filter(Boolean).join(' · ') || 'No contact details'}</div></div></div>`)}</div>
+    ${result.ok.length > preview.length ? html`<p class="hint" style="margin:0 4px">…and ${result.ok.length - preview.length} more.</p>` : ''}` : ''}
+    ${result.problems.length ? html`<h2>Rows that need fixing</h2><div class="card" id="import-problems"><ul style="margin:0;padding-left:18px">
+      ${result.problems.slice(0, 25).map((p) => html`<li>Line ${p.line}${p.name ? ` (${p.name})` : ''}: ${p.why}</li>`)}</ul>
+      ${result.problems.length > 25 ? html`<p class="hint">…and ${result.problems.length - 25} more.</p>` : ''}
+      <p class="hint">Fix these in your file and import it again later; rows already imported are skipped automatically.</p></div>` : ''}
+    <div class="totalbar">
+      <div class="grow"><div class="lbl">Importing</div><div class="num">${result.ok.length} ${IMPORT_KINDS[kind].toLowerCase()}</div></div>
+      <button type="submit" formaction="/import/run" ${result.ok.length ? '' : raw('disabled')} id="run-import">Import</button>
+    </div>
+  </form>`}`, { back: { href: '/clients', label: 'Clients' },
+    sub: step === 1 ? 'Bring your clients and jobs over from Jobber, Housecall Pro, QuickBooks or a spreadsheet.' : null });
 }
 
 function deleteCompanyPage({ org, error }) {
@@ -1191,17 +1265,18 @@ function jobList(rows, empty, { showClient = true } = {}) {
 }
 
 // ---------- Clients ----------
-function clientsPage({ clients, q }) {
+function clientsPage({ clients, q, flash }) {
   return layout('Clients', html`
   <form method="get" action="/clients" class="search" role="search">
     ${icon('search')}<input name="q" type="search" value="${q}" placeholder="Search by name" aria-label="Search by name">
   </form>
+  ${q ? '' : html`<p class="hint" style="margin:0 4px 12px"><a href="/import" id="import-link">Import clients or jobs from another app</a></p>`}
   ${clients.length ? html`<div class="list">${clients.map((c) => html`<a class="li" href="/clients/${c.id}">
     <span class="avatar">${c.name[0].toUpperCase()}</span>
     <div class="main-t"><div class="t">${c.name}</div><div class="s">${c.address || c.phone || c.email || ' '}</div></div>
     ${c.value_cents ? html`<div class="r"><span class="amt">${fmt(c.value_cents)}</span></div>` : ''}${chev()}
   </a>`)}</div>` : html`<div class="empty">${q ? 'No clients match that name.' : 'No clients yet.'}</div>`}`,
-  { fab: { href: '/clients/new', label: 'New Client' } });
+  { fab: { href: '/clients/new', label: 'New Client' }, flash });
 }
 
 function clientFields(values, errors, prefix = '') {
@@ -1677,7 +1752,7 @@ function weekView({ day, today, base, items }) {
   </div>`;
 }
 
-function jobsPage({ jobs, status, cal }) {
+function jobsPage({ jobs, status, cal, flash }) {
   const [y, m, d] = cal.day.split('-').map(Number);
   const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
   const legend = html`<div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
@@ -1694,7 +1769,7 @@ function jobsPage({ jobs, status, cal }) {
     ${weekView({ day: cal.day, today: cal.today, base: '/jobs', items })}
     ${legend}
     <h2>All jobs</h2>
-    ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
+    ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
   }
   return layout('Jobs', html`
   ${viewSwitch('/jobs', 'month', cal.day)}
@@ -1707,7 +1782,7 @@ function jobsPage({ jobs, status, cal }) {
       <div class="s">${e.client_name}${e.address ? ` · ${e.address}` : ''}</div></div>${pill(e.status, ESTIMATE_STATUS)}${chev()}</a>`)}</div>` : ''}
   ${cal.dayJobs.length || !cal.dayVisits?.length ? jobList(cal.dayJobs, 'No jobs scheduled this day.') : ''}
   <h2>All jobs</h2>
-  ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
+  ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
 }
 
 function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
@@ -2010,5 +2085,5 @@ function messagePage(title, message) {
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
-  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage,
+  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage,
 };

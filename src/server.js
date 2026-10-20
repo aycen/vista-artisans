@@ -3,6 +3,7 @@ const http = require('node:http');
 const { pool, asUser, asServer, ESTIMATE_TOTAL_SQL, JOB_TOTALS_SQL, withJobMath } = require('./db');
 const auth = require('./auth');
 const { parseMoney, parseQty, plain, fmtQty, fmt } = require('./money');
+const importer = require('./importer');
 const v = require('./views');
 const pdf = require('./pdf');
 const stripe = require('./stripe');
@@ -326,7 +327,7 @@ route('GET', '/clients', async ({ db, org, url }) => {
     ? await db.all(`SELECT *, ${VALUE} FROM clients WHERE org_id = ? AND name ILIKE ? ESCAPE '\\' ORDER BY lower(name)`,
       org.org_id, `%${q.replace(/[\\%_]/g, '\\$&')}%`)
     : await db.all(`SELECT *, ${VALUE} FROM clients WHERE org_id = ? ORDER BY lower(name)`, org.org_id);
-  return ok(v.clientsPage({ clients, q }));
+  return ok(v.clientsPage({ clients, q, flash: url.searchParams.get('msg') }));
 });
 route('GET', '/clients/new', () => ok(v.clientFormPage({ values: {} })));
 route('POST', '/clients', async ({ db, org, form }) => {
@@ -526,7 +527,7 @@ route('GET', '/jobs', async ({ db, org, url }) => {
     weekVisits = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND estimates.visit_date BETWEEN ?::date AND ?::date + 6
       ORDER BY estimates.visit_date, estimates.visit_time NULLS LAST, estimates.id`, org.org_id, ws, ws);
   }
-  return ok(v.jobsPage({ jobs, status, cal: { month, day, today, byDay, dayJobs, dayVisits, view, weekJobs, weekVisits } }));
+  return ok(v.jobsPage({ jobs, status, flash: url.searchParams.get('msg'), cal: { month, day, today, byDay, dayJobs, dayVisits, view, weekJobs, weekVisits } }));
 });
 route('GET', '/jobs/:id', ({ db, org, id, url }) => renderJob(db, org.org_id, id, { flash: url.searchParams.get('msg') }));
 route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
@@ -986,6 +987,75 @@ async function companyFor(db, org) {
   for (const k of Object.keys(PROFILE_FIELDS)) out[k] = p[k] || '';
   return out;
 }
+// Import clients and jobs from another app's CSV export (see importer.js).
+const IMPORT_BODY = 7_000_000; // a 3 MB CSV, form-encoded
+async function importExisting(db, org, kind) {
+  if (kind === 'clients') {
+    const rows = await db.all('SELECT lower(name) AS n, lower(email) AS e FROM clients WHERE org_id = ?', org);
+    return { names: rows.map((r) => r.n), emails: rows.map((r) => r.e).filter(Boolean), jobs: [] };
+  }
+  const rows = await db.all(`SELECT lower(c.name) || '|' || lower(j.address) || '|' || j.contract_cents AS k
+    FROM jobs j JOIN clients c ON c.id = j.client_id WHERE j.org_id = ?`, org);
+  return { names: [], emails: [], jobs: rows.map((r) => r.k) };
+}
+async function importState(db, org, form) {
+  const kind = form.get('kind') === 'jobs' ? 'jobs' : 'clients';
+  const csv = String(form.get('csv') ?? '');
+  const fileName = str(form.get('file_name'), 200);
+  if (!csv.trim()) return { kind, fileName, error: 'Choose a CSV file, or paste the CSV text.' };
+  if (csv.length > importer.MAX_CSV) return { kind, fileName, error: 'That file is over 3 MB. Split it into smaller files and import each one.' };
+  const { headers, rows } = importer.parseCsv(csv);
+  if (headers.length < 1 || !rows.length) return { kind, fileName, csv, error: 'We couldn\'t find any rows in that file. Make sure it\'s a CSV with column names in the first row.' };
+  if (rows.length > importer.MAX_ROWS) return { kind, fileName, error: `That file has ${rows.length} rows. Import at most ${importer.MAX_ROWS} at a time.` };
+  const map = form.has('map_name') || [...form.keys()].some((k) => k.startsWith('map_')) ? importer.mappingFrom(kind, form, headers) : importer.guessMapping(kind, headers);
+  const result = importer.check(kind, rows, map, await importExisting(db, org, kind));
+  result.total = rows.length;
+  return { kind, fileName, csv, headers, map, result, fields: importer.FIELDS[kind] };
+}
+route('GET', '/import', () => ok(v.importPage({})));
+route('POST', '/import/preview', async ({ db, org, form }) => {
+  const st = await importState(db, org.org_id, form);
+  if (!st.result) return page(422, v.importPage(st));
+  return ok(v.importPage({ ...st, step: 2, preview: st.result.ok.slice(0, 8) }));
+}, { maxBody: IMPORT_BODY });
+route('POST', '/import/run', async ({ db, org, form }) => {
+  const st = await importState(db, org.org_id, form);
+  if (!st.result) return page(422, v.importPage(st));
+  const o = org.org_id; const rows = st.result.ok;
+  if (st.kind === 'clients') {
+    for (const r of rows) {
+      await db.run('INSERT INTO clients (org_id, name, phone, email, address) VALUES (?, ?, ?, ?, ?)', o, r.client.name, r.client.phone, r.client.email, r.client.address);
+    }
+  } else {
+    const clientIds = new Map((await db.all('SELECT id, lower(name) AS n FROM clients WHERE org_id = ? ORDER BY id DESC', o)).map((c) => [c.n, c.id]));
+    for (const r of rows) {
+      let clientId = clientIds.get(r.client.name.toLowerCase());
+      if (!clientId) {
+        clientId = (await db.run('INSERT INTO clients (org_id, name, phone, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
+          o, r.client.name, r.client.phone, r.client.email, r.client.address)).id;
+        clientIds.set(r.client.name.toLowerCase(), clientId);
+      }
+      // Each job gets an approved one-line estimate (the work at the contract amount), as if it had been sold in Keystone.
+      const j = r.job;
+      const est = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, address, status, scope)
+        VALUES (?, ?, ?, ?, 'sent', ?) RETURNING id`, o, clientId, str(j.address, 200) || r.client.name, j.address, `• ${j.title}`)).id;
+      await db.run('INSERT INTO line_items (org_id, estimate_id, position, description, qty_hundredths, unit_price_cents) VALUES (?, ?, 0, ?, 100, ?)',
+        o, est, j.title, j.amount);
+      await db.run("UPDATE estimates SET status = 'approved' WHERE id = ?", est);
+      const jobId = (await db.get('SELECT convert_estimate_to_job(?) AS id', est)).id;
+      await db.run('UPDATE jobs SET status = ?, start_date = ?, end_date = ?, notes = ? WHERE id = ?',
+        j.status, j.start_date, j.end_date, j.notes ? `${j.notes}\n\nImported from ${st.fileName || 'a CSV file'}.` : `Imported from ${st.fileName || 'a CSV file'}.`, jobId);
+      // Completed jobs count as revenue in the month they finished, not the day they were imported.
+      const done = j.end_date || j.start_date;
+      if (j.status === 'completed' && done) {
+        await db.run("UPDATE jobs SET completed_at = least(now(), (?::date + time '17:00') AT TIME ZONE ?) WHERE id = ?", done, APP_TIMEZONE, jobId);
+      }
+    }
+  }
+  const skipped = st.result.dupes + st.result.problems.length;
+  const msg = `Imported ${rows.length} ${st.kind === 'clients' ? (rows.length === 1 ? 'client' : 'clients') : (rows.length === 1 ? 'job' : 'jobs')}${skipped ? ` (${skipped} skipped)` : ''}`;
+  return redirect(`/${st.kind}?msg=${encodeURIComponent(msg)}`);
+}, { maxBody: IMPORT_BODY });
 route('GET', '/settings/delete-company', ({ org }) => ok(v.deleteCompanyPage({ org })));
 route('POST', '/settings/delete-company', async ({ db, org, form }) => {
   if (str(form.get('confirm'), 200).toLowerCase() !== org.name.trim().toLowerCase()) {
