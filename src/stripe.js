@@ -51,7 +51,9 @@ async function createAccount({ orgId, name, email }) {
     email: email || undefined,
     business_profile: { name },
     metadata: { org_id: orgId },
-  }, { idempotencyKey: `account-${orgId}` });
+  });
+  // No idempotency key here: Stripe replays a keyed request's first answer for 24 hours, errors included, so a retry
+  // after fixing the Stripe setup would keep getting the old error. Duplicate accounts are prevented by the database row.
 }
 const getAccount = (id) => call('GET', `/accounts/${encodeURIComponent(id)}`);
 // A one-time link to Stripe's hosted onboarding (it expires after a few minutes, so make one per click).
