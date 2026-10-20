@@ -102,7 +102,7 @@ function estimatePdf({ company, estimate, client, items, totalCents, options = [
   return render((doc) => {
     header(doc, { company, title: 'ESTIMATE', number: `E-${estimate.id}`, dateLabel: 'Date', date: estimate.updated_at });
     infoColumns(doc, [
-      ['Prepared for', [client.name, client.address, client.phone, client.email]],
+      ['Prepared for', [client.name, estimate.address || client.address, client.phone, client.email]],
       ['Project', [estimate.project_name]],
     ]);
     section(doc, 'Scope of work', estimate.scope);

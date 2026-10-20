@@ -278,7 +278,7 @@ test('full workflow', async () => {
 
   // Alice adds Carol as an admin and Dave as a worker; unknown emails get a clear message
   // Dave fills in the optional details when signing up; they become his profile on first login
-  as('dave'); await post('/signup', { email: 'dave@vista.test', password: 'dave-password', full_name: 'Dave Diaz', phone: '555-222-3333', address: '4 Pine Ct' });
+  as('dave'); await post('/signup', { email: 'dave@vista.test', password: 'dave-password', full_name: 'Dave Diaz', phone: '555-222-3333', zip: '78704' });
   assert.equal((await getPage('/')).location, '/welcome');
   as('alice');
   r = await post('/team/add', { email: 'nobody@x.test', role: 'worker' });
@@ -292,14 +292,16 @@ test('full workflow', async () => {
   r = await post('/team/add', { email: 'carol@vista.test', role: 'admin' }); assert.equal(r.status, 303);
   r = await post('/team/add', { email: 'dave@vista.test', role: 'worker' }); assert.equal(r.status, 303);
   page = (await getPage('/team')).body;
-  assert.match(page, /carol@vista\.test/); assert.match(page, /Dave Diaz/); assert.match(page, /Team plan/); assert.match(page, /2 of 3 admins · 1 of 10 workers/);
+  assert.match(page, /carol@vista\.test/); assert.match(page, /Dave Diaz/); assert.match(page, /Team plan/); assert.match(page, /2 of 3 admins · 1 of 10 crew/);
   const daveId = (await dbClient.query("SELECT id FROM auth.users WHERE email = 'dave@vista.test'")).rows[0].id;
   page = (await getPage(`/team/${daveId}`)).body;
-  assert.match(page, /<h1[^>]*>Dave Diaz/); assert.match(page, /555-222-3333/); assert.match(page, /4 Pine Ct/);
+  assert.match(page, /<h1[^>]*>Dave Diaz/); assert.match(page, /555-222-3333/); assert.match(page, /78704/);
   // Alice edits her own details from Account
   r = await post('/account/profile', { full_name: 'Alice Avery', phone: 'call me', address: '' });
   assert.equal(r.status, 422); assert.match(r.body, /Phone number does not look valid/); assert.match(r.body, /value="Alice Avery"/);
-  r = await post('/account/profile', { full_name: 'Alice Avery', phone: '(555) 111-2222', address: '1 Main St' }); assert.equal(r.status, 303);
+  r = await post('/account/profile', { full_name: 'Alice Avery', phone: '(555) 111-2222', zip: '7870' });
+  assert.equal(r.status, 422); assert.match(r.body, /ZIP code should be 5 digits/);
+  r = await post('/account/profile', { full_name: 'Alice Avery', phone: '(555) 111-2222', zip: '78701' }); assert.equal(r.status, 303);
   page = (await getPage('/account')).body;
   assert.match(page, /value="\(555\) 111-2222"/); assert.match(page, /Plan (&amp;|&) billing/);
   assert.match((await getPage('/')).body, /Alice Avery/);
@@ -668,10 +670,10 @@ test('plans: Free limits, Stripe Checkout, webhook sync, billing portal, cancel'
     await addPerson('a2@other.test', 'admin'); await addPerson('a3@other.test', 'admin');
     await assert.rejects(addPerson('a4@other.test', 'admin'), /up to 3 admins/);
     for (let i = 2; i <= 10; i++) await addPerson(`w${i}@other.test`, 'worker');
-    await assert.rejects(addPerson('w11@other.test', 'worker'), /up to 10 workers/);
+    await assert.rejects(addPerson('w11@other.test', 'worker'), /up to 10 crew members/);
     const erin = (await dbClient.query("SELECT id FROM auth.users WHERE email = 'erin@vista.test'")).rows[0].id;
     r = await post('/team/role', { user_id: erin, role: 'admin' }); assert.equal(r.status, 422); assert.match(r.body, /up to 3 admins/);
-    assert.match((await getPage('/team')).body, /3 of 3 admins · 10 of 10 workers/);
+    assert.match((await getPage('/team')).body, /3 of 3 admins · 10 of 10 crew/);
 
     // Upgrading in the portal arrives by webhook; then no limits
     const sub = fakeStripe.state.subscriptions.get(fakeStripe.state.sessions.get(cs.id).subscription);
@@ -878,4 +880,42 @@ test('estimates: options, emailed link, online approval with signature and depos
   } finally {
     await fakeStripe.close(); await mail.close();
   }
+});
+
+test('estimate address and appointment on the calendar, job address, client total value, crew wording', async () => {
+  as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
+  const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
+  const jane = (await dbClient.query("SELECT id FROM clients WHERE org_id = $1 AND name = 'Jane Rivera'", [vista])).rows[0].id;
+  const base = [['client_id', String(jane)], ['project_name', 'Garage door'], ['status', 'approved'], ['deposit_percent', '0'],
+    ['item_desc', 'Door'], ['item_qty', '1'], ['item_price', '1800']];
+  let r = await post('/estimates', [...base, ['visit_time', '09:30']]);
+  assert.equal(r.status, 422); assert.match(r.body, /Add a date for the appointment time/);
+  r = await post('/estimates', [...base, ['visit_date', '2026-12-03'], ['visit_time', '25:00']]);
+  assert.equal(r.status, 422); assert.match(r.body, /valid time/);
+  // No address given: the client's address is used
+  r = await post('/estimates', [...base, ['visit_date', '2026-12-03'], ['visit_time', '14:30']]);
+  const plain = idFrom(r.location);
+  assert.equal((await dbClient.query('SELECT address FROM estimates WHERE id = $1', [plain])).rows[0].address, '12 Oak St, Austin TX');
+  r = await post('/estimates', [...base, ['address', '77 Lake Rd, Round Rock TX'], ['visit_date', '2026-12-03'], ['visit_time', '09:30']]);
+  const est = idFrom(r.location);
+  let page = (await getPage(`/estimates/${est}`)).body;
+  assert.match(page, /77 Lake Rd, Round Rock TX/); assert.match(page, /id="appointment">.*Dec 3, 2026.* at 9:30 AM/s);
+  // On the calendar, in time order
+  page = (await getPage('/jobs?day=2026-12-03')).body;
+  assert.match(page, /9:30 AM · Estimate: Garage door[\s\S]*2:30 PM · Estimate: Garage door/);
+  assert.match(page, /class="visit"/); assert.match(page, /Estimate appointment/);
+  assert.match((await getPage('/estimates/new?date=2026-12-03')).body, /value="2026-12-03"/);
+  // The job takes the estimate's address, and it can be changed on the job
+  const job = idFrom((await post(`/estimates/${est}/convert`, {})).location);
+  assert.equal((await dbClient.query('SELECT address FROM jobs WHERE id = $1', [job])).rows[0].address, '77 Lake Rd, Round Rock TX');
+  await post(`/jobs/${job}`, { status: 'not_started', start_date: '', end_date: '', notes: '', address: '78 Lake Rd, Round Rock TX' });
+  assert.equal((await dbClient.query('SELECT address FROM jobs WHERE id = $1', [job])).rows[0].address, '78 Lake Rd, Round Rock TX');
+  // Client total value = their jobs' contract totals
+  const expected = (await dbClient.query('SELECT sum(contract_cents)::bigint AS v FROM jobs WHERE client_id = $1', [jane])).rows[0].v;
+  page = (await getPage(`/clients/${jane}`)).body;
+  assert.equal(stat(page, 'client-value'), fmt(Number(expected)));
+  assert.match((await getPage('/clients')).body, new RegExp(fmt(Number(expected)).replace(/[$.]/g, '\\$&')));
+  // "Crew" instead of "Worker"
+  page = (await getPage('/team')).body;
+  assert.match(page, /Crew ·/); assert.doesNotMatch(page, />Worker</);
 });

@@ -21,6 +21,7 @@ const ok = (body) => page(200, body);
 const redirect = (to, headers = {}) => ({ status: 303, headers: { Location: to, ...headers } });
 const notFound = () => page(404, v.messagePage('Not found', 'That record does not exist.'));
 const str = (val, max = 2000) => String(val ?? '').trim().slice(0, max);
+const ZIP_RE = /^\d{5}(-\d{4})?$/;
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'))
   && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
 const SAVE_FAILED = { _save: 'Could not save because of a server error. Your entries are still on this page; please try again.' };
@@ -88,8 +89,11 @@ async function validateEstimate(db, org, params) {
   const values = {
     client_id: f.client_id ?? '', project_name: f.project_name ?? '', scope: f.scope ?? '',
     estimated_cost: f.estimated_cost ?? '', status: v.ESTIMATE_STATUS[f.status] ? f.status : 'draft',
-    deposit_percent: f.deposit_percent ?? '0',
+    deposit_percent: f.deposit_percent ?? '0', address: f.address ?? '', visit_date: str(f.visit_date, 20), visit_time: str(f.visit_time, 10),
   };
+  if (values.visit_date && !isDate(values.visit_date)) errors.visit_date = 'Appointment date must be a valid date.';
+  if (values.visit_time && !/^([01]\d|2[0-3]):[0-5]\d(:00)?$/.test(values.visit_time)) errors.visit_time = 'Appointment time must be a valid time.';
+  else if (values.visit_time && !values.visit_date) errors.visit_date = 'Add a date for the appointment time.';
   let newClient = null;
   if (values.client_id === 'new') {
     const c = validateClient(f, 'new_');
@@ -127,7 +131,8 @@ async function validateEstimate(db, org, params) {
   return {
     values, items, errors,
     clean: { projectName, scope: str(values.scope, 10000), cost: cost.value ?? null, status: values.status, items: cleanItems, newClient,
-      deposit: Number.isNaN(deposit) ? 0 : deposit },
+      deposit: Number.isNaN(deposit) ? 0 : deposit, address: str(values.address, 500),
+      visitDate: values.visit_date || null, visitTime: values.visit_time ? values.visit_time.slice(0, 5) : null },
   };
 }
 
@@ -207,14 +212,17 @@ async function saveEstimate(db, org, estimateId, values, clean) {
     clientId = (await db.run('INSERT INTO clients (org_id, name, phone, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
       org, c.name, c.phone, c.email, c.address)).id;
   }
+  // The job site defaults to the client's address.
+  const address = clean.address || (await db.get('SELECT address FROM clients WHERE id = ?', clientId)).address;
   if (estimateId) {
     await db.run(`UPDATE estimates SET client_id = ?, project_name = ?, scope = ?, estimated_cost_cents = ?, status = ?, deposit_percent = ?,
-      chosen_option = NULL, updated_at = now() WHERE id = ? AND org_id = ?`,
-    clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit, estimateId, org);
+      chosen_option = NULL, address = ?, visit_date = ?, visit_time = ?, updated_at = now() WHERE id = ? AND org_id = ?`,
+    clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit, address, clean.visitDate, clean.visitTime, estimateId, org);
     await db.run('DELETE FROM line_items WHERE estimate_id = ?', estimateId);
   } else {
-    estimateId = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, scope, estimated_cost_cents, status, deposit_percent)
-      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`, org, clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit)).id;
+    estimateId = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, scope, estimated_cost_cents, status, deposit_percent,
+      address, visit_date, visit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    org, clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit, address, clean.visitDate, clean.visitTime)).id;
   }
   for (const [i, it] of clean.items.entries()) {
     await db.run(`INSERT INTO line_items (org_id, estimate_id, position, description, qty_hundredths, unit_price_cents, option_name)
@@ -264,10 +272,12 @@ route('GET', '/', async (ctx) => {
 // Clients
 route('GET', '/clients', async ({ db, org, url }) => {
   const q = str(url.searchParams.get('q'), 200);
+  // Total value: what the client's jobs are worth (contract totals).
+  const VALUE = '(SELECT coalesce(sum(contract_cents), 0) FROM jobs WHERE jobs.client_id = clients.id) AS value_cents';
   const clients = q
-    ? await db.all("SELECT * FROM clients WHERE org_id = ? AND name ILIKE ? ESCAPE '\\' ORDER BY lower(name)",
+    ? await db.all(`SELECT *, ${VALUE} FROM clients WHERE org_id = ? AND name ILIKE ? ESCAPE '\\' ORDER BY lower(name)`,
       org.org_id, `%${q.replace(/[\\%_]/g, '\\$&')}%`)
-    : await db.all('SELECT * FROM clients WHERE org_id = ? ORDER BY lower(name)', org.org_id);
+    : await db.all(`SELECT *, ${VALUE} FROM clients WHERE org_id = ? ORDER BY lower(name)`, org.org_id);
   return ok(v.clientsPage({ clients, q }));
 });
 route('GET', '/clients/new', () => ok(v.clientFormPage({ values: {} })));
@@ -317,7 +327,7 @@ route('GET', '/estimates/new', async ({ db, org, url }) => {
   const cid = url.searchParams.get('client_id');
   const dp = await db.get('SELECT default_deposit_percent FROM company_profiles WHERE org_id = ?', org.org_id);
   const values = { status: 'draft', client_id: cid && clients.some((c) => String(c.id) === cid) ? cid : (clients.length ? '' : 'new'),
-    deposit_percent: String(dp?.default_deposit_percent ?? 0) };
+    deposit_percent: String(dp?.default_deposit_percent ?? 0), visit_date: isDate(url.searchParams.get('date') || '') ? url.searchParams.get('date') : '' };
   return ok(v.estimateFormPage({ values, items: [], clients }));
 });
 route('POST', '/estimates', async ({ db, org, form }) => {
@@ -339,6 +349,7 @@ route('GET', '/estimates/:id/edit', async ({ db, org, id }) => {
   const values = {
     client_id: String(e.client_id), project_name: e.project_name, scope: e.scope, status: e.status,
     estimated_cost: e.estimated_cost_cents == null ? '' : plain(e.estimated_cost_cents), deposit_percent: String(e.deposit_percent),
+    address: e.address, visit_date: e.visit_date || '', visit_time: e.visit_time ? e.visit_time.slice(0, 5) : '',
   };
   return ok(v.estimateFormPage({ estimate: e, values, items, clients: await clientsForSelect(db, org.org_id) }));
 });
@@ -423,15 +434,21 @@ route('GET', '/jobs', async ({ db, org, url }) => {
     WHERE jobs.org_id = ? AND jobs.start_date IS NOT NULL ORDER BY jobs.start_date, jobs.id`, gridStart, gridStart, org.org_id);
   const byDay = {};
   for (const sp of spans) (byDay[sp.day] ||= []).push(sp.status);
+  // Estimate appointments (site visits) show as their own dot and list.
+  const visits = await db.all(`SELECT visit_date::text AS day FROM estimates WHERE org_id = ? AND visit_date BETWEEN ?::date AND ?::date + 41
+    ORDER BY visit_date, visit_time NULLS LAST`, org.org_id, gridStart, gridStart);
+  for (const vs of visits) (byDay[vs.day] ||= []).push('visit');
+  const dayVisits = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND estimates.visit_date = ?::date
+    ORDER BY estimates.visit_time NULLS LAST, estimates.id`, org.org_id, day);
   const dayJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.start_date <= ?::date
     AND coalesce(jobs.end_date, jobs.start_date) >= ?::date ORDER BY jobs.start_date, jobs.id`, org.org_id, day, day)).map(withJobMath);
-  return ok(v.jobsPage({ jobs, status, cal: { month, day, today, byDay, dayJobs } }));
+  return ok(v.jobsPage({ jobs, status, cal: { month, day, today, byDay, dayJobs, dayVisits } }));
 });
 route('GET', '/jobs/:id', ({ db, org, id, url }) => renderJob(db, org.org_id, id, { flash: url.searchParams.get('msg') }));
 route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
   const f = formObj(form);
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
-  const values = { status: f.status, start_date: str(f.start_date, 20), end_date: str(f.end_date, 20), notes: f.notes ?? '' };
+  const values = { status: f.status, start_date: str(f.start_date, 20), end_date: str(f.end_date, 20), notes: f.notes ?? '', address: f.address };
   const errors = {};
   if (!v.JOB_STATUS[values.status]) errors.status = 'Choose a valid job status.';
   if (values.start_date && !isDate(values.start_date)) errors.start_date = 'Start date must be a valid date.';
@@ -440,8 +457,9 @@ route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
     errors.end_date = 'End date can\'t be before the start date.';
   }
   if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { job: { values, errors } } }, 422);
-  const r = await attempt(db, () => db.run('UPDATE jobs SET status = ?, start_date = ?, end_date = ?, notes = ?, updated_at = now() WHERE id = ?',
-    values.status, values.start_date || null, values.end_date || null, str(values.notes, 10000), id));
+  const r = await attempt(db, () => db.run(`UPDATE jobs SET status = ?, start_date = ?, end_date = ?, notes = ?, address = coalesce(?, address),
+    updated_at = now() WHERE id = ?`, values.status, values.start_date || null, values.end_date || null, str(values.notes, 10000),
+  values.address === undefined ? null : str(values.address, 500), id));
   if (r.error) { console.error(r.error); return renderJob(db, org.org_id, id, { forms: { job: { values, errors: SAVE_FAILED } } }, 500); }
   return redirect(`/jobs/${id}?msg=Job+saved`);
 });
@@ -886,20 +904,21 @@ route('POST', '/org/switch', async ({ orgs, form }) => {
   return redirect('/', { 'Set-Cookie': orgCookie(target.org_id) });
 }, { worker: true });
 async function renderAccount({ db, user, org, orgs }, extra = {}, status = 200) {
-  const profile = (await db.get('SELECT * FROM profiles WHERE user_id = ?', user.id)) || { full_name: '', phone: '', address: '' };
+  const profile = (await db.get('SELECT * FROM profiles WHERE user_id = ?', user.id)) || { full_name: '', phone: '', zip: '' };
   const plan = org && org.role === 'admin' ? (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p : null;
   return page(status, v.accountPage({ user, org, orgs, plan, values: extra.values || profile, ...extra }));
 }
 route('GET', '/account', (ctx) => renderAccount(ctx, { flash: ctx.url.searchParams.get('msg') }), { worker: true });
 route('POST', '/account/profile', async (ctx) => {
   const f = formObj(ctx.form);
-  const values = { full_name: str(f.full_name, 200), phone: str(f.phone, 50), address: str(f.address, 500) };
-  if (values.phone && !/^[0-9+().\-\s x]{7,}$/i.test(values.phone)) {
-    return renderAccount(ctx, { values, errors: { phone: 'Phone number does not look valid.' } }, 422);
-  }
-  await ctx.db.run(`INSERT INTO profiles (user_id, full_name, phone, address) VALUES (?, ?, ?, ?)
-    ON CONFLICT (user_id) DO UPDATE SET full_name = excluded.full_name, phone = excluded.phone, address = excluded.address, updated_at = now()`,
-  ctx.user.id, values.full_name, values.phone, values.address);
+  const values = { full_name: str(f.full_name, 200), phone: str(f.phone, 50), zip: str(f.zip, 10) };
+  const errors = {};
+  if (values.phone && !/^[0-9+().\-\s x]{7,}$/i.test(values.phone)) errors.phone = 'Phone number does not look valid.';
+  if (values.zip && !ZIP_RE.test(values.zip)) errors.zip = 'ZIP code should be 5 digits.';
+  if (hasErrors(errors)) return renderAccount(ctx, { values, errors }, 422);
+  await ctx.db.run(`INSERT INTO profiles (user_id, full_name, phone, zip) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET full_name = excluded.full_name, phone = excluded.phone, zip = excluded.zip, updated_at = now()`,
+  ctx.user.id, values.full_name, values.phone, values.zip);
   return redirect('/account?msg=Profile+saved');
 }, { worker: true });
 
@@ -1010,12 +1029,13 @@ async function publicRoute(req, url) {
   if (url.pathname === '/signup') {
     if (req.method === 'GET') return ok(v.signupPage());
     const f = formObj(await readBody(req));
-    const values = { email: str(f.email, 200), full_name: str(f.full_name, 200), phone: str(f.phone, 50), address: str(f.address, 500) };
+    const values = { email: str(f.email, 200), full_name: str(f.full_name, 200), phone: str(f.phone, 50), zip: str(f.zip, 10) };
     const errors = {};
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = 'Enter a valid email address.';
     if ((f.password || '').length < 8) errors.password = 'Password must be at least 8 characters.';
+    if (values.zip && !ZIP_RE.test(values.zip)) errors.zip = 'ZIP code should be 5 digits.';
     if (hasErrors(errors)) return page(422, v.signupPage({ values, errors }));
-    const r = await auth.signUp(values.email, f.password, { full_name: values.full_name, phone: values.phone, address: values.address });
+    const r = await auth.signUp(values.email, f.password, { full_name: values.full_name, phone: values.phone, zip: values.zip });
     if (r.error) return page(422, v.signupPage({ values, errors: { email: r.error } }));
     if (!r.session) return redirect('/login?msg=Check+your+email+to+confirm+your+account%2C+then+log+in.');
     return redirect('/', { 'Set-Cookie': sessionCookies(r.session) });
@@ -1298,8 +1318,8 @@ async function handle(req, res) {
     if (!profile && user.signupProfile) {
       const sp = user.signupProfile;
       profile = { full_name: str(sp.full_name, 200) };
-      await db.run(`INSERT INTO profiles (user_id, full_name, phone, address) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING`,
-        user.id, profile.full_name, str(sp.phone, 50), str(sp.address, 500));
+      await db.run(`INSERT INTO profiles (user_id, full_name, phone, address, zip) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING`,
+        user.id, profile.full_name, str(sp.phone, 50), str(sp.address, 500), ZIP_RE.test(str(sp.zip, 10)) ? str(sp.zip, 10) : '');
     }
     user.name = profile?.full_name || '';
     const org = orgs.find((o) => o.org_id === cookies.org) || orgs[0] || null;

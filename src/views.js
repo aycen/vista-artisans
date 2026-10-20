@@ -4,7 +4,7 @@ const { fmt, fmtQty } = require('./money');
 
 const ESTIMATE_STATUS = { draft: 'Draft', sent: 'Sent', approved: 'Approved', declined: 'Declined' };
 const JOB_STATUS = { not_started: 'Not started', in_progress: 'In progress', completed: 'Completed' };
-const ROLES = { admin: 'Admin', worker: 'Worker' };
+const ROLES = { admin: 'Admin', worker: 'Crew' };
 // People show by name when they've given one, otherwise by email.
 const who = (p) => (p && (p.full_name || p.name)) || (p && p.email) || '';
 const initialOf = (p) => (who(p) || '?')[0].toUpperCase();
@@ -194,7 +194,9 @@ input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:blo
 .cal-day.sel .n{background:var(--accent);color:var(--on-accent);box-shadow:none}
 .cal-dots{display:flex;gap:3px;height:6px}
 .cal-dots i{width:6px;height:6px;border-radius:50%;background:var(--amber)}
-.cal-dots i.in_progress{background:var(--blue)} .cal-dots i.completed{background:var(--green)}
+.cal-dots i.in_progress{background:var(--blue)} .cal-dots i.completed{background:var(--green)} .cal-dots i.visit{background:transparent;box-shadow:inset 0 0 0 1.6px var(--accent)}
+.cal-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin:-4px 4px 4px}
+.cal-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
 @media (hover:hover){a.cal-day:hover{background:var(--surface-2)}}
 table.lines{width:100%;border-collapse:collapse}
 table.lines td,table.lines th{padding:12px 16px;text-align:left;font-size:15px}
@@ -324,6 +326,8 @@ function dateRange(start, end) {
   if (start && end && start !== end) return html`${fmtDate(start, { year: start.slice(0, 4) !== end.slice(0, 4) })} – ${fmtDate(end)}`;
   return fmtDate(start || end);
 }
+// '14:30:00' -> '2:30 PM'
+const fmtTime = (t) => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
 const pill = (status, labels) => html`<span class="pill ${status}">${labels[status] || status}</span>`;
 
 // ---------- Layout ----------
@@ -440,7 +444,7 @@ function signupPage({ errors = {}, values = {} } = {}) {
       <h3 style="margin-top:18px">About you <span class="muted" style="font-weight:500">(optional)</span></h3>
       ${input('full_name', 'Your name', values, errors, { autocomplete: 'name' })}
       ${input('phone', 'Phone', values, errors, { type: 'tel', autocomplete: 'tel', inputmode: 'tel' })}
-      ${input('address', 'Address', values, errors, { autocomplete: 'street-address' })}
+      ${input('zip', 'ZIP code', values, errors, { autocomplete: 'postal-code', inputmode: 'numeric' })}
       <div class="hint">Shown to your company's admins. You can change these later in Account.</div>
       <div class="form-actions"><button type="submit">Create account</button></div>
     </form>
@@ -452,7 +456,7 @@ function welcomePage({ errors = {}, values = {}, hasOrgs }) {
   ${errorBox(errors)}
   <form method="post" action="/org/join" class="form-card" novalidate>
     <h3>Join your company</h3>
-    <div class="hint">Ask your admin for the company's join code. You'll join as a worker; your admin can change that.</div>
+    <div class="hint">Ask your admin for the company's join code. You'll join as crew; your admin can change that.</div>
     ${input('code', 'Join code', values, errors, { placeholder: 'ABCD-2345', autocomplete: 'off' })}
     <div class="form-actions"><button type="submit">Join company</button></div>
   </form>
@@ -476,7 +480,7 @@ function accountPage({ user, org, orgs, plan, values = {}, errors = {}, flash })
     <div class="hint">All optional. Your company's admins can see them.</div>
     ${input('full_name', 'Name', values, errors, { autocomplete: 'name' })}
     ${input('phone', 'Phone', values, errors, { type: 'tel', autocomplete: 'tel', inputmode: 'tel' })}
-    ${input('address', 'Address', values, errors, { autocomplete: 'street-address' })}
+    ${input('zip', 'ZIP code', values, errors, { autocomplete: 'postal-code', inputmode: 'numeric' })}
     <div class="form-actions"><button type="submit" class="secondary">Save details</button></div>
   </form>
   ${orgs.length > 1 ? html`<h2>Switch company</h2><div class="list">${orgs.map((o) => html`
@@ -595,7 +599,6 @@ const LOGO_JS = `
 
 // ---------- Plan & billing ----------
 const PLAN_NAMES = { free: 'Free', team: 'Team', unlimited: 'Unlimited' };
-const PLAN_LIMITS = { free: { people: 1 }, team: { admins: 3, workers: 10 }, unlimited: {} };
 const PRICES = { team: { month: 4900, year: 49900 }, unlimited: { month: 9900, year: 100900 } };
 const dollars = (c) => `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
 
@@ -603,14 +606,14 @@ function seatsLeft(plan, members) {
   const admins = members.filter((m) => m.role === 'admin').length;
   const workers = members.length - admins;
   if (plan === 'unlimited') return `${members.length} ${members.length === 1 ? 'person' : 'people'} · no limits`;
-  if (plan === 'team') return `${admins} of 3 admins · ${workers} of 10 workers`;
+  if (plan === 'team') return `${admins} of 3 admins · ${workers} of 10 crew`;
   return members.length > 1 ? `${members.length} people · upgrade to add more` : 'Just you · upgrade to add your crew';
 }
 
 function billingPage({ org, sub, plan, counts, enabled, testMode, interval = 'month', error, flash }) {
   const paid = ['active', 'trialing', 'past_due'].includes(sub.status) && sub.plan !== 'free';
   const discount = interval === 'month' && !sub.first_month_discount_used;
-  const usage = plan === 'team' ? `${counts.admins} of 3 admins · ${counts.workers} of 10 workers`
+  const usage = plan === 'team' ? `${counts.admins} of 3 admins · ${counts.workers} of 10 crew`
     : plan === 'unlimited' ? `${counts.admins + counts.workers} people` : `${counts.admins + counts.workers} of 1 person`;
   const renew = sub.current_period_end ? fmtDate(String(sub.current_period_end instanceof Date ? sub.current_period_end.toISOString() : sub.current_period_end).slice(0, 10)) : '';
   const card = (key, title, blurb, features) => {
@@ -650,8 +653,8 @@ function billingPage({ org, sub, plan, counts, enabled, testMode, interval = 'mo
   </div>
   <div class="plans">
     ${card('free', 'Free', 'For running jobs on your own.', ['1 person', 'Clients, estimates & jobs', 'PDF estimates & invoices'])}
-    ${card('team', 'Team', 'For a small crew.', ['Up to 3 admins', 'Up to 10 workers', 'Everything in Free'])}
-    ${card('unlimited', 'Unlimited', 'For growing companies.', ['Unlimited admins', 'Unlimited workers', 'Everything in Team'])}
+    ${card('team', 'Team', 'For a small crew.', ['Up to 3 admins', 'Up to 10 crew members', 'Everything in Free'])}
+    ${card('unlimited', 'Unlimited', 'For growing companies.', ['Unlimited admins', 'Unlimited crew', 'Everything in Team'])}
   </div>
   <p class="hint">Cancel anytime; you keep your plan until the end of the period you paid for. If a plan ends, nothing is deleted. You just can't add more people until you upgrade again.${testMode ? ' Test mode: use card 4242 4242 4242 4242.' : ''}</p>`}`,
   { flash, back: { href: '/account', label: 'Account' } });
@@ -671,7 +674,7 @@ function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, 
       <form method="post" action="/team/code" data-confirm="Make a new code? The current one will stop working.">
         <button type="submit" class="sm ghost">New code</button></form></div>
     <div class="code" id="join-code">${joinCode.slice(0, 4)}-${joinCode.slice(4)}</div>
-    <div class="hint">Share this with your crew. After creating an account, they enter it to join ${org.name} as workers.</div>
+    <div class="hint">Share this with your crew. After creating an account, they enter it to join ${org.name} as crew.</div>
   </div>` : ''}
   <h2>People</h2>
   <div class="list">${members.map((m) => html`<a class="li" href="/team/${m.user_id}">
@@ -681,7 +684,7 @@ function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, 
     <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
   </a>`)}</div>
   <p class="hint"><strong>Admins</strong> see and manage everything, including money and the team.
-    <strong>Workers</strong> see only open jobs assigned to them: dates, address, scope of work and their own pay.</p>
+    <strong>Crew</strong> see only open jobs assigned to them: dates, address, scope of work and their own pay.</p>
   ${admin ? html`<form method="post" action="/team/add" class="form-card" novalidate>
     <h3>Add by email</h3>
     <div class="hint">For someone who already has an account.</div>
@@ -705,7 +708,7 @@ function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
   <div class="list" id="contact">
     <a class="li" href="mailto:${member.email}"><span class="icon-bubble">${icon('mail')}</span><div class="main-t"><div class="s">Email</div><div class="t">${member.email}</div></div></a>
     ${member.phone ? html`<a class="li" href="tel:${member.phone}"><span class="icon-bubble">${icon('phone')}</span><div class="main-t"><div class="s">Phone</div><div class="t">${member.phone}</div></div></a>` : ''}
-    ${member.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(member.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Address</div><div class="t">${member.address}</div></div></a>` : ''}
+    ${member.zip ? html`<div class="li"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">ZIP code</div><div class="t">${member.zip}</div></div></div>` : ''}
   </div>
   <div class="stats">
     <div class="stat"><div class="k">Jobs completed</div><div class="v" data-k="jobs-done">${done.length}</div></div>
@@ -816,7 +819,8 @@ function clientsPage({ clients, q }) {
   </form>
   ${clients.length ? html`<div class="list">${clients.map((c) => html`<a class="li" href="/clients/${c.id}">
     <span class="avatar">${c.name[0].toUpperCase()}</span>
-    <div class="main-t"><div class="t">${c.name}</div><div class="s">${c.address || c.phone || c.email || ' '}</div></div>${chev()}
+    <div class="main-t"><div class="t">${c.name}</div><div class="s">${c.address || c.phone || c.email || ' '}</div></div>
+    ${c.value_cents ? html`<div class="r"><span class="amt">${fmt(c.value_cents)}</span></div>` : ''}${chev()}
   </a>`)}</div>` : html`<div class="empty">${q ? 'No clients match that name.' : 'No clients yet.'}</div>`}`,
   { fab: { href: '/clients/new', label: 'New Client' } });
 }
@@ -842,7 +846,17 @@ function clientFormPage({ client, values, errors = {} }) {
 }
 
 function clientPage({ client, estimates, jobs, flash }) {
+  const value = jobs.reduce((a, j) => a + j.contract_cents, 0);
+  const paid = jobs.reduce((a, j) => a + j.payments_cents, 0);
+  const pipeline = estimates.filter((e) => !e.job_id && ['draft', 'sent'].includes(e.status)).reduce((a, e) => a + e.total_cents, 0);
   return layout(client.name, html`
+  <div class="stats" id="client-value">
+    <div class="stat wide"><div class="k">Total value</div><div class="v" data-k="client-value">${fmt(value)}</div>
+      <div class="s">${jobs.length} job${jobs.length === 1 ? '' : 's'}</div></div>
+    <div class="stat"><div class="k">Paid</div><div class="v" data-k="client-paid">${fmt(paid)}</div></div>
+    <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="client-owed">${fmt(value - paid)}</div></div>
+    ${pipeline ? html`<div class="stat wide"><div class="k">Open estimates</div><div class="v" data-k="client-pipeline">${fmt(pipeline)}</div></div>` : ''}
+  </div>
   <div class="list">
     ${client.phone ? html`<a class="li" href="tel:${client.phone}"><span class="icon-bubble">${icon('phone')}</span><div class="main-t"><div class="s">Phone</div><div class="t">${client.phone}</div></div></a>` : ''}
     ${client.email ? html`<a class="li" href="mailto:${client.email}"><span class="icon-bubble">${icon('mail')}</span><div class="main-t"><div class="s">Email</div><div class="t">${client.email}</div></div></a>` : ''}
@@ -890,6 +904,12 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
     </div>
     <div class="form-card">
       ${input('project_name', 'Project name', values, errors, { required: true })}
+      ${input('address', 'Job address', values, errors, { autocomplete: 'street-address', hint: "Leave blank to use the client's address." })}
+      <div class="two">
+        <div>${input('visit_date', 'Appointment date', values, errors, { type: 'date' })}</div>
+        <div>${input('visit_time', 'Time', values, errors, { type: 'time' })}</div>
+      </div>
+      <div class="hint">Optional. Puts the estimate visit on your calendar.</div>
       ${textarea('scope', 'Scope of work', values, errors, { placeholder: 'What the job includes…' })}
       <label for="status">Status</label>
       <select id="status" name="status">${options(ESTIMATE_STATUS, values.status)}</select>
@@ -1057,7 +1077,10 @@ function estimatePage({ estimate, client, items, totalCents, job, options = [], 
   </div>`}
   <h2>Client</h2>
   <div class="list"><a class="li" href="/clients/${client.id}"><span class="avatar">${client.name[0].toUpperCase()}</span>
-    <div class="main-t"><div class="t">${client.name}</div><div class="s">${client.address || 'No address'}</div></div>${chev()}</a></div>
+    <div class="main-t"><div class="t">${client.name}</div><div class="s">${client.phone || client.email || ''}</div></div>${chev()}</a>
+    ${estimate.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(estimate.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Job address</div><div class="t">${estimate.address}</div></div></a>` : ''}
+    ${estimate.visit_date ? html`<a class="li" href="/jobs?day=${estimate.visit_date}"><span class="icon-bubble">${icon('calendar')}</span><div class="main-t"><div class="s">Appointment</div><div class="t" id="appointment">${fmtDate(estimate.visit_date)}${estimate.visit_time ? ` at ${fmtTime(estimate.visit_time)}` : ''}</div></div>${chev()}</a>` : ''}
+  </div>
   <h2>Scope of work</h2><div class="card pre">${estimate.scope || html`<span class="muted">—</span>`}</div>
   <h2>Line items</h2>
   <div class="card flush"><table class="lines">
@@ -1111,7 +1134,7 @@ function publicEstimatePage({ estimate, company, hasLogo, client, items, totals,
   <div class="card">
     <div class="muted" style="font-size:13px;letter-spacing:.04em;text-transform:uppercase">Estimate E-${estimate.id}</div>
     <h1 class="pub-title">${estimate.project_name}</h1>
-    <div class="muted">Prepared for <strong style="color:var(--text)">${client.name}</strong>${client.address ? ` · ${client.address}` : ''}</div>
+    <div class="muted">Prepared for <strong style="color:var(--text)">${client.name}</strong>${estimate.address || client.address ? ` · ${estimate.address || client.address}` : ''}</div>
   </div>
   ${approved ? html`<div class="card pub-ok" id="approved">
     <div class="row" style="gap:10px"><span class="icon-bubble" style="background:var(--green-soft);color:var(--green)">${icon('check')}</span>
@@ -1233,14 +1256,21 @@ function jobsPage({ jobs, status, cal }) {
   const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
   return layout('Jobs', html`
   ${calendar(cal)}
+  <div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
+    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate appointment</span></div>
   <h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
-  ${jobList(cal.dayJobs, 'No jobs scheduled this day.')}
+  ${cal.dayVisits?.length ? html`<div class="list" id="day-visits">${cal.dayVisits.map((e) => html`<a class="li" href="/estimates/${e.id}">
+    <span class="icon-bubble" style="background:var(--accent-soft);color:var(--accent)">${icon('file')}</span>
+    <div class="main-t"><div class="t">${e.visit_time ? `${fmtTime(e.visit_time)} · ` : ''}Estimate: ${e.project_name}</div>
+      <div class="s">${e.client_name}${e.address ? ` · ${e.address}` : ''}</div></div>${pill(e.status, ESTIMATE_STATUS)}${chev()}</a>`)}</div>` : ''}
+  ${cal.dayJobs.length || !cal.dayVisits?.length ? jobList(cal.dayJobs, 'No jobs scheduled this day.') : ''}
+  <div class="actions"><a class="btn secondary sm" href="/estimates/new?date=${cal.day}">${icon('plus')}Estimate appointment this day</a></div>
   <h2>All jobs</h2>
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
 
 function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, forms = {}, emails = [], flash }) {
-  const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes }, errors: {} };
+  const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes, address: job.address }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
   const af = forms.assign || { values: {}, errors: {} };
@@ -1254,7 +1284,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
     <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
     <div class="stat"><div class="k">Payments received</div><div class="v" data-k="payments">${fmt(job.payments_cents)}</div></div>
     <div class="stat"><div class="k">Expenses</div><div class="v" data-k="expenses">${fmt(job.expenses_cents)}</div></div>
-    <div class="stat"><div class="k">Worker payouts</div><div class="v" data-k="payouts">${fmt(job.payouts_cents)}</div></div>
+    <div class="stat"><div class="k">Crew payouts</div><div class="v" data-k="payouts">${fmt(job.payouts_cents)}</div></div>
     <div class="stat ${job.gross_profit_cents >= 0 ? 'good' : 'bad'}"><div class="k">Gross profit ${final ? '(final)' : '(provisional)'}</div>
       <div class="v" data-k="profit">${fmt(job.gross_profit_cents)}</div>
       <div class="s">Contract − expenses − payouts${final ? '' : '. Provisional until completed.'}</div></div>
@@ -1271,6 +1301,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
   <h2>Job details</h2>
   <form method="post" action="/jobs/${job.id}" class="form-card" novalidate>
     <label for="status">Status</label><select id="status" name="status">${options(JOB_STATUS, jf.values.status)}</select>
+    ${input('address', 'Job address', jf.values, jf.errors, { autocomplete: 'street-address' })}
     <div class="two">
       <div>${input('start_date', 'Start date', jf.values, jf.errors, { type: 'date' })}</div>
       <div>${input('end_date', 'End date', jf.values, jf.errors, { type: 'date' })}</div>
@@ -1279,7 +1310,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
     <div class="form-actions"><button type="submit">Save job details</button></div>
   </form>
 
-  <h2>Workers & payouts</h2>
+  <h2>Crew & payouts</h2>
   ${crew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
     <span class="avatar">${initialOf(c)}</span>
     <div class="main-t"><div class="t">${who(c)}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : ROLES[c.role]}</div></div>
