@@ -119,6 +119,28 @@ select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
 select pg_temp.expect((select name from clients where id = :client) = 'Jane Rivera', 'other org could not edit clients');
 select pg_temp.expect((select count(*) from payments) = 1, 'other org could not delete payments');
 
+-- Join codes: only admins can read the code; a new person joins with it as a worker
+reset role;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-00000000000e', 'erin@vista.test');
+set role authenticated;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect(org_join_code(:'vista') is null, 'workers cannot see the join code');
+do $$ begin perform join_code from organizations; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'the join code column cannot be selected directly');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select org_join_code(:'vista') as code \gset
+select pg_temp.expect(length(:'code') = 8, 'admin sees an 8-character code');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000e');
+select pg_temp.expect(pg_temp.fails('select join_organization(''WRONG123'')'), 'a wrong code is refused');
+select pg_temp.expect(join_organization(lower(substr(:'code', 1, 4)) || '-' || lower(substr(:'code', 5))) = :'vista'::uuid,
+  'code works regardless of case and dashes');
+select pg_temp.expect((select role from memberships where user_id = '00000000-0000-0000-0000-00000000000e') = 'worker', 'joining makes you a worker');
+select pg_temp.expect((select count(*) from clients) = 0, 'a new joiner sees no business data');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.expect(regenerate_join_code(:'vista') <> :'code', 'admin can change the code');
+do $$ begin update organizations set join_code = 'EASY1234'; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'nobody can pick their own join code directly');
+
 -- Signed-out (anon) gets nothing
 reset role; set role anon;
 do $$ begin perform count(*) from clients; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;

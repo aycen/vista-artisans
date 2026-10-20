@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const pg = require('pg');
 const { startFakeAuth } = require('./fake-supabase-auth');
+const { fmt } = require('../src/money');
 
 const ADMIN_URL = process.env.TEST_PG_ADMIN_URL || 'postgresql://postgres@localhost:5432/postgres';
 const DB_NAME = `vista_test_${process.pid}`;
@@ -29,7 +30,7 @@ async function start() {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 async function req(method, p, form, { auth = true } = {}) {
@@ -95,12 +96,14 @@ test('accounts: sign up, create organization, and everything requires login', as
   let r = await post('/signup', { email: 'bad', password: 'short' });
   assert.equal(r.status, 422); assert.match(r.body, /valid email/); assert.match(r.body, /at least 8/);
 
-  // Alice signs up, is sent to create her organization
+  // Alice signs up and lands on the welcome page: join with a code, or start a company
   as('alice');
   r = await post('/signup', { email: 'alice@vista.test', password: 'alice-password' });
   assert.equal(r.status, 303);
   assert.match(r.setCookies.join(), /HttpOnly/);
-  assert.equal((await getPage('/')).location, '/org/new');
+  assert.equal((await getPage('/')).location, '/welcome');
+  r = await getPage('/welcome'); assert.match(r.body, /Join your company/); assert.match(r.body, /Start a new company/);
+  r = await post('/org/new', { name: '' }); assert.equal(r.status, 422); assert.match(r.body, /Company name is required/);
   r = await post('/org/new', { name: 'Vista Artisans' }); assert.equal(r.status, 303);
   r = await getPage('/'); assert.equal(r.status, 200); assert.match(r.body, /Vista Artisans/);
 
@@ -184,7 +187,7 @@ test('full workflow', async () => {
   assert.equal(jobIds.size, 1, 'repeated clicks must not create duplicate jobs');
   const jobId = [...jobIds][0];
   r = await getPage('/jobs');
-  assert.equal((r.body.match(/<tr data-href="\/jobs\/\d+"/g) || []).length, 1);
+  assert.equal((r.body.match(/<a class="li" href="\/jobs\/\d+"/g) || []).length, 1);
 
   // Job carries client, address, scope and approved price
   r = await getPage(`/jobs/${jobId}`);
@@ -228,11 +231,13 @@ test('full workflow', async () => {
   assert.equal(stat(page, 'profit'), '$2,552.50');
   assert.match((await getPage('/')).body, /id="total-outstanding">\$2,052\.25</);
 
-  // 8. Complete job (with a scheduled date and notes)
-  r = await post(`/jobs/${jobId}`, { status: 'completed', scheduled_date: '2026-11-03', notes: 'Gate code 1234' }); assert.equal(r.status, 303);
+  // 8. Complete job (with start and end dates and notes); the end can't come before the start
+  r = await post(`/jobs/${jobId}`, { status: 'completed', start_date: '2026-11-03', end_date: '2026-11-01', notes: 'Gate code 1234' });
+  assert.equal(r.status, 422); assert.match(r.body, /End date can(&#39;|')t be before the start date/); assert.match(r.body, /Gate code 1234/);
+  r = await post(`/jobs/${jobId}`, { status: 'completed', start_date: '2026-11-03', end_date: '2026-11-07', notes: 'Gate code 1234' }); assert.equal(r.status, 303);
   page = (await getPage(`/jobs/${jobId}`)).body;
   assert.match(page, /Gross profit \(final\)/); assert.doesNotMatch(page, /\(provisional\)/);
-  assert.match(page, /Gate code 1234/); assert.match(page, /value="2026-11-03"/);
+  assert.match(page, /Gate code 1234/); assert.match(page, /value="2026-11-03"/); assert.match(page, /value="2026-11-07"/);
 
   // Completed job leaves the active list but its balance still counts as outstanding
   page = (await getPage('/')).body;
@@ -280,7 +285,7 @@ test('full workflow', async () => {
   const deckId = Number((await dbClient.query("SELECT id FROM estimates WHERE project_name = 'Deck'")).rows[0].id);
   await post(`/estimates/${deckId}/status`, { status: 'approved' });
   const deckJob = idFrom((await post(`/estimates/${deckId}/convert`, {})).location);
-  await post(`/jobs/${deckJob}`, { status: 'in_progress', scheduled_date: '2026-11-10', notes: 'Bring the long ladder' });
+  await post(`/jobs/${deckJob}`, { status: 'in_progress', start_date: '2026-11-10', end_date: '2026-11-12', notes: 'Bring the long ladder' });
   const uid = async (email) => (await dbClient.query('SELECT id FROM auth.users WHERE email = $1', [email])).rows[0].id;
   r = await post(`/jobs/${deckJob}/assignments`, { user_id: await uid('dave@vista.test'), payout: 'abc' });
   assert.equal(r.status, 422); assert.match(r.body, /Payout must be a number/);
@@ -302,13 +307,39 @@ test('full workflow', async () => {
   as('carol');
   page = (await getPage(`/jobs/${jobId}`)).body;
   assert.equal(stat(page, 'contract'), '$4,552.50');
-  r = await post(`/jobs/${jobId}/payments`, { payment_amount: '52.25', paid_on: '2026-10-19' }); assert.equal(r.status, 303);
+  // Home shows this month's revenue: payments dated in the current month (Pacific time by default).
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
+  const monthRevenue = async () => (await getPage('/')).body.match(/id="month-revenue">([^<]+)</)[1];
+  const expectedRevenue = async () => fmt(Number((await dbClient.query(
+    'SELECT coalesce(sum(amount_cents), 0) AS c FROM payments WHERE to_char(paid_on, \'YYYY-MM\') = $1', [today.slice(0, 7)])).rows[0].c));
+  assert.equal(await monthRevenue(), await expectedRevenue());
+  const before = await monthRevenue();
+  r = await post(`/jobs/${jobId}/payments`, { payment_amount: '52.25', paid_on: today }); assert.equal(r.status, 303);
   assert.equal(stat((await getPage(`/jobs/${jobId}`)).body, 'balance'), '$2,000.00');
+  assert.notEqual(await monthRevenue(), before); assert.equal(await monthRevenue(), await expectedRevenue());
+  assert.match(await monthRevenue(), /^\$\d/);
+
+  // Erin joins with the company's join code (no company of her own needed) and becomes a worker
+  as('alice');
+  const code = (await getPage('/team')).body.match(/id="join-code">([A-Z0-9]{4}-[A-Z0-9]{4})</)[1];
+  as('erin'); await post('/signup', { email: 'erin@vista.test', password: 'erin-password' });
+  assert.equal((await getPage('/')).location, '/welcome');
+  r = await post('/org/join', { code: 'ZZZZ-ZZZZ' }); assert.equal(r.status, 422); assert.match(r.body, /doesn(&#39;|')t match any company/);
+  assert.equal((await dbClient.query('SELECT count(*)::int AS n FROM join_attempts')).rows[0].n, 1, 'failed attempt is counted');
+  r = await post('/org/join', { code: code.toLowerCase() }); assert.equal(r.status, 303);
+  page = (await getPage('/')).body;
+  assert.match(page, /Schedule/); assert.doesNotMatch(page, /id="month-revenue"/); assert.doesNotMatch(page, /join-code/);
+  assert.equal((await getPage('/team')).status, 404);
+  // A new code stops the old one from working
+  as('alice'); r = await post('/team/code', {}); assert.equal(r.status, 303);
+  assert.notEqual((await getPage('/team')).body.match(/id="join-code">([^<]+)</)[1], code);
+  as('bob'); r = await post('/org/join', { code }); assert.equal(r.status, 422);
 
   // Dave (worker) sees only his assigned jobs: date, address, scope and his own pay; no other money, no other pages
   as('dave');
   page = (await getPage('/')).body;
-  assert.match(page, /Schedule/); assert.match(page, /Deck/); assert.match(page, /9 Elm Rd/); assert.match(page, /2026-11-10/);
+  assert.match(page, /Schedule/); assert.match(page, /Deck/); assert.match(page, /9 Elm Rd/);
+  assert.match(page, /datetime="2026-11-10"/); assert.match(page, /datetime="2026-11-12"/);
   assert.match(page, /\$350\.00/); assert.equal((page.match(/\$/g) || []).length, 1, 'only his own pay is shown');
   assert.doesNotMatch(page, /Kitchen remodel/);
   page = (await getPage(`/schedule/${deckJob}`)).body;
@@ -373,6 +404,7 @@ test('full workflow', async () => {
   page = (await getPage('/clients')).body;
   assert.doesNotMatch(page, /Jane Rivera/); assert.match(page, /No clients yet/);
   assert.match((await getPage('/')).body, /id="total-outstanding">\$0\.00</);
+  assert.match((await getPage('/')).body, /id="month-revenue">\$0\.00</);
   // Bob can't switch into Vista by forging the organization cookie
   jars.bob.org = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
   assert.doesNotMatch((await getPage('/clients')).body, /Jane Rivera/);

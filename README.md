@@ -17,7 +17,7 @@ Several people can share one organization, and separate organizations never see 
 1. At [supabase.com](https://supabase.com), create a new project and save its database password.
 2. In the project's **SQL Editor**, paste all of `supabase/setup.sql` and click **Run** (once, on a new project).
    It is the files in `supabase/migrations/` combined. If you already ran an older `setup.sql`, run only the
-   migration files added since (for example `0003_payouts.sql`).
+   migration files added since (for example `0004_join_codes_and_job_dates.sql`).
 3. Optional: under **Authentication → Sign In / Providers → Email**, decide whether new users must confirm their email
    (recommended on). With it on, people confirm by email and then log in.
 
@@ -30,7 +30,8 @@ Several people can share one organization, and separate organizations never see 
 | `DATABASE_URL` | Connect button → Session pooler connection string, with your database password filled in |
 
 Other optional settings: `PORT` (default 3000), `COOKIE_SECURE=1` when served over HTTPS (always in production),
-`DATABASE_CA_FILE` (path to Supabase's CA certificate, to verify the database's TLS certificate), `DATABASE_POOL_SIZE`.
+`DATABASE_CA_FILE` (path to Supabase's CA certificate, to verify the database's TLS certificate), `DATABASE_POOL_SIZE`,
+`APP_TIMEZONE` (default `America/Los_Angeles`; decides which payments count as "this month" on the home screen).
 
 The service-role key is **not** needed. Keep `DATABASE_URL` secret: it contains the database password.
 
@@ -41,8 +42,9 @@ npm install
 SUPABASE_URL=... SUPABASE_ANON_KEY=... DATABASE_URL=... npm start
 ```
 
-Open http://localhost:3000, create an account, and create your organization (you become its admin). Teammates create
-their own accounts, then an admin adds their email on the **Team** page as an **Admin** or a **Worker**.
+Open http://localhost:3000, create an account, and choose **Start a new company** (you become its admin). Teammates
+create their own accounts and choose **Join your company**, typing the join code shown on the admin's **Team** page; they
+join as workers and an admin can promote them. Admins can also add someone who already has an account by email.
 
 ### Putting it online (Render)
 
@@ -54,7 +56,9 @@ their own accounts, then an admin adds their email on the **Team** page as an **
 3. When it's live, copy the site address (like `https://vista-artisans.onrender.com`). In Supabase, open
    **Authentication → URL Configuration** and set **Site URL** to that address followed by `/login`, so email
    confirmation links land on the login page.
-4. Open the site, create your account, and create your organization.
+4. Open the site, create your account, and start your company.
+
+On a phone, use the browser's **Add to Home Screen** to get an app icon that opens full screen.
 
 The `starter` plan stays awake; Render's free plan also works but sleeps when idle and takes a while to wake up.
 
@@ -73,7 +77,7 @@ psql -d vista_test -f supabase/setup.sql
 psql -d vista_test -f supabase/tests/isolation_test.sql   # ends with ALL ISOLATION TESTS PASSED
 ```
 
-`npm test` covers sign-up, organization creation, login required everywhere, create client → estimate → save and reopen →
+`npm test` covers sign-up, the welcome page, joining with a code (wrong code, rotated code), organization creation, start/end dates, this month's revenue, login required everywhere, create client → estimate → save and reopen →
 approve → convert (5 simultaneous clicks make one job) → expenses with correction and deletion → payments → complete job,
 totals at every step, silent session refresh, an admin teammate, a worker who sees only the schedule, role changes,
 deleting estimates and clients (and refusing for converted ones), moving an estimate to another client, another organization getting
@@ -86,9 +90,11 @@ deleting estimates and clients (and refusing for converted ones), moving an esti
 - **Converting:** only approved estimates convert. The job copies the client, the client's property address at that moment,
   project name, scope and the estimate total. The database allows one job per estimate and locks converted estimates.
 - **Worker payouts:** on a job, an admin assigns people and enters what each will be paid. Payouts are records only.
+- **Job dates:** each job has an optional start date and end date; the end can't be before the start.
 - **Jobs:** outstanding balance = contract total − payments. Gross profit = contract total − expenses − worker payouts, labeled provisional
   until the job is completed. Payments are records only; the app never processes money.
-- **Home:** open estimates are draft, sent, or approved-but-not-converted. Total outstanding adds up every job's positive
+- **Home:** revenue this month = payments received with a date in the current calendar month (`APP_TIMEZONE`).
+  Open estimates are draft, sent, or approved-but-not-converted. Total outstanding adds up every job's positive
   balance in the current organization, including completed jobs that still owe money.
 - **Roles:** *Admins* see and manage everything, including money and the team. *Workers* see only open jobs they are
   assigned to: schedule, client name, address, scope of work, notes and their own pay; no prices, costs, payments,
@@ -98,4 +104,7 @@ deleting estimates and clients (and refusing for converted ones), moving an esti
 - **Deleting:** estimates can be deleted unless converted to a job. Clients can be deleted along with their estimates,
   unless they have jobs (kept so job, expense and payment records stay complete). Both ask for confirmation.
   To move an estimate to another client, edit it and pick a different client.
-- **Organizations:** a person can belong to several organizations and switch between them from the header.
+- **Joining:** each company has an 8-character join code (shown as XXXX-XXXX on the Team page, admins only). Joining
+  with it makes you a worker. An admin can make a new code, which stops the old one working. Ten wrong codes in an hour
+  locks that person out of joining for the hour.
+- **Organizations:** a person can belong to several companies and switch between them on the **Account** page.

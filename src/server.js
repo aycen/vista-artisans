@@ -6,6 +6,7 @@ const { parseMoney, parseQty, plain, fmtQty } = require('./money');
 const v = require('./views');
 
 const PORT = Number(process.env.PORT || 3000);
+const APP_TIMEZONE = process.env.APP_TIMEZONE || 'America/Los_Angeles'; // decides which payments count as "this month"
 const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
 
 // ---------- responses ----------
@@ -209,10 +210,17 @@ route('GET', '/', async (ctx) => {
     OR (estimates.status = 'approved' AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.estimate_id = estimates.id)))
     ORDER BY estimates.updated_at DESC`, o);
   const activeJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.status IN ('not_started', 'in_progress')
-    ORDER BY jobs.scheduled_date NULLS LAST, jobs.id`, o)).map(withJobMath);
+    ORDER BY jobs.start_date NULLS LAST, jobs.id`, o)).map(withJobMath);
   const allJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ?`, o)).map(withJobMath);
   const outstandingCents = allJobs.reduce((s, j) => s + Math.max(0, j.balance_cents), 0);
-  return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, flash: url.searchParams.get('msg') }));
+  // Revenue this month = payments received with a date in the current calendar month (in APP_TIMEZONE).
+  const month = await db.get(`WITH m AS (SELECT date_trunc('month', now() AT TIME ZONE ?)::date AS start)
+    SELECT to_char(m.start, 'FMMonth YYYY') AS label,
+      (SELECT coalesce(sum(amount_cents), 0) FROM payments
+        WHERE org_id = ? AND paid_on >= m.start AND paid_on < (m.start + interval '1 month')::date) AS cents
+    FROM m`, APP_TIMEZONE, o);
+  return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, revenueCents: Number(month.cents), monthLabel: month.label,
+    flash: url.searchParams.get('msg') }));
 }, { worker: true });
 
 // Clients
@@ -341,13 +349,17 @@ route('GET', '/jobs/:id', ({ db, org, id, url }) => renderJob(db, org.org_id, id
 route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
   const f = formObj(form);
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
-  const values = { status: f.status, scheduled_date: str(f.scheduled_date, 20), notes: f.notes ?? '' };
+  const values = { status: f.status, start_date: str(f.start_date, 20), end_date: str(f.end_date, 20), notes: f.notes ?? '' };
   const errors = {};
   if (!v.JOB_STATUS[values.status]) errors.status = 'Choose a valid job status.';
-  if (values.scheduled_date && !isDate(values.scheduled_date)) errors.scheduled_date = 'Scheduled date must be a valid date.';
+  if (values.start_date && !isDate(values.start_date)) errors.start_date = 'Start date must be a valid date.';
+  if (values.end_date && !isDate(values.end_date)) errors.end_date = 'End date must be a valid date.';
+  if (!hasErrors(errors) && values.start_date && values.end_date && values.end_date < values.start_date) {
+    errors.end_date = 'End date can\'t be before the start date.';
+  }
   if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { job: { values, errors } } }, 422);
-  const r = await attempt(db, () => db.run('UPDATE jobs SET status = ?, scheduled_date = ?, notes = ?, updated_at = now() WHERE id = ?',
-    values.status, values.scheduled_date || null, str(values.notes, 10000), id));
+  const r = await attempt(db, () => db.run('UPDATE jobs SET status = ?, start_date = ?, end_date = ?, notes = ?, updated_at = now() WHERE id = ?',
+    values.status, values.start_date || null, values.end_date || null, str(values.notes, 10000), id));
   if (r.error) { console.error(r.error); return renderJob(db, org.org_id, id, { forms: { job: { values, errors: SAVE_FAILED } } }, 500); }
   return redirect(`/jobs/${id}?msg=Job+saved`);
 });
@@ -507,7 +519,8 @@ route('POST', '/clients/:id/delete', async ({ db, org, id }) => {
 // Team
 async function renderTeam(db, org, user, extra = {}, status = 200) {
   const members = await db.all('SELECT * FROM org_members(?)', org.org_id);
-  return page(status, v.teamPage({ org, members, me: user.id, ...extra }));
+  const joinCode = org.role === 'admin' ? (await db.get('SELECT org_join_code(?) AS code', org.org_id)).code : null;
+  return page(status, v.teamPage({ org, members, me: user.id, joinCode, ...extra }));
 }
 route('GET', '/team', ({ db, org, user, url }) => renderTeam(db, org, user, { flash: url.searchParams.get('msg') }));
 route('POST', '/team/add', async ({ db, org, user, form }) => {
@@ -529,6 +542,10 @@ route('POST', '/team/role', async ({ db, org, user, form }) => {
   }
   return redirect('/team?msg=Role+updated');
 });
+route('POST', '/team/code', async ({ db, org }) => {
+  await db.get('SELECT regenerate_join_code(?) AS code', org.org_id);
+  return redirect('/team?msg=New+join+code+made');
+});
 route('POST', '/team/remove', async ({ db, org, user, form }) => {
   const r = await attempt(db, () => db.run('SELECT remove_member(?, ?::uuid)', org.org_id, str(form.get('user_id'), 64)));
   if (r.error) {
@@ -538,20 +555,51 @@ route('POST', '/team/remove', async ({ db, org, user, form }) => {
   return redirect('/team?msg=Teammate+removed');
 });
 
-// Organizations (these routes work even before the user belongs to one)
-const ORG_ROUTES = new Set(['/org/new', '/org/switch']);
-route('GET', '/org/new', ({ orgs }) => ok(v.orgNewPage({ hasOrgs: orgs.length > 0 })), { worker: true });
+// Joining or creating a company, and the account page (these work before the user belongs to one)
+const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account']);
+const orgCookie = (id) => cookie('org', id, 60 * 60 * 24 * 365);
+route('GET', '/welcome', ({ orgs }) => ok(v.welcomePage({ hasOrgs: orgs.length > 0 })), { worker: true });
+route('GET', '/org/new', () => redirect('/welcome'), { worker: true });
 route('POST', '/org/new', async ({ db, orgs, form }) => {
   const name = str(form.get('name'), 200);
-  if (!name) return page(422, v.orgNewPage({ hasOrgs: orgs.length > 0, values: { name }, errors: { name: 'Organization name is required.' } }));
+  if (!name) return page(422, v.welcomePage({ hasOrgs: orgs.length > 0, values: { name }, errors: { name: 'Company name is required.' } }));
   const { id } = await db.get('SELECT create_organization(?) AS id', name);
-  return redirect('/?msg=Organization+created', { 'Set-Cookie': cookie('org', id, 60 * 60 * 24 * 365) });
+  return redirect('/?msg=Company+created', { 'Set-Cookie': orgCookie(id) });
+}, { worker: true });
+route('POST', '/org/join', async ({ db, orgs, form }) => {
+  const code = str(form.get('code'), 40);
+  const fail = (msg) => page(422, v.welcomePage({ hasOrgs: orgs.length > 0, values: { code }, errors: { code: msg } }));
+  if (!code) return fail('Enter the join code from your admin.');
+  const r = await attempt(db, () => db.get('SELECT join_organization(?) AS id', code));
+  if (r.error) {
+    if (!dbMessage(r.error)) throw r.error;
+    // The failed call was rolled back, so count the miss separately (limits guessing).
+    if (/doesn't match/.test(r.error.message)) await db.run('SELECT record_failed_join()');
+    return fail(dbMessage(r.error));
+  }
+  const already = orgs.some((o) => o.org_id === r.value.id);
+  return redirect(`/?msg=${already ? 'You+are+already+in+that+company' : 'Welcome+to+the+team'}`, { 'Set-Cookie': orgCookie(r.value.id) });
 }, { worker: true });
 route('POST', '/org/switch', async ({ orgs, form }) => {
   const target = orgs.find((o) => o.org_id === form.get('org_id'));
   if (!target) return notFound();
-  return redirect('/', { 'Set-Cookie': cookie('org', target.org_id, 60 * 60 * 24 * 365) });
+  return redirect('/', { 'Set-Cookie': orgCookie(target.org_id) });
 }, { worker: true });
+route('GET', '/account', ({ user, org, orgs, url }) => ok(v.accountPage({ user, org, orgs, flash: url.searchParams.get('msg') })), { worker: true });
+
+// Public files for the home-screen app icon (no login needed).
+const fs = require('node:fs');
+const path = require('node:path');
+const STATIC = {
+  'manifest.webmanifest': 'application/manifest+json', 'icon.svg': 'image/svg+xml',
+  'icon-192.png': 'image/png', 'icon-512.png': 'image/png', 'apple-touch-icon.png': 'image/png',
+};
+const staticCache = new Map();
+function staticFile(name) {
+  if (!STATIC[name]) return null;
+  if (!staticCache.has(name)) staticCache.set(name, fs.readFileSync(path.join(__dirname, '..', 'public', name)));
+  return { status: 200, body: staticCache.get(name), headers: { 'Content-Type': STATIC[name], 'Cache-Control': 'public, max-age=86400' } };
+}
 
 // ---------- server ----------
 async function currentUser(cookies) {
@@ -607,8 +655,10 @@ async function health() {
     database: await check(() => pool.query('SELECT 1')),
     database_as_user: await check(() => asUser('00000000-0000-0000-0000-000000000000', (db) => db.get('SELECT count(*) FROM organizations'))),
     database_schema: await check(async () => {
-      const r = await pool.query("SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts");
+      const r = await pool.query(`SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts,
+        to_regclass('public.join_attempts') IS NOT NULL AS join_codes`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -632,6 +682,7 @@ async function handle(req, res) {
 
   if (['/login', '/signup'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
   if (url.pathname === '/healthz' && req.method === 'GET') return health();
+  if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');
 
   const { user, setCookies = [] } = await currentUser(cookies);
   if (!user) {
@@ -644,7 +695,7 @@ async function handle(req, res) {
   }
 
   const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
-  if (!r) return { ...notFound(), nav: { user, org: null, orgs: [] } };
+  if (!r) return notFound();
   const form = req.method === 'POST' ? await readBody(req) : null;
   const m = url.pathname.match(r.re);
 
@@ -652,10 +703,10 @@ async function handle(req, res) {
     const orgs = await db.all(`SELECT m.org_id, m.role, o.name FROM memberships m JOIN organizations o ON o.id = m.org_id
       WHERE m.user_id = ? ORDER BY o.name`, user.id);
     const org = orgs.find((o) => o.org_id === cookies.org) || orgs[0] || null;
-    if (!org && !ORG_ROUTES.has(url.pathname)) return { ...redirect('/org/new'), nav: { user, org, orgs } };
+    if (!org && !ORG_ROUTES.has(url.pathname)) return { ...redirect('/welcome'), nav: { user, org, orgs } };
     if (org && org.role !== 'admin' && !r.worker) return { ...notFound(), nav: { user, org, orgs } };
     const out = await r.handler({ req, url, form, db, user, org, orgs, id: m[1] ? Number(m[1]) : undefined });
-    return { ...out, nav: { user, org, orgs } };
+    return { ...out, nav: { user, org, orgs }, path: url.pathname };
   });
   const existing = [].concat(result.headers?.['Set-Cookie'] || []);
   return { ...result, headers: { ...result.headers, 'Set-Cookie': [...setCookies, ...existing] } };
@@ -668,9 +719,10 @@ function respond(res, out) {
   };
   if (Array.isArray(headers['Set-Cookie']) && !headers['Set-Cookie'].length) delete headers['Set-Cookie'];
   let body = out.body || '';
-  if (body) {
+  if (typeof body === 'string' && body) {
     headers['Content-Type'] ||= 'text/html; charset=utf-8';
-    body = body.replace('<!--NAV-->', out.nav?.user ? v.nav(out.nav) : '');
+    const n = out.nav?.user ? v.nav({ ...out.nav, path: out.path }) : { nav: '', avatar: '' };
+    body = body.replace('<!--NAV-->', n.nav).replace('<!--AVATAR-->', n.avatar);
   }
   res.writeHead(out.status, headers);
   res.end(body);

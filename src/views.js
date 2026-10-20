@@ -4,67 +4,198 @@ const { fmt, fmtQty } = require('./money');
 
 const ESTIMATE_STATUS = { draft: 'Draft', sent: 'Sent', approved: 'Approved', declined: 'Declined' };
 const JOB_STATUS = { not_started: 'Not started', in_progress: 'In progress', completed: 'Completed' };
+const ROLES = { admin: 'Admin', worker: 'Worker' };
 
+// ---------- Design system ----------
 const CSS = `
-*{box-sizing:border-box}
-body{margin:0;font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1d232a;background:#f5f6f7}
-a{color:#1f5fa8}
-header{background:#22303c;color:#fff}
-header .in{max-width:980px;margin:0 auto;padding:10px 16px;display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center}
-header a{color:#fff;text-decoration:none}
-header .brand{font-weight:700;margin-right:auto}
-header form{margin:0}
-.org-switch select{width:auto;padding:3px 6px;font-size:.9rem}
-.muted-light{color:#c4ced8}
-header button{background:none;border:1px solid #6b7c8c;color:#fff;padding:4px 10px}
-main{max-width:980px;margin:0 auto;padding:16px}
-h1{font-size:1.5rem;margin:.2em 0 .6em}
-h2{font-size:1.15rem;margin:1.4em 0 .5em}
-.card{background:#fff;border:1px solid #dde1e5;border-radius:6px;padding:16px;margin-bottom:16px}
-.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.spread{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
-.tablewrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;background:#fff}
-th,td{text-align:left;padding:8px;border-bottom:1px solid #e6e9ec;vertical-align:top}
-th{font-size:.85rem;color:#56616c;font-weight:600}
-td.num,th.num{text-align:right;white-space:nowrap}
-tr[data-href]{cursor:pointer}
-tr[data-href]:hover{background:#f0f5fb}
-label{display:block;font-weight:600;font-size:.9rem;margin:10px 0 4px}
-input,select,textarea{font:inherit;padding:8px;border:1px solid #b9c1c9;border-radius:4px;width:100%;background:#fff}
-textarea{min-height:90px}
-.items input{min-width:80px}
-.btn,button{font:inherit;display:inline-block;padding:8px 14px;border-radius:4px;border:1px solid #1f5fa8;background:#1f5fa8;color:#fff;text-decoration:none;cursor:pointer}
-.btn.secondary,button.secondary{background:#fff;color:#1f5fa8}
-button.danger,.btn.danger{background:#b3261e;border-color:#b3261e;color:#fff}
-button.link{background:none;border:none;color:#1f5fa8;padding:0;text-decoration:underline}
-button:disabled{opacity:.6;cursor:default}
-.errors{background:#fdecea;border:1px solid #f5c2bd;color:#8a1c14;border-radius:6px;padding:10px 14px;margin-bottom:16px}
-.errors ul{margin:4px 0 0;padding-left:20px}
-.flash{background:#e7f4ea;border:1px solid #b7dfc0;color:#1e5b2c;border-radius:6px;padding:10px 14px;margin-bottom:16px}
-.field-error{color:#b3261e;font-size:.85rem;margin-top:2px}
-.invalid{border-color:#b3261e}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.8rem;background:#e6e9ec;color:#333}
-.badge.approved,.badge.completed{background:#dcf1e1;color:#1e5b2c}
-.badge.sent,.badge.in_progress{background:#dde9f7;color:#1f4f87}
-.badge.declined{background:#f8e0de;color:#8a1c14}
-.muted{color:#66717c}
+:root{
+  --bg:#f3f4f8;--surface:#ffffff;--surface-2:#f7f8fb;--text:#0f172a;--text-2:#475569;--text-3:#94a3b8;
+  --line:#e6e8ef;--accent:#4f46e5;--accent-2:#6366f1;--accent-soft:#eef0ff;--on-accent:#ffffff;
+  --green:#059669;--green-soft:#e7f7f0;--amber:#b45309;--amber-soft:#fdf3e2;--red:#dc2626;--red-soft:#fdecec;
+  --blue:#2563eb;--blue-soft:#e8f0fe;--gray-soft:#eef1f5;
+  --radius:16px;--radius-sm:12px;--shadow:0 1px 2px rgba(15,23,42,.04),0 4px 16px rgba(15,23,42,.06);
+  --tabbar-h:64px;color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0b0d14;--surface:#151823;--surface-2:#1b1f2c;--text:#eef1f7;--text-2:#a5adbf;--text-3:#6b7389;
+  --line:#262b3a;--accent:#818cf8;--accent-2:#6366f1;--accent-soft:#232647;--on-accent:#0b0d14;
+  --green:#34d399;--green-soft:#0f2a22;--amber:#fbbf24;--amber-soft:#2d2412;--red:#f87171;--red-soft:#321617;
+  --blue:#60a5fa;--blue-soft:#14223a;--gray-soft:#20253a;--shadow:0 1px 2px rgba(0,0,0,.3);color-scheme:dark;
+}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-2);margin:28px 4px 10px}
+.svg{width:22px;height:22px;flex:none;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.svg.sm{width:18px;height:18px}
+
+/* App shell */
+.shell{min-height:100vh}
+.sidebar{display:none}
+.main{padding:0 16px calc(var(--tabbar-h) + 28px + env(safe-area-inset-bottom));max-width:760px;margin:0 auto}
+.appbar{position:sticky;top:0;z-index:20;margin:0 -16px;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;
+  background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:saturate(180%) blur(16px);-webkit-backdrop-filter:saturate(180%) blur(16px)}
+.appbar-row{display:flex;align-items:center;gap:10px;min-height:40px}
+.appbar .back{display:inline-flex;align-items:center;gap:2px;color:var(--accent);font-weight:500;margin-left:-6px;padding:6px}
+.appbar .back .svg{transform:rotate(180deg)}
+.appbar-spacer{flex:1}
+.page-title{font-size:30px;line-height:1.15;font-weight:750;letter-spacing:-.02em;margin:6px 2px 4px}
+.page-sub{color:var(--text-2);margin:0 2px 14px;font-size:15px}
+.avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:15px}
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;
+  padding:6px 6px calc(6px + env(safe-area-inset-bottom));min-height:var(--tabbar-h);
+  background:color-mix(in srgb,var(--surface) 86%,transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-top:1px solid var(--line)}
+.tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;color:var(--text-3);font-size:11px;font-weight:600;border-radius:12px}
+.tabbar a.on{color:var(--accent)}
+@media (min-width:960px){
+  .tabbar{display:none}
+  .sidebar{display:flex;flex-direction:column;gap:4px;position:fixed;top:0;bottom:0;left:0;width:248px;padding:22px 14px;background:var(--surface);border-right:1px solid var(--line)}
+  .sidebar .brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:17px;padding:4px 10px 18px;color:var(--text)}
+  .sidebar a.nav{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;color:var(--text-2);font-weight:550}
+  .sidebar a.nav:hover{background:var(--surface-2)}
+  .sidebar a.nav.on{background:var(--accent-soft);color:var(--accent)}
+  .sidebar .grow{flex:1}
+  .sidebar .who{display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;color:var(--text);font-size:14px}
+  .sidebar .who small{display:block;color:var(--text-3)}
+  .main{margin-left:248px;margin-right:0;max-width:none;padding:0 40px 48px}
+  .main>.content{max-width:820px}
+  .appbar{margin:0 -40px;padding:16px 40px 10px}
+  .appbar .avatar{display:none}
+  .fab{bottom:32px!important}
+}
+.mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:14px;letter-spacing:-.02em;
+  background:linear-gradient(135deg,#4f46e5,#7c3aed 60%,#db2777)}
+.mark.lg{width:64px;height:64px;border-radius:18px;font-size:24px;margin:0 auto 14px;box-shadow:0 10px 30px rgba(79,70,229,.35)}
+
+/* Surfaces */
+.card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:14px}
+.card.flush{padding:0;overflow:hidden}
+.hero{border-radius:22px;padding:20px;color:#fff;margin:6px 0 14px;background:linear-gradient(135deg,#4338ca 0%,#6d28d9 55%,#be185d 120%);box-shadow:0 12px 30px rgba(79,70,229,.28)}
+.hero .k{font-size:14px;opacity:.85;font-weight:500}
+.hero .v{font-size:38px;font-weight:780;letter-spacing:-.03em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+.hero .s{font-size:13px;opacity:.8}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+@media (min-width:640px){.stats.three{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.stat{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
+.stat .k{font-size:13px;color:var(--text-2);font-weight:500}
+.stat .v{font-size:22px;font-weight:720;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.stat .s{font-size:12px;color:var(--text-3);margin-top:2px}
+.stat.wide{grid-column:1/-1}
+@media (max-width:639px){.stat.wide-sm{grid-column:1/-1}}
+.stat.good .v{color:var(--green)} .stat.bad .v{color:var(--red)}
+
+/* Lists */
+.list{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:14px}
+.li{display:flex;align-items:center;gap:12px;padding:14px 16px;color:var(--text);min-height:60px;position:relative}
+.li+.li::before{content:"";position:absolute;top:0;left:16px;right:0;border-top:1px solid var(--line)}
+a.li:active{background:var(--surface-2)}
+@media (hover:hover){a.li:hover{background:var(--surface-2)}}
+.li .main-t{flex:1;min-width:0}
+.li .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .s{font-size:14px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .r{text-align:right;flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.li .amt{font-weight:650;font-variant-numeric:tabular-nums}
+.li .chev{color:var(--text-3)}
+.li .icon-bubble{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;flex:none;background:var(--accent-soft);color:var(--accent)}
+.empty{text-align:center;color:var(--text-2);padding:28px 16px;background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:14px}
+.kv{display:flex;gap:12px;padding:12px 16px;align-items:flex-start}
+.kv+.kv{border-top:1px solid var(--line)}
+.kv .k{width:118px;flex:none;color:var(--text-2);font-size:14px;padding-top:1px}
+.kv .v{flex:1;min-width:0;overflow-wrap:anywhere}
 .pre{white-space:pre-wrap}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
-.stat{background:#fff;border:1px solid #dde1e5;border-radius:6px;padding:12px}
-.stat .k{font-size:.85rem;color:#56616c}
-.stat .v{font-size:1.25rem;font-weight:700}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
-@media (max-width:640px){.two{grid-template-columns:1fr}}
-@media (max-width:640px){.items thead{display:none}.items,.items tbody{display:block}.items tr.item{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;padding:10px 0;border-bottom:1px solid #e6e9ec}.items td{border:none;padding:0;align-self:center}.items td:first-child{grid-column:1/-1}.items td:nth-child(4){grid-column:1/3;text-align:left}}
-.notice{background:#fff7e0;border:1px solid #f0d98a;border-radius:6px;padding:10px 14px;margin-bottom:16px}
+
+/* Pills & chips */
+.pill{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:650;background:var(--gray-soft);color:var(--text-2);white-space:nowrap}
+.pill.approved,.pill.completed{background:var(--green-soft);color:var(--green)}
+.pill.sent,.pill.in_progress{background:var(--blue-soft);color:var(--blue)}
+.pill.declined{background:var(--red-soft);color:var(--red)}
+.pill.draft,.pill.not_started{background:var(--amber-soft);color:var(--amber)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 12px;margin:0 -16px;padding-left:16px;padding-right:16px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:8px 14px;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);color:var(--text-2);font-weight:600;font-size:14px}
+.chip.on{background:var(--text);color:var(--bg)}
+
+/* Buttons */
+.btn,button{-webkit-appearance:none;appearance:none;font:inherit;font-weight:620;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  min-height:48px;padding:0 18px;border-radius:14px;border:0;white-space:nowrap;background:var(--accent);color:var(--on-accent);cursor:pointer;text-align:center;transition:transform .08s,opacity .15s}
+.btn:active,button:active{transform:scale(.98)}
+.btn.secondary,button.secondary{background:var(--accent-soft);color:var(--accent)}
+.btn.ghost,button.ghost{background:transparent;color:var(--accent);padding:0 10px}
+.btn.danger,button.danger{background:var(--red-soft);color:var(--red)}
+.btn.danger.solid,button.danger.solid{background:var(--red);color:#fff}
+.btn.sm,button.sm{min-height:36px;padding:0 14px;border-radius:10px;font-size:14px}
+.btn.block,button.block{width:100%}
+button:disabled{opacity:.55;cursor:default}
+button.link{background:none;min-height:0;padding:0;color:var(--accent);font-weight:600}
+.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.fab{position:fixed;right:18px;bottom:calc(var(--tabbar-h) + 18px + env(safe-area-inset-bottom));z-index:25;height:56px;padding:0 20px 0 16px;border-radius:18px;
+  background:var(--accent);color:var(--on-accent);display:inline-flex;align-items:center;gap:8px;font-weight:650;box-shadow:0 10px 24px rgba(79,70,229,.4)}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+
+/* Forms */
+.form-card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:6px 16px 16px;margin-bottom:14px}
+.form-card h3{font-size:17px;margin:14px 0 2px}
+label{display:block;font-size:13px;font-weight:600;color:var(--text-2);margin:14px 2px 6px}
+input,select,textarea{font:inherit;font-size:16px;width:100%;min-height:48px;padding:12px 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface-2);color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s}
+textarea{min-height:110px;resize:vertical}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);
+  background-position:calc(100% - 20px) 50%,calc(100% - 14px) 50%;background-size:6px 6px;background-repeat:no-repeat;-webkit-appearance:none;appearance:none;padding-right:36px}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);background:var(--surface)}
+input.invalid,select.invalid,textarea.invalid{border-color:var(--red)}
+.field-error{color:var(--red);font-size:13px;margin:6px 2px 0}
+.hint{color:var(--text-3);font-size:13px;margin:6px 2px 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.two>div{min-width:0}
+input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:block}
+@media (max-width:520px){.two.stack{grid-template-columns:1fr}}
+.form-actions{display:flex;gap:10px;margin:18px 0}
+.form-actions>*{flex:1}
+.search{position:relative;margin:4px 0 14px}
+.search .svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-3)}
+.search input{padding-left:44px;background:var(--surface);border-color:transparent;box-shadow:var(--shadow)}
+
+/* Line items */
+.item{background:var(--surface-2);border-radius:14px;padding:12px;margin-top:10px}
+.item .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.item input{background:var(--surface)}
+.item .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:14px;color:var(--text-2)}
+.item .line-total{font-weight:650;color:var(--text);font-variant-numeric:tabular-nums}
+.totalbar{position:sticky;bottom:calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);z-index:10;display:flex;align-items:center;gap:12px;
+  background:var(--text);color:var(--bg);border-radius:18px;padding:12px 12px 12px 18px;margin:14px 0;box-shadow:0 10px 30px rgba(15,23,42,.25)}
+@media (min-width:960px){.totalbar{bottom:16px}}
+.totalbar .lbl{font-size:12px;opacity:.7}
+.totalbar .num{font-size:20px;font-weight:750;font-variant-numeric:tabular-nums}
+.totalbar .grow{flex:1;min-width:0}
+.totalbar button{background:var(--bg);color:var(--text)}
+table.lines{width:100%;border-collapse:collapse}
+table.lines td,table.lines th{padding:12px 16px;text-align:left;font-size:15px}
+table.lines th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:600}
+table.lines tr+tr td{border-top:1px solid var(--line)}
+table.lines .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+table.lines tfoot td{border-top:1px solid var(--line);font-weight:750;font-size:17px}
+
+/* Feedback */
+.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 12px);transform:translateX(-50%);z-index:50;background:var(--text);color:var(--bg);
+  padding:12px 18px;border-radius:14px;font-weight:600;font-size:15px;box-shadow:0 10px 30px rgba(15,23,42,.25);display:flex;gap:8px;align-items:center;
+  animation:toast 3.4s ease forwards;max-width:calc(100% - 32px)}
+@keyframes toast{0%{opacity:0;transform:translate(-50%,-12px)}8%{opacity:1;transform:translate(-50%,0)}85%{opacity:1}100%{opacity:0;visibility:hidden}}
+.errors{background:var(--red-soft);color:var(--red);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;font-size:15px}
+.errors ul{margin:6px 0 0;padding-left:18px}
+.notice{background:var(--amber-soft);color:var(--amber);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;font-size:15px}
+.notice a{color:inherit;text-decoration:underline}
+.muted{color:var(--text-2)}
+.code{font:700 30px/1.1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.12em;text-align:center;padding:18px;border-radius:14px;background:var(--surface-2);margin:10px 0;user-select:all}
+
+/* Auth */
+.auth{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:calc(env(safe-area-inset-top) + 24px) 20px 32px;max-width:420px;margin:0 auto}
+.auth h1{text-align:center;font-size:28px;letter-spacing:-.02em;margin:0 0 6px}
+.auth .sub{text-align:center;color:var(--text-2);margin:0 0 22px}
+.auth .alt{text-align:center;color:var(--text-2);margin-top:18px;font-size:15px}
 `;
 
+// Small shared behaviours. Keep this free of the dollar sign: worker pages are checked for it.
 const JS = `
-document.addEventListener('click', function (e) {
-  var tr = e.target.closest('tr[data-href]');
-  if (tr && !e.target.closest('a,button,input,select,textarea,form')) location.href = tr.dataset.href;
-});
 document.addEventListener('submit', function (e) {
   var f = e.target;
   if (f.dataset.confirm && !confirm(f.dataset.confirm)) { e.preventDefault(); return; }
@@ -78,25 +209,104 @@ window.addEventListener('pageshow', function () {
     f.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
   });
 });
+if (location.search.indexOf('msg=') > -1 && history.replaceState) {
+  history.replaceState(null, '', location.pathname + location.search.replace(/[?&]msg=[^&]*/, '').replace(/^&/, '?'));
+}
 `;
 
-function layout(title, body, { authed = true, flash } = {}) {
+// ---------- Icons (inline SVG, Lucide-style strokes) ----------
+const ICONS = {
+  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18.5 14.5A6.5 6.5 0 0 1 21.5 20"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>',
+  team: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  calendar: '<rect x="3" y="4.5" width="18" height="16.5" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/>',
+  pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  phone: '<path d="M5 3h3l2 5-2.5 1.5a11 11 0 0 0 7 7L16 14l5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  account: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.2 18.5a7 7 0 0 1 11.6 0"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
+  building: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"/>',
+};
+const icon = (name, cls = '') => raw(`<svg class="svg ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`);
+const chev = () => html`<span class="chev">${icon('chev', 'sm')}</span>`;
+
+// ---------- Formatting helpers ----------
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// '2026-11-10' -> <time datetime="2026-11-10">Nov 10, 2026</time>
+function fmtDate(d, { year = true } = {}) {
+  if (!d) return '';
+  const [y, m, day] = d.split('-').map(Number);
+  return html`<time datetime="${d}">${MONTHS[m - 1]} ${day}${year ? `, ${y}` : ''}</time>`;
+}
+function dateRange(start, end) {
+  if (!start && !end) return '';
+  if (start && end && start !== end) return html`${fmtDate(start, { year: start.slice(0, 4) !== end.slice(0, 4) })} – ${fmtDate(end)}`;
+  return fmtDate(start || end);
+}
+const pill = (status, labels) => html`<span class="pill ${status}">${labels[status] || status}</span>`;
+
+// ---------- Layout ----------
+// The server fills <!--NAV--> (sidebar + tab bar) and <!--AVATAR--> for the signed-in user.
+function layout(title, body, { flash, back, sub, fab, bare = false, pageTitle } = {}) {
   return html`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f3f4f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d14" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Vista">
+<link rel="manifest" href="/static/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <title>${title} · Vista Artisans</title><style>${raw(CSS)}</style></head>
 <body>
-<header><div class="in">
-  <a class="brand" href="/">Vista Artisans</a>
-  ${authed ? raw('<!--NAV-->') : ''}
-</div></header>
-<main>
-${flash ? html`<div class="flash">${flash}</div>` : ''}
-${body}
-</main>
+${flash ? html`<div class="toast" role="status">${flash}</div>` : ''}
+${bare ? body : html`<div class="shell">
+${raw('<!--NAV-->')}
+<div class="main">
+  <header class="appbar"><div class="appbar-row">
+    ${back ? html`<a class="back" href="${back.href}">${icon('chev')}${back.label}</a>` : ''}
+    <span class="appbar-spacer"></span>${raw('<!--AVATAR-->')}
+  </div></header>
+  <div class="content">
+    <h1 class="page-title">${pageTitle ?? title}</h1>
+    ${sub ? html`<p class="page-sub">${sub}</p>` : ''}
+    ${body}
+  </div>
+</div>
+${fab ? html`<a class="fab" href="${fab.href}">${icon('plus')}${fab.label}</a>` : ''}
+</div>`}
 <script>${raw(JS)}</script>
 </body></html>`.s;
 }
 
+const ADMIN_TABS = [['/', 'Home', 'home'], ['/clients', 'Clients', 'users'], ['/estimates', 'Estimates', 'file'], ['/jobs', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
+const WORKER_TABS = [['/', 'Schedule', 'calendar'], ['/account', 'Account', 'account']];
+const activeTab = (path, href) => (href === '/' ? path === '/' || path.startsWith('/schedule') : path.startsWith(href));
+
+function nav({ user, org, path = '/' }) {
+  const tabs = !org ? [['/account', 'Account', 'account']] : org.role === 'admin' ? ADMIN_TABS : WORKER_TABS;
+  const initial = (user.email || '?')[0].toUpperCase();
+  return {
+    nav: html`<nav class="sidebar" aria-label="Main">
+      <a class="brand" href="/"><span class="mark">VA</span>${org ? org.name : 'Vista Artisans'}</a>
+      ${tabs.map(([href, label, ic]) => html`<a class="nav ${activeTab(path, href) ? 'on' : ''}" href="${href}">${icon(ic)}${label}</a>`)}
+      <span class="grow"></span>
+      ${org && org.role === 'admin' ? html`<a class="nav ${path.startsWith('/account') ? 'on' : ''}" href="/account">${icon('account')}Account</a>` : ''}
+      <div class="who"><span class="avatar">${initial}</span><div style="min-width:0">${user.email}<small>${org ? ROLES[org.role] : ''}</small></div></div>
+    </nav>
+    <nav class="tabbar" aria-label="Tabs">${tabs.map(([href, label, ic]) =>
+      html`<a class="${activeTab(path, href) ? 'on' : ''}" href="${href}">${icon(ic)}<span>${label}</span></a>`)}</nav>`.s,
+    avatar: html`<a class="avatar" href="/account" aria-label="Account">${initial}</a>`.s,
+  };
+}
+
+// ---------- Form helpers ----------
 function errorBox(errors) {
   const list = Object.values(errors || {}).flat();
   if (!list.length) return '';
@@ -106,315 +316,318 @@ function errorBox(errors) {
 const fieldErr = (errors, k) => (errors && errors[k] ? html`<div class="field-error">${errors[k]}</div>` : '');
 const inv = (errors, k) => (errors && errors[k] ? 'invalid' : '');
 
-const badge = (status, labels) => html`<span class="badge ${status}">${labels[status] || status}</span>`;
-
-function input(name, label, values, errors, { type = 'text', required = false, placeholder = '', inputmode } = {}) {
+function input(name, label, values, errors, { type = 'text', required = false, placeholder = '', inputmode, autocomplete, hint } = {}) {
   return html`<label for="${name}">${label}${required ? ' *' : ''}</label>
   <input id="${name}" name="${name}" type="${type}" value="${values[name] ?? ''}" class="${inv(errors, name)}"
-    ${required ? raw('required') : ''} ${placeholder ? raw(`placeholder="${placeholder}"`) : ''} ${inputmode ? raw(`inputmode="${inputmode}"`) : ''}>
-  ${fieldErr(errors, name)}`;
+    ${required ? raw('required') : ''} ${placeholder ? raw(`placeholder="${placeholder}"`) : ''}
+    ${inputmode ? raw(`inputmode="${inputmode}"`) : ''} ${autocomplete ? raw(`autocomplete="${autocomplete}"`) : ''}>
+  ${fieldErr(errors, name)}${hint ? html`<div class="hint">${hint}</div>` : ''}`;
 }
-function textarea(name, label, values, errors, { required = false } = {}) {
-  return html`<label for="${name}">${label}${required ? ' *' : ''}</label>
-  <textarea id="${name}" name="${name}" class="${inv(errors, name)}">${values[name] ?? ''}</textarea>${fieldErr(errors, name)}`;
+function textarea(name, label, values, errors, { placeholder = '' } = {}) {
+  return html`<label for="${name}">${label}</label>
+  <textarea id="${name}" name="${name}" class="${inv(errors, name)}" ${placeholder ? raw(`placeholder="${placeholder}"`) : ''}>${values[name] ?? ''}</textarea>${fieldErr(errors, name)}`;
 }
+const options = (labels, selected) => Object.entries(labels).map(([k, l]) =>
+  html`<option value="${k}" ${selected === k ? raw('selected') : ''}>${l}</option>`);
+const roleSelect = (name, selected, id) => html`<select name="${name}" ${id ? raw(`id="${id}"`) : ''}>${options(ROLES, selected)}</select>`;
 
-// ---------- Navigation (filled in per request by the server) ----------
-function nav({ user, org, orgs }) {
-  return html`${org ? html`
-  ${orgs.length > 1 ? html`<form method="post" action="/org/switch" class="org-switch">
-    <select name="org_id" aria-label="Organization" onchange="this.form.submit()">${orgs.map((o) =>
-      html`<option value="${o.org_id}" ${o.org_id === org.org_id ? raw('selected') : ''}>${o.name}</option>`)}</select>
-    <noscript><button type="submit">Switch</button></noscript></form>` : html`<span class="muted-light">${org.name}</span>`}
-  ${org.role === 'admin' ? html`<a href="/">Home</a><a href="/clients">Clients</a><a href="/estimates">Estimates</a><a href="/jobs">Jobs</a><a href="/team">Team</a>`
-    : html`<a href="/">Schedule</a>`}` : ''}
-  <form method="post" action="/logout"><button type="submit" title="${user.email}">Log out</button></form>`.s;
-}
-
-// ---------- Auth ----------
-function authCard(title, body) {
-  return layout(title, html`<div class="card" style="max-width:400px;margin:40px auto"><h1>${title}</h1>${body}</div>`);
+// ---------- Auth & onboarding ----------
+function authPage(title, sub, body) {
+  return layout(title, html`<div class="auth">
+    <div class="mark lg">VA</div>
+    <h1>${title}</h1><p class="sub">${sub}</p>
+    ${body}
+  </div>`, { bare: true });
 }
 
 function loginPage({ error, notice, email = '' } = {}) {
-  return authCard('Log in', html`
+  return authPage('Welcome back', 'Log in to Vista Artisans', html`
     ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
-    ${notice ? html`<div class="flash">${notice}</div>` : ''}
-    <form method="post" action="/login">
+    ${notice ? html`<div class="notice">${notice}</div>` : ''}
+    <form method="post" action="/login" class="form-card">
       <label for="email">Email</label>
-      <input id="email" name="email" type="email" autocomplete="email" value="${email}" required autofocus>
+      <input id="email" name="email" type="email" autocomplete="email" inputmode="email" value="${email}" required autofocus>
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <p><button type="submit">Log in</button></p>
+      <div class="form-actions"><button type="submit">Log in</button></div>
     </form>
-    <p class="muted">New here? <a href="/signup">Create an account</a></p>`);
+    <p class="alt">New here? <a href="/signup">Create an account</a></p>`);
 }
 
 function signupPage({ errors = {}, values = {} } = {}) {
-  return authCard('Create an account', html`
+  return authPage('Create your account', 'Then join your company with a code, or start a new one.', html`
     ${errorBox(errors)}
-    <form method="post" action="/signup" novalidate>
-      ${input('email', 'Email', values, errors, { type: 'email', required: true })}
-      <label for="password">Password * <span class="muted">(at least 8 characters)</span></label>
+    <form method="post" action="/signup" class="form-card" novalidate>
+      ${input('email', 'Email', values, errors, { type: 'email', required: true, autocomplete: 'email', inputmode: 'email' })}
+      <label for="password">Password *</label>
       <input id="password" name="password" type="password" autocomplete="new-password" class="${inv(errors, 'password')}" required>
-      ${fieldErr(errors, 'password')}
-      <p><button type="submit">Create account</button></p>
+      ${fieldErr(errors, 'password')}<div class="hint">At least 8 characters.</div>
+      <div class="form-actions"><button type="submit">Create account</button></div>
     </form>
-    <p class="muted">Already have an account? <a href="/login">Log in</a></p>`);
+    <p class="alt">Already have an account? <a href="/login">Log in</a></p>`);
 }
 
-function orgNewPage({ errors = {}, values = {}, hasOrgs }) {
-  return layout('New organization', html`
-  <div class="card" style="max-width:520px">
-    <h1>${hasOrgs ? 'New organization' : 'Set up your organization'}</h1>
-    <p class="muted">${hasOrgs ? 'Each organization keeps its own clients, estimates and jobs.'
-      : 'Create your company to get started. If your company already uses this app, ask its owner to add your email instead.'}</p>
-    ${errorBox(errors)}
-    <form method="post" action="/org/new" novalidate>
-      ${input('name', 'Organization name', values, errors, { required: true })}
-      <p><button type="submit">Create organization</button></p>
-    </form>
-  </div>`);
+function welcomePage({ errors = {}, values = {}, hasOrgs }) {
+  return layout(hasOrgs ? 'Join or create' : 'Get started', html`
+  ${errorBox(errors)}
+  <form method="post" action="/org/join" class="form-card" novalidate>
+    <h3>Join your company</h3>
+    <div class="hint">Ask your admin for the company's join code. You'll join as a worker; your admin can change that.</div>
+    ${input('code', 'Join code', values, errors, { placeholder: 'ABCD-2345', autocomplete: 'off' })}
+    <div class="form-actions"><button type="submit">Join company</button></div>
+  </form>
+  <form method="post" action="/org/new" class="form-card" novalidate>
+    <h3>Start a new company</h3>
+    <div class="hint">For owners setting up Vista for the first time. You'll be its admin.</div>
+    ${input('name', 'Company name', values, errors)}
+    <div class="form-actions"><button type="submit" class="secondary">Create company</button></div>
+  </form>`, { sub: hasOrgs ? null : 'One last step before you start.', back: hasOrgs ? { href: '/account', label: 'Account' } : null });
 }
 
-const ROLES = { admin: 'Admin', worker: 'Worker' };
-const roleSelect = (name, selected, id) => html`<select name="${name}" ${id ? raw(`id="${id}"`) : ''} style="width:auto">${Object.entries(ROLES).map(([k, l]) =>
-  html`<option value="${k}" ${selected === k ? raw('selected') : ''}>${l}</option>`)}</select>`;
+function accountPage({ user, org, orgs, flash }) {
+  return layout('Account', html`
+  <div class="list">
+    <div class="li"><span class="icon-bubble">${icon('account')}</span><div class="main-t"><div class="t">${user.email}</div>
+      <div class="s">${org ? `${ROLES[org.role]} at ${org.name}` : 'Not in a company yet'}</div></div></div>
+  </div>
+  ${orgs.length > 1 ? html`<h2>Switch company</h2><div class="list">${orgs.map((o) => html`
+    <form method="post" action="/org/switch" class="li" style="margin:0">
+      <input type="hidden" name="org_id" value="${o.org_id}">
+      <span class="icon-bubble">${icon('building')}</span>
+      <div class="main-t"><div class="t">${o.name}</div><div class="s">${ROLES[o.role]}</div></div>
+      ${org && o.org_id === org.org_id ? html`<span class="pill completed">Current</span>` : html`<button type="submit" class="sm secondary">Switch</button>`}
+    </form>`)}</div>` : ''}
+  <div class="actions">
+    <a class="btn secondary" href="/welcome">${icon('key')}Join or create a company</a>
+  </div>
+  <form method="post" action="/logout"><button type="submit" class="danger block">${icon('logout')}Log out</button></form>`, { flash });
+}
 
-function teamPage({ org, members, me, errors = {}, values = {}, flash }) {
+// ---------- Team ----------
+function teamPage({ org, members, me, joinCode, errors = {}, values = {}, flash }) {
   const admin = org.role === 'admin';
   return layout('Team', html`
-  <h1>Team: ${org.name}</h1>
   ${errorBox(errors)}
-  <div class="tablewrap"><table><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody>
-  ${members.map((m) => html`<tr><td>${m.email}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</td>
-    <td>${admin ? html`<form method="post" action="/team/role" class="row">
-        <input type="hidden" name="user_id" value="${m.user_id}">${roleSelect('role', m.role)}
-        <button type="submit" class="secondary">Save</button></form>` : ROLES[m.role]}</td>
-    <td class="num">${admin && m.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${m.email} from ${org.name}?">
-      <input type="hidden" name="user_id" value="${m.user_id}"><button type="submit" class="link">Remove</button></form>` : ''}</td></tr>`)}
-  </tbody></table></div>
-  <p class="muted"><strong>Admins</strong> see and manage everything, including money and the team.
-    <strong>Workers</strong> see only open jobs assigned to them: schedule, address, scope of work and their own pay.</p>
-  ${admin ? html`<form method="post" action="/team/add" class="card" style="margin-top:16px" novalidate>
-    <h2 style="margin-top:0">Add a teammate</h2>
-    <p class="muted">They need to <a href="/signup">create an account</a> first. Then add their email here.</p>
-    ${input('email', 'Email', values, errors, { type: 'email', required: true })}
+  ${admin && joinCode ? html`<div class="card">
+    <div class="row" style="justify-content:space-between"><strong>Join code</strong>
+      <form method="post" action="/team/code" data-confirm="Make a new code? The current one will stop working.">
+        <button type="submit" class="sm ghost">New code</button></form></div>
+    <div class="code" id="join-code">${joinCode.slice(0, 4)}-${joinCode.slice(4)}</div>
+    <div class="hint">Share this with your crew. After creating an account, they enter it to join ${org.name} as workers.</div>
+  </div>` : ''}
+  <h2>People</h2>
+  <div class="list">${members.map((m) => html`<div class="li">
+    <span class="avatar">${(m.email || '?')[0].toUpperCase()}</span>
+    <div class="main-t"><div class="t">${m.email}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
+      ${admin ? html`<form method="post" action="/team/role" class="row" style="margin-top:6px">
+        <input type="hidden" name="user_id" value="${m.user_id}">
+        <select name="role" style="min-height:36px;padding:4px 32px 4px 10px;width:auto;font-size:14px">${options(ROLES, m.role)}</select>
+        <button type="submit" class="sm secondary">Save</button></form>` : html`<div class="s">${ROLES[m.role]}</div>`}</div>
+    ${admin && m.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${m.email} from ${org.name}?">
+      <input type="hidden" name="user_id" value="${m.user_id}"><button type="submit" class="sm danger">Remove</button></form>` : ''}
+  </div>`)}</div>
+  <p class="hint"><strong>Admins</strong> see and manage everything, including money and the team.
+    <strong>Workers</strong> see only open jobs assigned to them: dates, address, scope of work and their own pay.</p>
+  ${admin ? html`<form method="post" action="/team/add" class="form-card" novalidate>
+    <h3>Add by email</h3>
+    <div class="hint">For someone who already has an account.</div>
+    ${input('email', 'Email', values, errors, { type: 'email', required: true, inputmode: 'email' })}
     <label for="new-role">Role</label>${roleSelect('role', values.role || 'worker', 'new-role')}
-    <p><button type="submit">Add to ${org.name}</button></p>
-  </form>` : ''}
-  <p><a href="/org/new">Create another organization</a></p>`, { flash });
+    <div class="form-actions"><button type="submit">Add to ${org.name}</button></div>
+  </form>` : ''}`, { flash });
 }
 
 // ---------- Worker schedule ----------
 function schedulePage({ jobs, flash }) {
-  return layout('Schedule', html`<h1>Schedule</h1>
-  ${jobs.length ? html`<div class="tablewrap"><table>
-    <thead><tr><th>Date</th><th>Project</th><th>Address</th><th>Status</th><th class="num">Your pay</th></tr></thead>
-    <tbody>${jobs.map((j) => html`<tr data-href="/schedule/${j.job_id}">
-      <td>${j.scheduled_date || html`<span class="muted">Not scheduled</span>`}</td>
-      <td><a href="/schedule/${j.job_id}">${j.project_name}</a><div class="muted">${j.client_name}</div></td>
-      <td>${j.address}</td><td>${badge(j.status, JOB_STATUS)}</td>
-      <td class="num">${j.my_payout_cents == null ? html`<span class="muted">—</span>` : fmt(j.my_payout_cents)}</td></tr>`)}</tbody></table></div>`
-    : html`<p class="muted">No open jobs assigned to you.</p>`}`, { flash });
+  return layout('Schedule', jobs.length ? html`<div class="list">${jobs.map((j) => html`
+    <a class="li" href="/schedule/${j.job_id}">
+      <span class="icon-bubble">${icon('calendar')}</span>
+      <div class="main-t"><div class="t">${j.project_name}</div>
+        <div class="s">${dateRange(j.start_date, j.end_date) || 'Not scheduled yet'} · ${j.address || j.client_name}</div></div>
+      <div class="r">${j.my_payout_cents == null ? '' : html`<span class="amt">${fmt(j.my_payout_cents)}</span>`}${pill(j.status, JOB_STATUS)}</div>
+      ${chev()}
+    </a>`)}</div>`
+    : html`<div class="empty">No open jobs assigned to you.</div>`, { flash, sub: 'Your upcoming and active jobs' });
 }
 
 function scheduleJobPage({ job }) {
   return layout(job.project_name, html`
-  <p><a href="/">← Schedule</a></p>
-  <h1>${job.project_name} ${badge(job.status, JOB_STATUS)}</h1>
-  <div class="card two">
-    <div><label>Scheduled date</label>${job.scheduled_date || html`<span class="muted">Not scheduled</span>`}</div>
-    <div><label>Client</label>${job.client_name}</div>
-    <div><label>Your pay for this job</label><strong data-k="my-pay">${job.my_payout_cents == null ? '—' : fmt(job.my_payout_cents)}</strong></div>
-    <div style="grid-column:1/-1"><label>Address</label>${job.address || html`<span class="muted">—</span>`}</div>
-    <div style="grid-column:1/-1"><label>Scope of work</label><div class="pre">${job.scope || html`<span class="muted">—</span>`}</div></div>
-    ${job.notes ? html`<div style="grid-column:1/-1"><label>Notes</label><div class="pre">${job.notes}</div></div>` : ''}
-  </div>`);
-}
-
-function confirmPage({ title, message, action, cancelHref, button = 'Yes, delete it' }) {
-  return layout(title, html`
-  <div class="card" style="max-width:560px">
-    <h1>${title}</h1>
-    <p>${message}</p>
-    <form method="post" action="${action}" class="row">
-      <button type="submit" class="danger">${button}</button>
-      <a class="btn secondary" href="${cancelHref}">Cancel</a>
-    </form>
-  </div>`);
+  <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)}</p>
+  ${job.my_payout_cents == null ? '' : html`<div class="hero"><div class="k">Your pay for this job</div>
+    <div class="v" data-k="my-pay">${fmt(job.my_payout_cents)}</div></div>`}
+  <div class="list">
+    <div class="kv"><span class="k">Dates</span><span class="v">${dateRange(job.start_date, job.end_date) || 'Not scheduled yet'}</span></div>
+    <div class="kv"><span class="k">Client</span><span class="v">${job.client_name}</span></div>
+    <div class="kv"><span class="k">Address</span><span class="v">${job.address ? html`<a href="https://maps.google.com/?q=${encodeURIComponent(job.address)}">${job.address}</a>` : '—'}</span></div>
+  </div>
+  <h2>Scope of work</h2><div class="card pre">${job.scope || '—'}</div>
+  ${job.notes ? html`<h2>Notes</h2><div class="card pre">${job.notes}</div>` : ''}`,
+  { back: { href: '/', label: 'Schedule' } });
 }
 
 // ---------- Home ----------
-function homePage({ openEstimates, activeJobs, outstandingCents, flash }) {
+function homePage({ openEstimates, activeJobs, outstandingCents, revenueCents, monthLabel, flash }) {
   return layout('Home', html`
-  <div class="spread"><h1>Home</h1>
-    <div class="row"><a class="btn" href="/clients/new">New Client</a><a class="btn" href="/estimates/new">New Estimate</a></div></div>
-  <div class="grid" style="margin-bottom:16px">
-    <div class="stat"><div class="k">Total outstanding balance (all jobs)</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div></div>
-    <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
-    <div class="stat"><div class="k">Active jobs</div><div class="v">${activeJobs.length}</div></div>
+  <div class="hero">
+    <div class="k">Revenue · ${monthLabel}</div>
+    <div class="v" id="month-revenue">${fmt(revenueCents)}</div>
+    <div class="s">Payments received this month</div>
   </div>
-  <h2>Open estimates</h2>
-  ${estimateTable(openEstimates, 'No open estimates.')}
-  <h2>Active jobs</h2>
-  ${jobTable(activeJobs, 'No active jobs.')}`, { flash });
+  <div class="stats three">
+    <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Owed across all jobs</div></div>
+    <div class="stat"><div class="k">Active jobs</div><div class="v">${activeJobs.length}</div></div>
+    <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="/clients/new">${icon('plus')}New Client</a>
+    <a class="btn" href="/estimates/new">${icon('plus')}New Estimate</a>
+  </div>
+  <h2>Active jobs</h2>${jobList(activeJobs, 'No active jobs.')}
+  <h2>Open estimates</h2>${estimateList(openEstimates, 'No open estimates.')}`, { flash, pageTitle: 'Overview' });
 }
 
-function estimateTable(rows, empty, { showClient = true } = {}) {
-  if (!rows.length) return html`<p class="muted">${empty}</p>`;
-  return html`<div class="tablewrap"><table>
-  <thead><tr><th>Project</th>${showClient ? html`<th>Client</th>` : ''}<th>Status</th><th class="num">Total</th><th>Updated</th></tr></thead>
-  <tbody>${rows.map((e) => html`<tr data-href="/estimates/${e.id}">
-    <td><a href="/estimates/${e.id}">${e.project_name}</a></td>
-    ${showClient ? html`<td>${e.client_name}</td>` : ''}
-    <td>${badge(e.status, ESTIMATE_STATUS)}${e.job_id ? html` <span class="muted">→ job</span>` : ''}</td>
-    <td class="num">${fmt(e.total_cents)}</td><td class="muted">${e.updated_at.slice(0, 10)}</td></tr>`)}
-  </tbody></table></div>`;
+function estimateList(rows, empty, { showClient = true } = {}) {
+  if (!rows.length) return html`<div class="empty">${empty}</div>`;
+  return html`<div class="list">${rows.map((e) => html`<a class="li" href="/estimates/${e.id}">
+    <div class="main-t"><div class="t">${e.project_name}</div>
+      <div class="s">${showClient ? e.client_name : `Updated ${e.updated_at.slice(0, 10)}`}${e.job_id ? ' · converted to job' : ''}</div></div>
+    <div class="r"><span class="amt">${fmt(e.total_cents)}</span>${pill(e.status, ESTIMATE_STATUS)}</div>${chev()}
+  </a>`)}</div>`;
 }
 
-function jobTable(rows, empty, { showClient = true } = {}) {
-  if (!rows.length) return html`<p class="muted">${empty}</p>`;
-  return html`<div class="tablewrap"><table>
-  <thead><tr><th>Project</th>${showClient ? html`<th>Client</th>` : ''}<th>Status</th><th>Scheduled</th><th class="num">Contract</th><th class="num">Balance</th></tr></thead>
-  <tbody>${rows.map((j) => html`<tr data-href="/jobs/${j.id}">
-    <td><a href="/jobs/${j.id}">${j.project_name}</a></td>
-    ${showClient ? html`<td>${j.client_name}</td>` : ''}
-    <td>${badge(j.status, JOB_STATUS)}</td><td>${j.scheduled_date || html`<span class="muted">—</span>`}</td>
-    <td class="num">${fmt(j.contract_cents)}</td><td class="num">${fmt(j.balance_cents)}</td></tr>`)}
-  </tbody></table></div>`;
+function jobList(rows, empty, { showClient = true } = {}) {
+  if (!rows.length) return html`<div class="empty">${empty}</div>`;
+  return html`<div class="list">${rows.map((j) => html`<a class="li" href="/jobs/${j.id}">
+    <div class="main-t"><div class="t">${j.project_name}</div>
+      <div class="s">${showClient ? j.client_name : ''}${showClient && (j.start_date || j.end_date) ? ' · ' : ''}${dateRange(j.start_date, j.end_date)}</div></div>
+    <div class="r"><span class="amt">${fmt(j.balance_cents)}</span>${pill(j.status, JOB_STATUS)}</div>${chev()}
+  </a>`)}</div>`;
 }
 
 // ---------- Clients ----------
 function clientsPage({ clients, q }) {
   return layout('Clients', html`
-  <div class="spread"><h1>Clients</h1><a class="btn" href="/clients/new">New Client</a></div>
-  <form method="get" action="/clients" class="row" style="margin-bottom:12px">
-    <input name="q" value="${q}" placeholder="Search by name" style="flex:1;min-width:180px" aria-label="Search by name">
-    <button type="submit" class="secondary">Search</button>${q ? html` <a href="/clients">Clear</a>` : ''}
+  <form method="get" action="/clients" class="search" role="search">
+    ${icon('search')}<input name="q" type="search" value="${q}" placeholder="Search by name" aria-label="Search by name">
   </form>
-  ${clients.length ? html`<div class="tablewrap"><table>
-    <thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Property address</th></tr></thead>
-    <tbody>${clients.map((c) => html`<tr data-href="/clients/${c.id}"><td><a href="/clients/${c.id}">${c.name}</a></td>
-      <td>${c.phone}</td><td>${c.email}</td><td>${c.address}</td></tr>`)}</tbody></table></div>`
-    : html`<p class="muted">${q ? 'No clients match that name.' : 'No clients yet.'}</p>`}`);
+  ${clients.length ? html`<div class="list">${clients.map((c) => html`<a class="li" href="/clients/${c.id}">
+    <span class="avatar">${c.name[0].toUpperCase()}</span>
+    <div class="main-t"><div class="t">${c.name}</div><div class="s">${c.address || c.phone || c.email || ' '}</div></div>${chev()}
+  </a>`)}</div>` : html`<div class="empty">${q ? 'No clients match that name.' : 'No clients yet.'}</div>`}`,
+  { fab: { href: '/clients/new', label: 'New Client' } });
 }
 
 function clientFields(values, errors, prefix = '') {
   const v = {}; const er = {};
   for (const k of ['name', 'phone', 'email', 'address']) { v[prefix + k] = values[prefix + k]; er[prefix + k] = errors[prefix + k]; }
   return html`
-    ${input(prefix + 'name', 'Name', v, er, { required: true })}
-    <div class="two"><div>${input(prefix + 'phone', 'Phone', v, er, { type: 'tel' })}</div>
-    <div>${input(prefix + 'email', 'Email', v, er, { type: 'email' })}</div></div>
+    ${input(prefix + 'name', 'Name', v, er, { required: true, autocomplete: 'off' })}
+    <div class="two stack"><div>${input(prefix + 'phone', 'Phone', v, er, { type: 'tel', inputmode: 'tel' })}</div>
+    <div>${input(prefix + 'email', 'Email', v, er, { type: 'email', inputmode: 'email' })}</div></div>
     ${input(prefix + 'address', 'Property address', v, er)}`;
 }
 
 function clientFormPage({ client, values, errors = {} }) {
-  const action = client ? `/clients/${client.id}` : '/clients';
+  const cancel = client ? `/clients/${client.id}` : '/clients';
   return layout(client ? 'Edit client' : 'New client', html`
-  <h1>${client ? 'Edit client' : 'New client'}</h1>
   ${errorBox(errors)}
-  <form method="post" action="${action}" class="card" novalidate>
-    ${clientFields(values, errors)}
-    <p class="row"><button type="submit">Save client</button>
-    <a class="btn secondary" href="${client ? `/clients/${client.id}` : '/clients'}">Cancel</a></p>
-  </form>`);
+  <form method="post" action="${client ? `/clients/${client.id}` : '/clients'}" novalidate>
+    <div class="form-card">${clientFields(values, errors)}</div>
+    <div class="form-actions"><a class="btn secondary" href="${cancel}">Cancel</a><button type="submit">Save client</button></div>
+  </form>`, { back: { href: cancel, label: client ? client.name : 'Clients' } });
 }
 
 function clientPage({ client, estimates, jobs, flash }) {
   return layout(client.name, html`
-  <div class="spread"><h1>${client.name}</h1>
-    <div class="row"><a class="btn secondary" href="/clients/${client.id}/edit">Edit client</a>
-    <a class="btn secondary" href="/clients/${client.id}/delete">Delete</a>
-    <a class="btn" href="/estimates/new?client_id=${client.id}">New Estimate</a></div></div>
-  <div class="card two">
-    <div><label>Phone</label>${client.phone || html`<span class="muted">—</span>`}</div>
-    <div><label>Email</label>${client.email ? html`<a href="mailto:${client.email}">${client.email}</a>` : html`<span class="muted">—</span>`}</div>
-    <div><label>Property address</label>${client.address || html`<span class="muted">—</span>`}</div>
+  <div class="list">
+    ${client.phone ? html`<a class="li" href="tel:${client.phone}"><span class="icon-bubble">${icon('phone')}</span><div class="main-t"><div class="s">Phone</div><div class="t">${client.phone}</div></div></a>` : ''}
+    ${client.email ? html`<a class="li" href="mailto:${client.email}"><span class="icon-bubble">${icon('mail')}</span><div class="main-t"><div class="s">Email</div><div class="t">${client.email}</div></div></a>` : ''}
+    ${client.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(client.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Property address</div><div class="t">${client.address}</div></div></a>` : ''}
+    ${!client.phone && !client.email && !client.address ? html`<div class="li muted">No contact details yet.</div>` : ''}
   </div>
-  <h2>Estimates</h2>${estimateTable(estimates, 'No estimates for this client.', { showClient: false })}
-  <h2>Jobs</h2>${jobTable(jobs, 'No jobs for this client.', { showClient: false })}`, { flash });
+  <div class="actions">
+    <a class="btn" href="/estimates/new?client_id=${client.id}">${icon('plus')}New Estimate</a>
+    <a class="btn secondary" href="/clients/${client.id}/edit">Edit client</a>
+    <a class="btn danger" href="/clients/${client.id}/delete">Delete</a>
+  </div>
+  <h2>Estimates</h2>${estimateList(estimates, 'No estimates for this client.', { showClient: false })}
+  <h2>Jobs</h2>${jobList(jobs, 'No jobs for this client.', { showClient: false })}`,
+  { flash, back: { href: '/clients', label: 'Clients' } });
 }
 
 // ---------- Estimates ----------
+function chips(base, labels, status) {
+  return html`<div class="chips">${[['', 'All'], ...Object.entries(labels)].map(([k, label]) =>
+    html`<a class="chip ${k === status ? 'on' : ''}" href="${base}${k ? `?status=${k}` : ''}">${label}</a>`)}</div>`;
+}
+
 function estimatesPage({ estimates, status }) {
-  const tabs = [['', 'All'], ...Object.entries(ESTIMATE_STATUS)];
-  return layout('Estimates', html`
-  <div class="spread"><h1>Estimates</h1><a class="btn" href="/estimates/new">New Estimate</a></div>
-  <p class="row">${tabs.map(([k, label]) => (k === status ? html`<strong>${label}</strong>` : html`<a href="/estimates${k ? `?status=${k}` : ''}">${label}</a>`))}</p>
-  ${estimateTable(estimates, 'No estimates.')}`);
+  return layout('Estimates', html`${chips('/estimates', ESTIMATE_STATUS, status)}${estimateList(estimates, 'No estimates.')}`,
+    { fab: { href: '/estimates/new', label: 'New Estimate' } });
 }
 
 function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
   const action = estimate ? `/estimates/${estimate.id}` : '/estimates';
-  const rows = items;
-  // Always offer a couple of blank rows so the form works without JavaScript too.
-  const blanks = rows.length ? 1 : 3;
-  const all = [...rows, ...Array.from({ length: blanks }, () => ({ desc: '', qty: '', price: '' }))];
+  // Always offer blank rows so the form works without JavaScript too.
+  const all = [...items, ...Array.from({ length: items.length ? 1 : 2 }, () => ({ desc: '', qty: '', price: '' }))];
   const isNewClient = values.client_id === 'new' || (!values.client_id && !clients.length);
+  const cancel = estimate ? `/estimates/${estimate.id}` : '/estimates';
   return layout(estimate ? 'Edit estimate' : 'New estimate', html`
-  <h1>${estimate ? `Edit estimate: ${estimate.project_name}` : 'New estimate'}</h1>
   ${errorBox(errors)}
   <form method="post" action="${action}" id="estimate-form" novalidate>
-    <div class="card">
+    <div class="form-card">
       <label for="client_id">Client *</label>
       <select id="client_id" name="client_id" class="${inv(errors, 'client_id')}">
         <option value="">Choose a client…</option>
         <option value="new" ${isNewClient ? raw('selected') : ''}>+ New client</option>
         ${clients.map((c) => html`<option value="${c.id}" ${String(values.client_id) === String(c.id) ? raw('selected') : ''}>${c.name}</option>`)}
       </select>${fieldErr(errors, 'client_id')}
-      <div id="new-client" style="${isNewClient ? '' : 'display:none'}">
-        <p class="muted" style="margin:10px 0 0">New client details</p>
-        ${clientFields(values, errors, 'new_')}
-      </div>
+      <div id="new-client" style="${isNewClient ? '' : 'display:none'}">${clientFields(values, errors, 'new_')}</div>
     </div>
-    <div class="card">
+    <div class="form-card">
       ${input('project_name', 'Project name', values, errors, { required: true })}
-      ${textarea('scope', 'Scope of work', values, errors)}
+      ${textarea('scope', 'Scope of work', values, errors, { placeholder: 'What the job includes…' })}
       <label for="status">Status</label>
-      <select id="status" name="status">${Object.entries(ESTIMATE_STATUS).map(([k, l]) =>
-        html`<option value="${k}" ${values.status === k ? raw('selected') : ''}>${l}</option>`)}</select>
+      <select id="status" name="status">${options(ESTIMATE_STATUS, values.status)}</select>
     </div>
-    <div class="card">
-      <h2 style="margin-top:0">Line items</h2>
-      ${fieldErr(errors, 'items')}
-      <div class="tablewrap"><table class="items">
-        <thead><tr><th style="width:50%">Description</th><th>Quantity</th><th>Unit price ($)</th><th class="num">Line total</th><th></th></tr></thead>
-        <tbody id="items">${all.map((it, i) => itemRow(it, errors[`item_${i}`]))}</tbody>
-      </table></div>
-      <p><button type="button" class="secondary" id="add-item">+ Add line item</button></p>
-      <div class="two">
-        <div>${input('estimated_cost', 'Internal estimated cost ($)', values, errors, { inputmode: 'decimal', placeholder: '0.00' })}
-          <div class="muted" style="font-size:.85rem">Your expected cost for the whole project. Never shown to the client.</div></div>
-        <div>
-          <label>Estimate total</label><div style="font-size:1.25rem;font-weight:700" id="calc-total">—</div>
-          <label>Estimated profit</label><div style="font-size:1.1rem" id="calc-profit">—</div>
-          <div class="muted" style="font-size:.85rem">Preview only; the saved totals are calculated by the server.</div>
-        </div>
-      </div>
+    <h2>Line items</h2>
+    ${errors.items ? html`<div class="field-error" style="margin:0 4px 8px">${errors.items}</div>` : ''}
+    <div class="form-card" style="padding-top:6px">
+      <div id="items">${all.map((it, i) => itemRow(it, errors[`item_${i}`]))}</div>
+      <button type="button" class="secondary block" id="add-item" style="margin-top:12px">${icon('plus')}Add line item</button>
     </div>
-    <p class="row"><button type="submit">Save estimate</button>
-      <a class="btn secondary" href="${estimate ? `/estimates/${estimate.id}` : '/'}">Cancel</a></p>
+    <div class="form-card">
+      ${input('estimated_cost', 'Internal estimated cost ($)', values, errors, { inputmode: 'decimal', placeholder: '0.00',
+        hint: 'Your expected cost for the whole project. Never shown to the client.' })}
+      <div class="row" style="justify-content:space-between;margin-top:14px"><span class="muted">Estimated profit</span><strong id="calc-profit">—</strong></div>
+    </div>
+    <div class="totalbar">
+      <div class="grow"><div class="lbl">Estimate total</div><div class="num" id="calc-total">—</div></div>
+      <a class="btn ghost" href="${cancel}" style="color:inherit;opacity:.8">Cancel</a>
+      <button type="submit">Save estimate</button>
+    </div>
   </form>
   <template id="item-template">${itemRow({ desc: '', qty: '', price: '' })}</template>
-  <script>${raw(ESTIMATE_JS)}</script>`);
+  <script>${raw(ESTIMATE_JS)}</script>`, { back: { href: cancel, label: estimate ? estimate.project_name : 'Estimates' } });
 }
 
 function itemRow(it, err) {
-  return html`<tr class="item">
-    <td><input name="item_desc" value="${it.desc}" aria-label="Description" placeholder="Description" class="${err ? 'invalid' : ''}">${err ? html`<div class="field-error">${err}</div>` : ''}</td>
-    <td><input name="item_qty" value="${it.qty}" inputmode="decimal" aria-label="Quantity" placeholder="Qty"></td>
-    <td><input name="item_price" value="${it.price}" inputmode="decimal" aria-label="Unit price" placeholder="Unit price $"></td>
-    <td class="num line-total">—</td>
-    <td><button type="button" class="link remove-item">Remove</button></td></tr>`;
+  return html`<div class="item">
+    <input name="item_desc" value="${it.desc}" aria-label="Description" placeholder="Description" class="${err ? 'invalid' : ''}">
+    ${err ? html`<div class="field-error">${err}</div>` : ''}
+    <div class="grid">
+      <input name="item_qty" value="${it.qty}" inputmode="decimal" aria-label="Quantity" placeholder="Qty">
+      <input name="item_price" value="${it.price}" inputmode="decimal" aria-label="Unit price" placeholder="Unit price">
+    </div>
+    <div class="foot"><button type="button" class="link remove-item">Remove</button><span>Line total <span class="line-total">—</span></span></div>
+  </div>`;
 }
 
 // Client-side preview of totals, using integer cents like the server.
 const ESTIMATE_JS = `
 (function () {
-  var tbody = document.getElementById('items');
-  function cents(s, maxDp) {
+  var list = document.getElementById('items');
+  function cents(s) {
     s = String(s || '').replace(/[$,\\s]/g, '');
     if (!/^\\d+(\\.\\d{1,2})?$/.test(s)) return null;
     var p = s.split('.'); return Number(p[0]) * 100 + Number((p[1] || '').padEnd(2, '0'));
@@ -424,27 +637,27 @@ const ESTIMATE_JS = `
     return (neg ? '-' : '') + '$' + Math.floor(c / 100).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',') + '.' + String(c % 100).padStart(2, '0');
   }
   function recalc() {
-    var total = 0, ok = true;
-    tbody.querySelectorAll('tr.item').forEach(function (tr) {
-      var q = cents(tr.querySelector('[name=item_qty]').value), p = cents(tr.querySelector('[name=item_price]').value);
-      var cell = tr.querySelector('.line-total');
+    var total = 0;
+    list.querySelectorAll('.item').forEach(function (row) {
+      var q = cents(row.querySelector('[name=item_qty]').value), p = cents(row.querySelector('[name=item_price]').value);
+      var cell = row.querySelector('.line-total');
       if (q === null || p === null) { cell.textContent = '—'; return; }
       var lt = Math.floor((q * p + 50) / 100); total += lt; cell.textContent = fmt(lt);
     });
     document.getElementById('calc-total').textContent = fmt(total);
     var cost = cents(document.getElementById('estimated_cost').value);
-    document.getElementById('calc-profit').textContent = cost === null ? 'Enter an estimated cost' : fmt(total - cost);
+    document.getElementById('calc-profit').textContent = cost === null ? 'Enter a cost' : fmt(total - cost);
   }
   document.getElementById('add-item').addEventListener('click', function () {
-    tbody.insertAdjacentHTML('beforeend', document.getElementById('item-template').innerHTML);
-    tbody.lastElementChild.querySelector('input').focus();
+    list.insertAdjacentHTML('beforeend', document.getElementById('item-template').innerHTML);
+    list.lastElementChild.querySelector('input').focus();
   });
-  tbody.addEventListener('click', function (e) {
+  list.addEventListener('click', function (e) {
     if (!e.target.classList.contains('remove-item')) return;
-    var tr = e.target.closest('tr');
-    var filled = Array.prototype.some.call(tr.querySelectorAll('input'), function (i) { return i.value.trim(); });
+    var row = e.target.closest('.item');
+    var filled = Array.prototype.some.call(row.querySelectorAll('input'), function (i) { return i.value.trim(); });
     if (filled && !confirm('Remove this line item?')) return;
-    tr.remove(); recalc();
+    row.remove(); recalc();
   });
   document.getElementById('estimate-form').addEventListener('input', recalc);
   var sel = document.getElementById('client_id');
@@ -455,163 +668,164 @@ const ESTIMATE_JS = `
 function estimatePage({ estimate, client, items, totalCents, job, flash, errors }) {
   const locked = !!job;
   const profit = estimate.estimated_cost_cents == null ? null : totalCents - estimate.estimated_cost_cents;
-  const statusButtons = Object.entries(ESTIMATE_STATUS).filter(([k]) => k !== estimate.status);
+  const others = Object.entries(ESTIMATE_STATUS).filter(([k]) => k !== estimate.status);
   return layout(estimate.project_name, html`
-  <div class="spread"><h1>${estimate.project_name} ${badge(estimate.status, ESTIMATE_STATUS)}</h1>
-    ${locked ? '' : html`<div class="row"><a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
-      <a class="btn secondary" href="/estimates/${estimate.id}/delete">Delete</a></div>`}</div>
+  <p style="margin:0 2px 14px">${pill(estimate.status, ESTIMATE_STATUS)}</p>
   ${errorBox(errors)}
   ${locked ? html`<div class="notice">Converted to <a href="/jobs/${job.id}">a job</a>. This estimate is locked and can no longer be edited.</div>` : ''}
-  <div class="card two">
-    <div><label>Client</label><a href="/clients/${client.id}">${client.name}</a></div>
-    <div><label>Property address</label>${client.address || html`<span class="muted">—</span>`}</div>
+  <div class="stats three">
+    <div class="stat wide"><div class="k">Estimate total</div><div class="v">${fmt(totalCents)}</div></div>
+    <div class="stat"><div class="k">Estimated cost</div><div class="v">${fmt(estimate.estimated_cost_cents)}</div></div>
+    <div class="stat ${profit == null ? '' : profit >= 0 ? 'good' : 'bad'}"><div class="k">Estimated profit</div><div class="v" id="estimated-profit">${profit == null ? '—' : fmt(profit)}</div></div>
   </div>
-  <div class="card"><label style="margin-top:0">Scope of work</label><div class="pre">${estimate.scope || html`<span class="muted">—</span>`}</div></div>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Line total</th></tr></thead>
-    <tbody>${items.map((i) => html`<tr><td>${i.description}</td><td class="num">${fmtQty(i.qty_hundredths)}</td>
-      <td class="num">${fmt(i.unit_price_cents)}</td><td class="num">${fmt(i.line_total_cents)}</td></tr>`)}
-    <tr><th colspan="3" class="num">Estimate total</th><th class="num" id="estimate-total">${fmt(totalCents)}</th></tr></tbody>
-  </table></div>
-  <div class="grid" style="margin:16px 0">
-    <div class="stat"><div class="k">Estimate total</div><div class="v">${fmt(totalCents)}</div></div>
-    <div class="stat"><div class="k">Internal estimated cost</div><div class="v">${fmt(estimate.estimated_cost_cents)}</div></div>
-    <div class="stat"><div class="k">Estimated profit</div><div class="v" id="estimated-profit">${profit == null ? '—' : fmt(profit)}</div></div>
-  </div>
-  ${locked ? '' : html`
-  <div class="card">
-    <div class="row"><span class="muted">Change status:</span>
-    ${statusButtons.map(([k, l]) => html`<form method="post" action="/estimates/${estimate.id}/status" style="display:inline">
-      <input type="hidden" name="status" value="${k}"><button type="submit" class="secondary">Mark ${l.toLowerCase()}</button></form>`)}</div>
+  ${locked ? '' : html`<div class="card">
     ${estimate.status === 'approved' ? html`
-    <form method="post" action="/estimates/${estimate.id}/convert" style="margin-top:12px"
-      data-confirm="Convert this estimate to a job? The estimate will be locked.">
-      <button type="submit" id="convert">Convert to job</button>
-    </form>` : html`<p class="muted" style="margin-bottom:0">Mark the estimate approved to convert it to a job.</p>`}
-  </div>`}`, { flash });
+    <form method="post" action="/estimates/${estimate.id}/convert" data-confirm="Convert this estimate to a job? The estimate will be locked.">
+      <button type="submit" id="convert" class="block">${icon('briefcase')}Convert to job</button>
+    </form>` : html`<div class="hint" style="margin:0 0 10px">Mark it approved to convert it to a job.</div>`}
+    <div class="row" style="margin-top:12px">${others.map(([k, l]) => html`<form method="post" action="/estimates/${estimate.id}/status">
+      <input type="hidden" name="status" value="${k}"><button type="submit" class="sm secondary">Mark ${l.toLowerCase()}</button></form>`)}</div>
+  </div>`}
+  <h2>Client</h2>
+  <div class="list"><a class="li" href="/clients/${client.id}"><span class="avatar">${client.name[0].toUpperCase()}</span>
+    <div class="main-t"><div class="t">${client.name}</div><div class="s">${client.address || 'No address'}</div></div>${chev()}</a></div>
+  <h2>Scope of work</h2><div class="card pre">${estimate.scope || html`<span class="muted">—</span>`}</div>
+  <h2>Line items</h2>
+  <div class="card flush"><table class="lines">
+    <tbody>${items.map((i) => html`<tr><td>${i.description}<div class="muted" style="font-size:13px">${fmtQty(i.qty_hundredths)} × ${fmt(i.unit_price_cents)}</div></td>
+      <td class="num">${fmt(i.line_total_cents)}</td></tr>`)}</tbody>
+    <tfoot><tr><td>Total</td><td class="num" id="estimate-total">${fmt(totalCents)}</td></tr></tfoot>
+  </table></div>
+  ${locked ? '' : html`<div class="actions">
+    <a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
+    <a class="btn danger" href="/estimates/${estimate.id}/delete">Delete</a></div>`}`,
+  { flash, back: { href: '/estimates', label: 'Estimates' } });
 }
 
 // ---------- Jobs ----------
 function jobsPage({ jobs, status }) {
-  const tabs = [['', 'All'], ...Object.entries(JOB_STATUS)];
-  return layout('Jobs', html`<h1>Jobs</h1>
-  <p class="row">${tabs.map(([k, label]) => (k === status ? html`<strong>${label}</strong>` : html`<a href="/jobs${k ? `?status=${k}` : ''}">${label}</a>`))}</p>
-  ${jobTable(jobs, 'No jobs.')}`);
+  return layout('Jobs', html`${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`);
 }
 
 function jobPage({ job, client, expenses, payments, crew = [], members = [], forms = {}, flash }) {
-  const af = forms.assign || { values: {}, errors: {} };
-  const jf = forms.job || { values: { status: job.status, scheduled_date: job.scheduled_date || '', notes: job.notes }, errors: {} };
+  const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Date().toISOString().slice(0, 10) }, errors: {} };
+  const af = forms.assign || { values: {}, errors: {} };
   const final = job.status === 'completed';
   return layout(job.project_name, html`
-  <div class="spread"><h1>${job.project_name} ${badge(job.status, JOB_STATUS)}</h1>
-    <a href="/estimates/${job.estimate_id}">View original estimate</a></div>
+  <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)} ${dateRange(job.start_date, job.end_date) ? html`<span class="muted" style="margin-left:6px">${dateRange(job.start_date, job.end_date)}</span>` : ''}</p>
   ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors })}
-  <div class="card two">
-    <div><label>Client</label><a href="/clients/${client.id}">${client.name}</a></div>
-    <div><label>Job address</label>${job.address || html`<span class="muted">—</span>`}</div>
-    <div style="grid-column:1/-1"><label>Scope of work</label><div class="pre">${job.scope || html`<span class="muted">—</span>`}</div></div>
-  </div>
-  <div class="grid" style="margin-bottom:16px" id="job-summary">
+  <div class="stats" id="job-summary">
     <div class="stat"><div class="k">Contract total</div><div class="v" data-k="contract">${fmt(job.contract_cents)}</div></div>
-    <div class="stat"><div class="k">Total expenses</div><div class="v" data-k="expenses">${fmt(job.expenses_cents)}</div></div>
-    <div class="stat"><div class="k">Worker payouts</div><div class="v" data-k="payouts">${fmt(job.payouts_cents)}</div></div>
+    <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
     <div class="stat"><div class="k">Payments received</div><div class="v" data-k="payments">${fmt(job.payments_cents)}</div></div>
-    <div class="stat"><div class="k">Outstanding balance</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
-    <div class="stat"><div class="k">Gross profit ${final ? '(final)' : html`<strong>(provisional)</strong>`}</div>
+    <div class="stat"><div class="k">Expenses</div><div class="v" data-k="expenses">${fmt(job.expenses_cents)}</div></div>
+    <div class="stat"><div class="k">Worker payouts</div><div class="v" data-k="payouts">${fmt(job.payouts_cents)}</div></div>
+    <div class="stat ${job.gross_profit_cents >= 0 ? 'good' : 'bad'}"><div class="k">Gross profit ${final ? '(final)' : '(provisional)'}</div>
       <div class="v" data-k="profit">${fmt(job.gross_profit_cents)}</div>
-      <div class="muted" style="font-size:.8rem">Contract − expenses − worker payouts.${final ? '' : ' Provisional until the job is completed.'}</div></div>
+      <div class="s">Contract − expenses − payouts${final ? '' : '. Provisional until completed.'}</div></div>
   </div>
 
-  <form method="post" action="/jobs/${job.id}" class="card" novalidate>
-    <h2 style="margin-top:0">Job details</h2>
+  <div class="list">
+    <a class="li" href="/clients/${client.id}"><span class="icon-bubble">${icon('users')}</span><div class="main-t"><div class="s">Client</div><div class="t">${client.name}</div></div>${chev()}</a>
+    ${job.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(job.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Job address</div><div class="t">${job.address}</div></div></a>` : ''}
+    <a class="li" href="/estimates/${job.estimate_id}"><span class="icon-bubble">${icon('file')}</span><div class="main-t"><div class="s">Original estimate</div><div class="t">View estimate</div></div>${chev()}</a>
+  </div>
+  <h2>Scope of work</h2><div class="card pre">${job.scope || html`<span class="muted">—</span>`}</div>
+
+  <h2>Job details</h2>
+  <form method="post" action="/jobs/${job.id}" class="form-card" novalidate>
+    <label for="status">Status</label><select id="status" name="status">${options(JOB_STATUS, jf.values.status)}</select>
     <div class="two">
-      <div><label for="status">Status</label><select id="status" name="status">${Object.entries(JOB_STATUS).map(([k, l]) =>
-        html`<option value="${k}" ${jf.values.status === k ? raw('selected') : ''}>${l}</option>`)}</select></div>
-      <div>${input('scheduled_date', 'Scheduled date (optional)', jf.values, jf.errors, { type: 'date' })}</div>
+      <div>${input('start_date', 'Start date', jf.values, jf.errors, { type: 'date' })}</div>
+      <div>${input('end_date', 'End date', jf.values, jf.errors, { type: 'date' })}</div>
     </div>
-    ${textarea('notes', 'Notes', jf.values, jf.errors)}
-    <p><button type="submit">Save job details</button></p>
+    ${textarea('notes', 'Notes', jf.values, jf.errors, { placeholder: 'Gate codes, materials, reminders…' })}
+    <div class="form-actions"><button type="submit">Save job details</button></div>
   </form>
 
-  <h2>Workers and payouts</h2>
-  <p class="muted">What each person will be paid for this job. Workers see only jobs they are assigned to, and only their own pay.
-    Records only; nothing is paid through this app.</p>
-  ${crew.length ? html`<div class="tablewrap"><table><thead><tr><th>Person</th><th class="num">Payout</th><th></th></tr></thead>
-  <tbody>${crew.map((c) => html`<tr><td>${c.email}${c.role === 'removed' ? html` <span class="muted">(no longer on team)</span>` : ''}</td>
-    <td class="num">${fmt(c.payout_cents)}</td>
-    <td class="num"><a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></td></tr>`)}</tbody></table></div>`
-    : html`<p class="muted">Nobody assigned yet.</p>`}
-  ${members.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="card" novalidate>
-    <div class="two"><div><label for="assign_user">Person</label>
+  <h2>Workers & payouts</h2>
+  ${crew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
+    <span class="avatar">${(c.email || '?')[0].toUpperCase()}</span>
+    <div class="main-t"><div class="t">${c.email}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : ROLES[c.role]}</div></div>
+    <div class="r"><span class="amt">${fmt(c.payout_cents)}</span><a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}" style="font-size:14px">Remove</a></div>
+  </div>`)}</div>` : html`<div class="empty">Nobody assigned yet.</div>`}
+  ${members.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="form-card" novalidate>
+    <div class="two stack"><div><label for="assign_user">Person</label>
       <select id="assign_user" name="user_id" class="${inv(af.errors, 'user_id')}">
         <option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}" ${af.values.user_id === m.user_id ? raw('selected') : ''}>${m.email} (${ROLES[m.role]})</option>`)}
       </select>${fieldErr(af.errors, 'user_id')}</div>
     <div>${input('payout', 'Payout ($)', af.values, af.errors, { required: true, inputmode: 'decimal' })}</div></div>
-    <p><button type="submit">Assign / update payout</button></p>
+    <div class="hint">What they'll be paid for this job. They see only their own amount. Records only; nothing is paid through the app.</div>
+    <div class="form-actions"><button type="submit" class="secondary">Assign / update payout</button></div>
   </form>` : ''}
 
   <h2>Expenses</h2>
-  ${moneyTable(expenses, 'expenses', (e) => html`<td>${e.description}</td>`, html`<th>Description</th>`, 'No expenses recorded.')}
-  <form method="post" action="/jobs/${job.id}/expenses" class="card" novalidate>
-    <div class="two"><div>${input('description', 'Expense description', ef.values, ef.errors, { required: true })}</div>
+  ${entryList(expenses, 'expenses', (e) => e.description, 'No expenses recorded.')}
+  <form method="post" action="/jobs/${job.id}/expenses" class="form-card" novalidate>
+    <div class="two stack"><div>${input('description', 'Expense description', ef.values, ef.errors, { required: true })}</div>
     <div>${input('amount', 'Amount ($)', ef.values, ef.errors, { required: true, inputmode: 'decimal' })}</div></div>
-    <p><button type="submit">Add expense</button></p>
+    <div class="form-actions"><button type="submit" class="secondary">Add expense</button></div>
   </form>
 
   <h2>Payments received</h2>
-  <p class="muted">Manual records only. No money is processed by this app.</p>
-  ${moneyTable(payments, 'payments', (p) => html`<td>${p.paid_on}</td>`, html`<th>Date received</th>`, 'No payments recorded.')}
-  <form method="post" action="/jobs/${job.id}/payments" class="card" novalidate>
-    <div class="two"><div>${input('payment_amount', 'Amount ($)', pf.values, pf.errors, { required: true, inputmode: 'decimal' })}</div>
+  ${entryList(payments, 'payments', (p) => html`Payment · ${fmtDate(p.paid_on)}`, 'No payments recorded.')}
+  <form method="post" action="/jobs/${job.id}/payments" class="form-card" novalidate>
+    <div class="two stack"><div>${input('payment_amount', 'Amount ($)', pf.values, pf.errors, { required: true, inputmode: 'decimal' })}</div>
     <div>${input('paid_on', 'Date received', pf.values, pf.errors, { type: 'date', required: true })}</div></div>
-    <p><button type="submit">Record payment</button></p>
-  </form>`, { flash });
+    <div class="hint">Manual records only. No money is processed by this app.</div>
+    <div class="form-actions"><button type="submit" class="secondary">Record payment</button></div>
+  </form>`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
 
-function moneyTable(rows, kind, firstCell, firstHead, empty) {
-  if (!rows.length) return html`<p class="muted">${empty}</p>`;
-  return html`<div class="tablewrap"><table><thead><tr>${firstHead}<th class="num">Amount</th><th></th></tr></thead>
-  <tbody>${rows.map((r) => html`<tr>${firstCell(r)}<td class="num">${fmt(r.amount_cents)}</td>
-    <td class="num"><a href="/${kind}/${r.id}/edit">Edit</a> · <a href="/${kind}/${r.id}/delete">Delete</a></td></tr>`)}</tbody></table></div>`;
+function entryList(rows, kind, title, empty) {
+  if (!rows.length) return html`<div class="empty">${empty}</div>`;
+  return html`<div class="list">${rows.map((r) => html`<div class="li">
+    <div class="main-t"><div class="t">${title(r)}</div>
+      <div class="s"><a href="/${kind}/${r.id}/edit">Edit</a> · <a href="/${kind}/${r.id}/delete">Delete</a></div></div>
+    <div class="r"><span class="amt">${fmt(r.amount_cents)}</span></div>
+  </div>`)}</div>`;
 }
 
 function entryFormPage({ kind, entry, job, values, errors = {} }) {
   const isExpense = kind === 'expenses';
   return layout(isExpense ? 'Edit expense' : 'Edit payment', html`
-  <h1>${isExpense ? 'Edit expense' : 'Edit payment'}</h1>
-  <p>Job: <a href="/jobs/${job.id}">${job.project_name}</a></p>
   ${errorBox(errors)}
-  <form method="post" action="/${kind}/${entry.id}" class="card" novalidate>
-    ${isExpense ? input('description', 'Description', values, errors, { required: true }) : ''}
-    ${input('amount', 'Amount ($)', values, errors, { required: true, inputmode: 'decimal' })}
-    ${isExpense ? '' : input('paid_on', 'Date received', values, errors, { type: 'date', required: true })}
-    <p class="row"><button type="submit">Save</button><a class="btn secondary" href="/jobs/${job.id}">Cancel</a></p>
-  </form>`);
+  <form method="post" action="/${kind}/${entry.id}" novalidate>
+    <div class="form-card">
+      ${isExpense ? input('description', 'Description', values, errors, { required: true }) : ''}
+      ${input('amount', 'Amount ($)', values, errors, { required: true, inputmode: 'decimal' })}
+      ${isExpense ? '' : input('paid_on', 'Date received', values, errors, { type: 'date', required: true })}
+    </div>
+    <div class="form-actions"><a class="btn secondary" href="/jobs/${job.id}">Cancel</a><button type="submit">Save</button></div>
+  </form>`, { back: { href: `/jobs/${job.id}`, label: job.project_name }, sub: html`For ${job.project_name}` });
+}
+
+function confirmPage({ title, message, action, cancelHref, button = 'Yes, delete it' }) {
+  return layout(title, html`
+  <div class="card"><p style="margin:0">${message}</p></div>
+  <form method="post" action="${action}" class="form-actions">
+    <a class="btn secondary" href="${cancelHref}">Cancel</a>
+    <button type="submit" class="danger solid">${button}</button>
+  </form>`, { back: { href: cancelHref, label: 'Back' } });
 }
 
 function confirmDeletePage({ kind, entry, job }) {
   const what = kind === 'expenses'
     ? html`the expense <strong>${entry.description}</strong> (${fmt(entry.amount_cents)})`
-    : html`the payment of <strong>${fmt(entry.amount_cents)}</strong> received ${entry.paid_on}`;
-  return layout('Confirm delete', html`
-  <div class="card" style="max-width:520px">
-    <h1>Delete this entry?</h1>
-    <p>You are about to permanently delete ${what} from <a href="/jobs/${job.id}">${job.project_name}</a>.</p>
-    <form method="post" action="/${kind}/${entry.id}/delete" class="row">
-      <button type="submit" class="danger">Yes, delete it</button>
-      <a class="btn secondary" href="/jobs/${job.id}">Cancel</a>
-    </form>
-  </div>`);
+    : html`the payment of <strong>${fmt(entry.amount_cents)}</strong> received ${fmtDate(entry.paid_on)}`;
+  return confirmPage({ title: 'Delete this entry?', action: `/${kind}/${entry.id}/delete`, cancelHref: `/jobs/${job.id}`,
+    message: html`You are about to permanently delete ${what} from ${job.project_name}.` });
 }
 
-function messagePage(title, message, status) {
-  return layout(title, html`<div class="card"><h1>${title}</h1><p>${message}</p><p><a href="/">Back to home</a></p></div>`);
+function messagePage(title, message) {
+  return layout(title, html`<div class="card"><p style="margin:0">${message}</p></div>
+    <a class="btn secondary block" href="/">Back to home</a>`);
 }
 
 module.exports = {
-  ESTIMATE_STATUS, JOB_STATUS, nav, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, orgNewPage, teamPage, homePage, clientsPage, clientFormPage, clientPage,
-  estimatesPage, estimateFormPage, estimatePage, jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
+  ESTIMATE_STATUS, JOB_STATUS, nav, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, welcomePage,
+  accountPage, teamPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
+  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };
