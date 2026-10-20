@@ -87,6 +87,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:14px}
 .card.flush{padding:0;overflow:hidden}
 .hero{border-radius:22px;padding:20px;color:#fff;margin:6px 0 14px;background:linear-gradient(135deg,#4338ca 0%,#6d28d9 55%,#be185d 120%);box-shadow:0 12px 30px rgba(79,70,229,.28)}
+.hero-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.hero-top .delta{margin-top:0}
 .hero .k{font-size:14px;opacity:.85;font-weight:500}
 .hero .v{font-size:38px;font-weight:780;letter-spacing:-.03em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
 .hero .s{font-size:13px;opacity:.8}
@@ -869,11 +870,11 @@ function scheduleJobPage({ job }) {
 // Revenue growth: this month so far vs the same days of last month.
 function growthBadge(m) {
   if (!m.prevCents) {
-    return html`<span class="delta" id="revenue-growth">${m.revenueCents ? 'No jobs completed by this point last month' : 'No jobs completed yet'}</span>`;
+    return html`<span class="delta" id="revenue-growth">${m.revenueCents ? 'None by this point last month' : 'No jobs completed yet'}</span>`;
   }
   const pct = ((m.revenueCents - m.prevCents) / m.prevCents) * 100;
   const shown = `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(Math.abs(pct) < 10 ? 1 : 0)}%`;
-  return html`<span class="delta" id="revenue-growth">${pct >= 0 ? '▲' : '▼'} ${shown} vs ${m.prevLabel}</span>`;
+  return html`<span class="delta" id="revenue-growth" title="Compared with the ${m.prevLabel}">${pct >= 0 ? "▲" : "▼"} ${shown} vs last month</span>`;
 }
 
 // Bar chart of revenue per month (one series, so no legend). Tap or hover a bar to read its value.
@@ -912,10 +913,9 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
   const profitClass = month.profitCents > 0 ? 'good' : month.profitCents < 0 ? 'bad' : '';
   return layout('Home', html`
   <div class="hero">
-    <div class="k">Revenue · ${month.label}</div>
+    <div class="hero-top"><div class="k">Revenue · ${month.label}</div>${growthBadge(month)}</div>
     <div class="v" id="month-revenue">${fmt(month.revenueCents)}</div>
     <div class="s">Value of jobs completed this month</div>
-    ${growthBadge(month)}
   </div>
   <div class="stats four">
     <div class="stat wide-sm ${profitClass}"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
@@ -1488,8 +1488,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
     <div class="stat"><div class="k">Expenses</div><div class="v" data-k="expenses">${fmt(job.expenses_cents)}</div></div>
     <div class="stat"><div class="k">Crew payouts</div><div class="v" data-k="payouts">${fmt(job.payouts_cents)}</div></div>
     <div class="stat ${job.gross_profit_cents >= 0 ? 'good' : 'bad'}"><div class="k">Gross profit ${final ? '(final)' : '(provisional)'}</div>
-      <div class="v" data-k="profit">${fmt(job.gross_profit_cents)}</div>
-      <div class="s">Contract − expenses − payouts${final ? '' : '. Provisional until completed.'}</div></div>
+      <div class="v" data-k="profit">${fmt(job.gross_profit_cents)}</div></div>
   </div>
 
   <div class="list">
