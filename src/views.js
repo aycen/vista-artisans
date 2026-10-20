@@ -590,7 +590,7 @@ function billingPage({ org, sub, plan, counts, enabled, testMode, interval = 'mo
         <div class="muted" style="font-size:14px" data-k="usage">${usage}</div></div>
       ${sub.comped ? html`<span class="pill completed">Free for ${org.name}</span>` : ''}
     </div>
-    ${paid ? html`<div class="hint" style="margin-top:10px">${sub.cancel_at_period_end ? `Ends on ${renew}. You'll move to Free after that.` : `Renews ${renew}, billed ${sub.billing_interval === 'year' ? 'yearly' : 'monthly'}.`}</div>
+    ${paid ? html`<div class="hint" style="margin-top:10px">${sub.cancel_at_period_end ? html`Ends on ${renew}. You'll move to Free after that.` : html`Renews ${renew}, billed ${sub.billing_interval === 'year' ? 'yearly' : 'monthly'}.`}</div>
       <form method="post" action="/billing/portal" style="margin-top:12px"><button type="submit" class="secondary block">${icon('card')}Manage billing</button></form>
       <div class="hint">Change plan, update your card, see receipts or cancel. Handled securely by Stripe.</div>` : ''}
   </div>
