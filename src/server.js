@@ -853,6 +853,12 @@ function respond(res, out) {
 const server = http.createServer((req, res) => {
   handle(req, res).then((out) => respond(res, out)).catch((e) => {
     console.error(e);
+    if (!res.headersSent && ['42P01', '42703', '42883'].includes(e.code)) {
+      // Missing table, column or function: the code was deployed before its database migration ran.
+      respond(res, page(503, v.messagePage('Database update needed',
+        'This part of the app needs a database update that hasn\'t been run yet. An admin should run the newest file in supabase/migrations in the Supabase SQL Editor (the /healthz page names it). Nothing was saved.')));
+      return;
+    }
     if (!res.headersSent) {
       respond(res, page(e.status || 500, v.messagePage('Something went wrong',
         'The request could not be completed and nothing was saved. Use your browser\'s Back button to return to your entries and try again.')));
