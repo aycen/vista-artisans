@@ -604,7 +604,10 @@ async function health() {
     database_as_user: await check(() => asUser('00000000-0000-0000-0000-000000000000', (db) => db.get('SELECT count(*) FROM organizations'))),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
+  let target = 'unparseable';
+  try { const u = new URL(process.env.DATABASE_URL); target = `${u.hostname}:${u.port || 5432} as ${decodeURIComponent(u.username)}`; } catch {}
   const healthy = Object.values(result).every((x) => x === 'ok');
+  result.database_target = target; // host, port and user only; never the password
   return { status: healthy ? 200 : 503, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) };
 }
 
