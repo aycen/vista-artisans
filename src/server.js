@@ -91,7 +91,7 @@ async function validateEstimate(db, org, params) {
   const f = formObj(params);
   const errors = {};
   const values = {
-    client_id: f.client_id ?? '', project_name: f.project_name ?? '', scope: f.scope ?? '',
+    client_id: f.client_id ?? '',
     estimated_cost: f.estimated_cost ?? '', status: v.ESTIMATE_STATUS[f.status] ? f.status : 'draft',
     deposit_percent: f.deposit_percent ?? '0', address: f.address ?? '', visit_date: str(f.visit_date, 20), visit_time: str(f.visit_time, 10),
   };
@@ -106,8 +106,6 @@ async function validateEstimate(db, org, params) {
     || !(await db.get('SELECT id FROM clients WHERE id = ? AND org_id = ?', Number(values.client_id), org))) {
     errors.client_id = 'Choose a client, or pick "+ New client".';
   }
-  const projectName = str(values.project_name, 200);
-  if (!projectName) errors.project_name = 'Project name is required.';
   const cost = parseMoney(values.estimated_cost, 'Estimated cost', { required: false });
   if (cost.error) errors.estimated_cost = cost.error;
 
@@ -115,26 +113,26 @@ async function validateEstimate(db, org, params) {
   if (!(deposit >= 0 && deposit <= 100)) errors.deposit_percent = 'Deposit must be a whole percent from 0 to 100.';
 
   const descs = params.getAll('item_desc'); const qtys = params.getAll('item_qty'); const prices = params.getAll('item_price');
-  const opts = params.getAll('item_option');
+  const opts = params.getAll('item_option'); const details = params.getAll('item_details');
   const items = []; const cleanItems = [];
   for (let i = 0; i < Math.max(descs.length, qtys.length, prices.length); i++) {
-    const it = { desc: descs[i] ?? '', qty: qtys[i] ?? '', price: prices[i] ?? '', option: opts[i] ?? '' };
-    if (!it.desc.trim() && !it.qty.trim() && !it.price.trim()) continue; // ignore blank rows
+    const it = { desc: descs[i] ?? '', details: details[i] ?? '', qty: qtys[i] ?? '', price: prices[i] ?? '', option: opts[i] ?? '' };
+    if (!it.desc.trim() && !it.details.trim() && !it.qty.trim() && !it.price.trim()) continue; // ignore blank rows
     const n = items.length; items.push(it);
     const problems = [];
     const desc = str(it.desc, 500);
-    if (!desc) problems.push('description is required');
+    if (!desc) problems.push('name is required');
     const q = parseQty(it.qty, 'quantity'); if (q.error) problems.push(q.error.replace(/^q/, 'Q'));
     const p = parseMoney(it.price, 'unit price'); if (p.error) problems.push(p.error.replace(/^u/, 'U'));
     if (problems.length) errors[`item_${n}`] = `Line ${n + 1}: ${problems.join(' ')}`;
-    else cleanItems.push({ desc, qty: q.value, price: p.value, option: str(it.option, 60) });
+    else cleanItems.push({ desc, details: String(it.details).replace(/\r\n/g, '\n').trim().slice(0, 10000), qty: q.value, price: p.value, option: str(it.option, 60) });
   }
   if (!items.length) errors.items = 'Add at least one line item.';
   const optionNames = new Set(cleanItems.map((i) => i.option).filter(Boolean));
   if (optionNames.size === 1) errors.options = 'Give at least two options (for example Good and Better), or leave Option blank on every line.';
   return {
     values, items, errors,
-    clean: { projectName, scope: str(values.scope, 10000), cost: cost.value ?? null, status: values.status, items: cleanItems, newClient,
+    clean: { cost: cost.value ?? null, status: values.status, items: cleanItems, newClient,
       deposit: Number.isNaN(deposit) ? 0 : deposit, address: str(values.address, 500),
       visitDate: values.visit_date || null, visitTime: values.visit_time ? values.visit_time.slice(0, 5) : null },
   };
@@ -229,14 +227,17 @@ async function renderEstimate(db, org, id, extra = {}, status = 200) {
   }));
 }
 
-// The scope of work is the line item descriptions, one per line: shared items plus the chosen option
-// (or every option, labelled, until the client picks one). The job and work order copy it when the estimate is converted.
-const refreshScope = (db, estimateId) => db.run(`UPDATE estimates e SET scope = coalesce((
-    SELECT string_agg('• ' || CASE WHEN li.option_name <> '' AND e.chosen_option IS NULL THEN li.option_name || ': ' ELSE '' END || li.description,
-      E'\n' ORDER BY li.position)
-    FROM line_items li WHERE li.estimate_id = e.id
-      AND (li.option_name = '' OR e.chosen_option IS NULL OR li.option_name = e.chosen_option)), '')
-  WHERE e.id = ? AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.estimate_id = e.id)`, estimateId);
+// The scope of work is built from the line items (name, then its description): shared items plus the chosen option
+// (or every option, labelled, until the client picks one). The job and work order get the same text, and it follows later edits.
+async function refreshScope(db, estimateId) {
+  await db.run(`UPDATE estimates e SET scope = coalesce((
+      SELECT string_agg('• ' || CASE WHEN li.option_name <> '' AND e.chosen_option IS NULL THEN li.option_name || ': ' ELSE '' END || li.description
+        || CASE WHEN li.details <> '' THEN E'\n' || li.details ELSE '' END, E'\n\n' ORDER BY li.position)
+      FROM line_items li WHERE li.estimate_id = e.id
+        AND (li.option_name = '' OR e.chosen_option IS NULL OR li.option_name = e.chosen_option)), '')
+    WHERE e.id = ?`, estimateId);
+  await db.run('UPDATE jobs SET scope = (SELECT scope FROM estimates WHERE id = ?) WHERE estimate_id = ?', estimateId, estimateId);
+}
 
 async function saveEstimate(db, org, estimateId, values, clean) {
   let clientId = Number(values.client_id);
@@ -245,21 +246,23 @@ async function saveEstimate(db, org, estimateId, values, clean) {
     clientId = (await db.run('INSERT INTO clients (org_id, name, phone, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
       org, c.name, c.phone, c.email, c.address)).id;
   }
-  // The job site defaults to the client's address.
-  const address = clean.address || (await db.get('SELECT address FROM clients WHERE id = ?', clientId)).address;
+  // The job site defaults to the client's address, and the address is the project's name (the client's name if there's no address).
+  const cl = await db.get('SELECT name, address FROM clients WHERE id = ?', clientId);
+  const address = clean.address || cl.address;
+  clean.projectName = str(address, 200) || cl.name;
   if (estimateId) {
-    await db.run(`UPDATE estimates SET client_id = ?, project_name = ?, scope = ?, estimated_cost_cents = ?, status = ?, deposit_percent = ?,
+    await db.run(`UPDATE estimates SET client_id = ?, project_name = ?, estimated_cost_cents = ?, status = ?, deposit_percent = ?,
       chosen_option = NULL, address = ?, visit_date = ?, visit_time = ?, updated_at = now() WHERE id = ? AND org_id = ?`,
-    clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit, address, clean.visitDate, clean.visitTime, estimateId, org);
+    clientId, clean.projectName, clean.cost, clean.status, clean.deposit, address, clean.visitDate, clean.visitTime, estimateId, org);
     await db.run('DELETE FROM line_items WHERE estimate_id = ?', estimateId);
   } else {
-    estimateId = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, scope, estimated_cost_cents, status, deposit_percent,
-      address, visit_date, visit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    org, clientId, clean.projectName, clean.scope, clean.cost, clean.status, clean.deposit, address, clean.visitDate, clean.visitTime)).id;
+    estimateId = (await db.run(`INSERT INTO estimates (org_id, client_id, project_name, estimated_cost_cents, status, deposit_percent,
+      address, visit_date, visit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    org, clientId, clean.projectName, clean.cost, clean.status, clean.deposit, address, clean.visitDate, clean.visitTime)).id;
   }
   for (const [i, it] of clean.items.entries()) {
-    await db.run(`INSERT INTO line_items (org_id, estimate_id, position, description, qty_hundredths, unit_price_cents, option_name)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`, org, estimateId, i, it.desc, it.qty, it.price, it.option);
+    await db.run(`INSERT INTO line_items (org_id, estimate_id, position, description, details, qty_hundredths, unit_price_cents, option_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, org, estimateId, i, it.desc, it.details, it.qty, it.price, it.option);
   }
   await refreshScope(db, estimateId);
   return estimateId;
@@ -377,15 +380,40 @@ route('GET', '/estimates/:id', ({ db, org, id, url }) => renderEstimate(db, org.
 route('GET', '/estimates/:id/edit', async ({ db, org, id }) => {
   const e = await db.get('SELECT * FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id);
   if (!e) return notFound();
-  if (await jobFor(db, id)) return renderEstimate(db, org.org_id, id, { errors: lockedMsg }, 409);
+  // After it becomes a job, prices are locked but line item names and descriptions can still be edited.
+  if (await jobFor(db, id)) return redirect(`/estimates/${id}/descriptions`);
   const items = (await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', id))
-    .map((i) => ({ desc: i.description, qty: fmtQty(i.qty_hundredths), price: plain(i.unit_price_cents), option: i.option_name }));
+    .map((i) => ({ desc: i.description, details: i.details, qty: fmtQty(i.qty_hundredths), price: plain(i.unit_price_cents), option: i.option_name }));
   const values = {
-    client_id: String(e.client_id), project_name: e.project_name, scope: e.scope, status: e.status,
+    client_id: String(e.client_id), status: e.status,
     estimated_cost: e.estimated_cost_cents == null ? '' : plain(e.estimated_cost_cents), deposit_percent: String(e.deposit_percent),
     address: e.address, visit_date: e.visit_date || '', visit_time: e.visit_time ? e.visit_time.slice(0, 5) : '',
   };
   return ok(v.estimateFormPage({ estimate: e, values, items, clients: await clientsForSelect(db, org.org_id) }));
+});
+// Line item names and descriptions, editable any time (also once the estimate is a job). Updates the scope of work.
+async function renderDescriptions(db, org, id, extra = {}, status = 200) {
+  const estimate = await db.get('SELECT * FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!estimate) return notFound();
+  const items = await db.all('SELECT * FROM line_items WHERE estimate_id = ? ORDER BY position', id);
+  return page(status, v.descriptionsPage({ estimate, items, job: await jobFor(db, id), ...extra }));
+}
+route('GET', '/estimates/:id/descriptions', ({ db, org, id }) => renderDescriptions(db, org, id));
+route('POST', '/estimates/:id/descriptions', async ({ db, org, id, form }) => {
+  const items = await db.all('SELECT id FROM line_items WHERE estimate_id = ? AND org_id = ? ORDER BY position', id, org.org_id);
+  if (!items.length) return notFound();
+  const errors = {}; const updates = [];
+  for (const [n, it] of items.entries()) {
+    const name = str(form.get(`name_${it.id}`), 500);
+    const details = String(form.get(`details_${it.id}`) ?? '').replace(/\r\n/g, '\n').trim().slice(0, 10000);
+    if (!name) errors[`item_${it.id}`] = `Line ${n + 1}: name is required.`;
+    updates.push([name, details, it.id]);
+  }
+  if (hasErrors(errors)) return renderDescriptions(db, org, id, { errors, values: Object.fromEntries(updates.map(([a, b, i]) => [i, { name: a, details: b }])) }, 422);
+  for (const [name, details, itemId] of updates) await db.run('UPDATE line_items SET description = ?, details = ? WHERE id = ?', name, details, itemId);
+  await refreshScope(db, id);
+  const job = await jobFor(db, id);
+  return redirect(job ? `/jobs/${job.id}?msg=Scope+of+work+updated` : `/estimates/${id}?msg=Descriptions+saved`);
 });
 route('POST', '/estimates/:id', async ({ db, org, id, form }) => {
   const estimate = await db.get('SELECT * FROM estimates WHERE id = ? AND org_id = ?', id, org.org_id);
@@ -503,8 +531,9 @@ route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
   }
   if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { job: { values, errors } } }, 422);
   const r = await attempt(db, () => db.run(`UPDATE jobs SET status = ?, start_date = ?, end_date = ?, notes = ?, address = coalesce(?, address),
+      project_name = coalesce(nullif(?, ''), project_name),
     updated_at = now() WHERE id = ?`, values.status, values.start_date || null, values.end_date || null, str(values.notes, 10000),
-  values.address === undefined ? null : str(values.address, 500), id));
+  values.address === undefined ? null : str(values.address, 500), values.address === undefined ? null : str(values.address, 200), id));
   if (r.error) { console.error(r.error); return renderJob(db, org.org_id, id, { forms: { job: { values, errors: SAVE_FAILED } } }, 500); }
   return redirect(`/jobs/${id}?msg=Job+saved`);
 });

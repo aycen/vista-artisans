@@ -124,6 +124,14 @@ function estimatePdf({ company, estimate, client, items, totalCents, options = [
       });
       doc.y = y + h;
     };
+    // A line item: its name with qty and prices, then its description (which can run long and break across pages).
+    const itemRow = (it, i) => {
+      row([it.description, fmtQty(it.qty_hundredths), fmt(it.unit_price_cents), fmt(it.line_total_cents)], { bold: !!it.details, fill: i % 2 ? '#f8fafc' : undefined });
+      if (it.details) {
+        doc.fillColor('#475569').font('Helvetica').fontSize(9.5).text(it.details, left + 8, doc.y - 4, { width: cols[0].w + 150 - 16, lineGap: 1.5 });
+        doc.y += 8; doc.x = left;
+      }
+    };
     ensureSpace(doc, 60);
     const hy = doc.y;
     doc.rect(left, hy, w, 24).fill(ACCENT);
@@ -140,12 +148,10 @@ function estimatePdf({ company, estimate, client, items, totalCents, options = [
       .map((o) => ({ ...o, items: items.filter((it) => it.option_name === o.name) }));
     const heading = (text, amount) => row([text, '', '', amount], { bold: true, fill: '#eef0ff' });
     if (groups.length && shared.length) heading(chosen ? 'Included' : 'Included in every option', '');
-    shared.forEach((it, i) => row([it.description, fmtQty(it.qty_hundredths), fmt(it.unit_price_cents), fmt(it.line_total_cents)],
-      { fill: i % 2 ? '#f8fafc' : undefined }));
+    shared.forEach(itemRow);
     for (const g of groups) {
       heading(`Option: ${g.name}`, chosen ? '' : `Total ${fmt(g.total)}`);
-      g.items.forEach((it, i) => row([it.description, fmtQty(it.qty_hundredths), fmt(it.unit_price_cents), fmt(it.line_total_cents)],
-        { fill: i % 2 ? '#f8fafc' : undefined }));
+      g.items.forEach(itemRow);
     }
     doc.moveTo(left, doc.y).lineTo(left + w, doc.y).lineWidth(1).strokeColor(LINE).stroke();
 

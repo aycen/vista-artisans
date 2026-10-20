@@ -36,6 +36,15 @@ async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', 
 const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
+// Estimates have no separate project name any more: the job address is the name. The older tests below name their
+// projects ("Kitchen remodel", "Deck"…), so a project_name they send is used as the address unless they give one.
+function estimateForm(p, params) {
+  if (/^\/estimates(\/\d+)?$/.test(p) && params.has('project_name')) {
+    if (!params.has('address')) params.set('address', params.get('project_name'));
+    params.delete('project_name');
+  }
+  return params;
+}
 async function req(method, p, form, { auth = true } = {}) {
   const jar = auth ? jars[who] : {};
   const res = await fetch(BASE + p, {
@@ -44,7 +53,7 @@ async function req(method, p, form, { auth = true } = {}) {
       cookie: Object.entries(jar).map(([k, val]) => `${k}=${val}`).join('; '),
       ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
     },
-    body: form ? new URLSearchParams(form).toString() : undefined,
+    body: form ? estimateForm(p, new URLSearchParams(form)).toString() : undefined,
   });
   const setCookies = res.headers.getSetCookie();
   if (auth) {
@@ -194,13 +203,26 @@ test('full workflow', async () => {
 
   // Job carries client, address, scope and approved price
   r = await getPage(`/jobs/${jobId}`);
-  assert.match(r.body, /Jane Rivera/); assert.match(r.body, /12 Oak St, Austin TX/);
-  assert.match(r.body, /• Cabinets\n• Labor hours/, 'scope of work is the line item descriptions');
+  assert.match(r.body, /Jane Rivera/); assert.match(r.body, /Job address<\/div><div class="t">Kitchen remodel</);
+  assert.match(r.body, /• Cabinets\n\n• Labor hours/, 'scope of work is the line item descriptions');
   assert.equal(stat(r.body, 'contract'), '$4,552.50');
   assert.match(r.body, /\(provisional\)/);
 
   // Converted estimate is locked
-  r = await getPage(`/estimates/${estId}/edit`); assert.equal(r.status, 409);
+  r = await getPage(`/estimates/${estId}/edit`); assert.equal(r.location, `/estimates/${estId}/descriptions`);
+  // …except line item names and descriptions, which stay editable and update the job's scope of work
+  const lines = (await dbClient.query('SELECT id FROM line_items WHERE estimate_id = $1 ORDER BY position', [estId])).rows.map((x) => x.id);
+  assert.match((await getPage(`/estimates/${estId}/descriptions`)).body, /Prices and quantities are locked/);
+  r = await post(`/estimates/${estId}/descriptions`, { [`name_${lines[0]}`]: '', [`details_${lines[0]}`]: '' });
+  assert.equal(r.status, 422); assert.match(r.body, /Line 1: name is required/);
+  r = await post(`/estimates/${estId}/descriptions`, { [`name_${lines[0]}`]: 'Cabinets', [`details_${lines[0]}`]: 'Shaker style, soft-close\nRemove old boxes',
+    [`name_${lines[1]}`]: 'Labor', [`details_${lines[1]}`]: '' });
+  assert.equal(r.location, `/jobs/${jobId}?msg=Scope+of+work+updated`);
+  assert.equal((await dbClient.query('SELECT scope FROM jobs WHERE id = $1', [jobId])).rows[0].scope,
+    '• Cabinets\nShaker style, soft-close\nRemove old boxes\n\n• Labor');
+  assert.match((await getPage(`/estimates/${estId}`)).body, /class="li-details">Shaker style, soft-close\nRemove old boxes</);
+  assert.equal(stat((await getPage(`/jobs/${jobId}`)).body, 'contract'), '$4,552.50', 'prices unchanged');
+  assert.equal((await getPage(`/estimates/${estId}/pdf`)).type, 'application/pdf');
   r = await post(`/estimates/${estId}`, { client_id: String(clientId), project_name: 'Changed', item_desc: 'x', item_qty: '1', item_price: '1' });
   assert.equal(r.status, 409);
   r = await post(`/estimates/${estId}/status`, { status: 'declined' }); assert.equal(r.status, 409);
@@ -404,7 +426,7 @@ test('full workflow', async () => {
   // Dave (worker) sees only his assigned jobs: date, address, scope and his own pay; no other money, no other pages
   as('dave');
   page = (await getPage('/')).body;
-  assert.match(page, /Overview/); assert.match(page, /Deck/); assert.match(page, /9 Elm Rd/);
+  assert.match(page, /Overview/); assert.match(page, /Deck/);
   assert.match(page, /datetime="2026-11-10"/); assert.match(page, /datetime="2026-11-12"/);
   assert.match(page, /data-k="upcoming-pay">\$350\.00</); assert.match(page, /data-k="open-jobs">1</);
   assert.deepEqual([...new Set(page.match(/\$[\d,.]+/g))].sort(), ['$0.00', '$350.00'], 'only his own pay is shown');
@@ -895,7 +917,7 @@ test('estimate address and appointment on the calendar, job address, client tota
   as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
   const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
   const jane = (await dbClient.query("SELECT id FROM clients WHERE org_id = $1 AND name = 'Jane Rivera'", [vista])).rows[0].id;
-  const base = [['client_id', String(jane)], ['project_name', 'Garage door'], ['status', 'approved'], ['deposit_percent', '0'],
+  const base = [['client_id', String(jane)], ['status', 'approved'], ['deposit_percent', '0'],
     ['item_desc', 'Door'], ['item_qty', '1'], ['item_price', '1800']];
   let r = await post('/estimates', [...base, ['visit_time', '09:30']]);
   assert.equal(r.status, 422); assert.match(r.body, /Add a date for the appointment time/);
@@ -911,14 +933,16 @@ test('estimate address and appointment on the calendar, job address, client tota
   assert.match(page, /77 Lake Rd, Round Rock TX/); assert.match(page, /id="appointment">.*Dec 3, 2026.* at 9:30 AM/s);
   // On the calendar, in time order
   page = (await getPage('/jobs?day=2026-12-03')).body;
-  assert.match(page, /9:30 AM · Estimate: Garage door[\s\S]*2:30 PM · Estimate: Garage door/);
+  assert.match(page, /9:30 AM · Estimate: 77 Lake Rd, Round Rock TX[\s\S]*2:30 PM · Estimate: 12 Oak St, Austin TX/);
+  assert.equal((await dbClient.query('SELECT project_name FROM estimates WHERE id = $1', [est])).rows[0].project_name, '77 Lake Rd, Round Rock TX', 'the address is the project name');
   assert.match(page, /class="visit"/); assert.match(page, /Estimate appointment/);
   assert.match((await getPage('/estimates/new?date=2026-12-03')).body, /value="2026-12-03"/);
   // The job takes the estimate's address, and it can be changed on the job
   const job = idFrom((await post(`/estimates/${est}/convert`, {})).location);
   assert.equal((await dbClient.query('SELECT address FROM jobs WHERE id = $1', [job])).rows[0].address, '77 Lake Rd, Round Rock TX');
   await post(`/jobs/${job}`, { status: 'not_started', start_date: '', end_date: '', notes: '', address: '78 Lake Rd, Round Rock TX' });
-  assert.equal((await dbClient.query('SELECT address FROM jobs WHERE id = $1', [job])).rows[0].address, '78 Lake Rd, Round Rock TX');
+  assert.deepEqual((await dbClient.query('SELECT address, project_name FROM jobs WHERE id = $1', [job])).rows[0],
+    { address: '78 Lake Rd, Round Rock TX', project_name: '78 Lake Rd, Round Rock TX' });
   // Client total value = their jobs' contract totals
   const expected = (await dbClient.query('SELECT sum(contract_cents)::bigint AS v FROM jobs WHERE client_id = $1', [jane])).rows[0].v;
   page = (await getPage(`/clients/${jane}`)).body;
@@ -962,7 +986,7 @@ test('week view, scope from line items with options, expense receipts', async ()
   // Week view: Sunday to Saturday around the chosen day, with jobs and estimate appointments; no "appointment this day" button
   let page = (await getPage('/jobs?view=week&day=2026-12-03')).body;
   assert.match(page, /id="week"/); assert.match(page, /Nov 29 – Dec 5, 2026/);
-  assert.match(page, /data-day="2026-12-03"[\s\S]*?Estimate: Garage door/);
+  assert.match(page, /data-day="2026-12-03"[\s\S]*?Estimate: 77 Lake Rd/);
   assert.match(page, /href="\/jobs\?view=week(&amp;|&)day=2026-12-06"/); assert.doesNotMatch(page, /appointment this day/);
   assert.doesNotMatch((await getPage('/jobs?day=2026-12-03')).body, /appointment this day/);
 
@@ -973,11 +997,11 @@ test('week view, scope from line items with options, expense receipts', async ()
     ['item_desc', 'Stone shower'], ['item_qty', '1'], ['item_price', '7000'], ['item_option', 'Best']]);
   const bath = idFrom(r.location);
   const scope = async () => (await dbClient.query('SELECT scope FROM estimates WHERE id = $1', [bath])).rows[0].scope;
-  assert.equal(await scope(), '• Demo\n• Good: Tile shower\n• Best: Stone shower');
+  assert.equal(await scope(), '• Demo\n\n• Good: Tile shower\n\n• Best: Stone shower');
   await post(`/estimates/${bath}/status`, { status: 'approved', chosen_option: 'Best' });
-  assert.equal(await scope(), '• Demo\n• Stone shower');
+  assert.equal(await scope(), '• Demo\n\n• Stone shower');
   const job = idFrom((await post(`/estimates/${bath}/convert`, {})).location);
-  assert.equal((await dbClient.query('SELECT scope FROM jobs WHERE id = $1', [job])).rows[0].scope, '• Demo\n• Stone shower');
+  assert.equal((await dbClient.query('SELECT scope FROM jobs WHERE id = $1', [job])).rows[0].scope, '• Demo\n\n• Stone shower');
 
   // Receipts: a photo or PDF on an expense, viewable, replaceable and removable; anything else is refused
   const jpg = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).toString('base64')}`;

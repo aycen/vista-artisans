@@ -173,7 +173,9 @@ input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;display:blo
 /* Line items */
 .item{background:var(--surface-2);border-radius:14px;padding:12px;margin-top:10px}
 .item .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
-.item input{background:var(--surface)}
+.item input,.item textarea{background:var(--surface)}
+.item textarea.item-details{margin-top:8px;min-height:96px;resize:vertical;line-height:1.45}
+.li-details{white-space:pre-wrap;color:var(--text-2);font-size:14px;margin-top:4px;line-height:1.45}
 .item .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:14px;color:var(--text-2)}
 .item .line-total{font-weight:650;color:var(--text);font-variant-numeric:tabular-nums}
 .totalbar{position:sticky;bottom:calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);z-index:10;display:flex;align-items:center;gap:8px;
@@ -977,7 +979,7 @@ function estimatesPage({ estimates, status }) {
 function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
   const action = estimate ? `/estimates/${estimate.id}` : '/estimates';
   // Always offer blank rows so the form works without JavaScript too.
-  const all = [...items, ...Array.from({ length: items.length ? 1 : 2 }, () => ({ desc: '', qty: '', price: '', option: '' }))];
+  const all = [...items, ...Array.from({ length: items.length ? 1 : 2 }, () => ({ desc: '', details: '', qty: '', price: '', option: '' }))];
   const isNewClient = values.client_id === 'new' || (!values.client_id && !clients.length);
   const cancel = estimate ? `/estimates/${estimate.id}` : '/estimates';
   return layout(estimate ? 'Edit estimate' : 'New estimate', html`
@@ -993,8 +995,7 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
       <div id="new-client" style="${isNewClient ? '' : 'display:none'}">${clientFields(values, errors, 'new_')}</div>
     </div>
     <div class="form-card">
-      ${input('project_name', 'Project name', values, errors, { required: true })}
-      ${input('address', 'Job address', values, errors, { autocomplete: 'street-address', hint: "Leave blank to use the client's address." })}
+      ${input('address', 'Job address', values, errors, { autocomplete: 'street-address', hint: "This is also the project's name. Leave blank to use the client's address." })}
       <div class="two">
         <div>${input('visit_date', 'Appointment date', values, errors, { type: 'date' })}</div>
         <div>${input('visit_time', 'Time', values, errors, { type: 'time' })}</div>
@@ -1008,7 +1009,7 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
     ${errors.options ? html`<div class="field-error" style="margin:0 4px 8px">${errors.options}</div>` : ''}
     <p class="hint" style="margin:0 4px 8px">Want to offer choices? Put an option name like <strong>Good</strong>, <strong>Better</strong> or <strong>Best</strong> on lines;
       the client picks one when approving. Lines with no option are included in every choice.
-      The descriptions also become the job's scope of work.</p>
+      Names and descriptions become the job's scope of work, and you can edit them any time.</p>
     <datalist id="option-names"><option value="Good"><option value="Better"><option value="Best"></datalist>
     <div class="form-card" style="padding-top:6px">
       <div id="items">${all.map((it, i) => itemRow(it, errors[`item_${i}`]))}</div>
@@ -1030,13 +1031,32 @@ function estimateFormPage({ estimate, values, items, errors = {}, clients }) {
       <button type="submit">Save estimate</button>
     </div>
   </form>
-  <template id="item-template">${itemRow({ desc: '', qty: '', price: '', option: '' })}</template>
+  <template id="item-template">${itemRow({ desc: '', details: '', qty: '', price: '', option: '' })}</template>
   <script>${raw(ESTIMATE_JS)}</script>`, { back: { href: cancel, label: estimate ? estimate.project_name : 'Estimates' } });
+}
+
+function descriptionsPage({ estimate, items, job, errors = {}, values = {} }) {
+  const back = job ? { href: `/jobs/${job.id}`, label: 'Job' } : { href: `/estimates/${estimate.id}`, label: 'Estimate' };
+  return layout('Line item descriptions', html`
+  ${errorBox(errors)}
+  <form method="post" action="/estimates/${estimate.id}/descriptions" novalidate id="descriptions-form">
+    ${items.map((it, n) => { const v = values[it.id] || { name: it.description, details: it.details }; return html`<div class="form-card">
+      <div class="row" style="justify-content:space-between"><strong>Line ${n + 1}${it.option_name ? ` · ${it.option_name}` : ''}</strong>
+        <span class="muted">${fmtQty(it.qty_hundredths)} × ${fmt(it.unit_price_cents)}</span></div>
+      <label for="name_${it.id}">Name *</label>
+      <input id="name_${it.id}" name="name_${it.id}" value="${v.name}" class="${errors[`item_${it.id}`] ? 'invalid' : ''}">
+      <label for="details_${it.id}">Description</label>
+      <textarea id="details_${it.id}" name="details_${it.id}" rows="6" style="min-height:140px">${v.details}</textarea>
+    </div>`; })}
+    <p class="hint">${job ? 'Prices and quantities are locked because this estimate is a job. ' : ''}Saving updates the scope of work${job ? ' on the job and its work orders' : ''}.</p>
+    <div class="form-actions"><a class="btn secondary" href="${back.href}">Cancel</a><button type="submit">Save descriptions</button></div>
+  </form>`, { back, sub: estimate.project_name });
 }
 
 function itemRow(it, err) {
   return html`<div class="item">
-    <input name="item_desc" value="${it.desc}" aria-label="Description" placeholder="Description" class="${err ? 'invalid' : ''}">
+    <input name="item_desc" value="${it.desc}" aria-label="Line item name" placeholder="Name, e.g. Interior painting" class="${err ? 'invalid' : ''}">
+    <textarea name="item_details" aria-label="Description" placeholder="Description: the work included, materials, rooms…" rows="4" class="item-details">${it.details || ''}</textarea>
     ${err ? html`<div class="field-error">${err}</div>` : ''}
     <div class="grid">
       <input name="item_qty" value="${it.qty}" inputmode="decimal" aria-label="Quantity" placeholder="Qty">
@@ -1114,7 +1134,8 @@ function itemGroups(items) {
   const names = [...new Set(items.filter((i) => i.option_name).map((i) => i.option_name))];
   return { shared, groups: names.map((name) => ({ name, items: items.filter((i) => i.option_name === name) })) };
 }
-const itemRows = (list) => list.map((i) => html`<tr><td>${i.description}<div class="muted" style="font-size:13px">${fmtQty(i.qty_hundredths)} × ${fmt(i.unit_price_cents)}</div></td>
+const itemRows = (list) => list.map((i) => html`<tr><td><strong style="font-weight:600">${i.description}</strong>${i.details ? html`<div class="li-details">${i.details}</div>` : ''}
+  <div class="muted" style="font-size:13px">${fmtQty(i.qty_hundredths)} × ${fmt(i.unit_price_cents)}</div></td>
   <td class="num">${fmt(i.line_total_cents)}</td></tr>`);
 
 function estimatePage({ estimate, client, items, totalCents, job, options = [], emails = [], sending = {}, sendForm, flash, errors }) {
@@ -1182,7 +1203,7 @@ function estimatePage({ estimate, client, items, totalCents, job, options = [], 
   ${estimate.deposit_percent ? html`<p class="hint">Deposit at approval: ${estimate.deposit_percent}% (${fmt(Math.round((totalCents * estimate.deposit_percent) / 100))}).</p>` : ''}
   <div class="actions">
     <a class="btn" href="/estimates/${estimate.id}/pdf" id="estimate-pdf">${icon('download')}Download PDF</a>
-    ${locked ? '' : html`<a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
+    ${locked ? html`<a class="btn secondary" href="/estimates/${estimate.id}/descriptions" id="edit-descriptions">Edit descriptions</a>` : html`<a class="btn secondary" href="/estimates/${estimate.id}/edit">Edit estimate</a>
     <a class="btn danger" href="/estimates/${estimate.id}/delete">Delete</a>`}</div>
   ${emailHistory(emails)}
   <p class="hint">The PDF and the client's page show your company profile, the client and line items. Your internal cost and profit are never included.</p>
@@ -1245,7 +1266,8 @@ function publicEstimatePage({ estimate, company, hasLogo, client, items, totals,
       return html`<label class="opt ${isChosen ? 'on' : ''} ${approved && !isChosen ? 'dim' : ''}">
         ${open ? html`<input type="radio" name="option" value="${g.name}" ${isChosen ? raw('checked') : ''}>` : ''}
         <div class="opt-head"><strong>${g.name}</strong><span class="opt-total">${fmt(t)}</span></div>
-        <ul>${g.items.map((i) => html`<li>${i.description}${Number(i.qty_hundredths) !== 100 ? html` <span class="muted">× ${fmtQty(i.qty_hundredths)}</span>` : ''}</li>`)}</ul>
+        <ul>${g.items.map((i) => html`<li>${i.description}${Number(i.qty_hundredths) !== 100 ? html` <span class="muted">× ${fmtQty(i.qty_hundredths)}</span>` : ''}
+          ${i.details ? html`<div class="li-details">${i.details}</div>` : ''}</li>`)}</ul>
         ${estimate.deposit_percent ? html`<div class="muted" style="font-size:13px">${estimate.deposit_percent}% deposit: ${fmt(depositFor(t))}</div>` : ''}
       </label>`;
     })}</div>` : html`
@@ -1427,7 +1449,8 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
     ${job.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(job.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Job address</div><div class="t">${job.address}</div></div></a>` : ''}
     <a class="li" href="/estimates/${job.estimate_id}"><span class="icon-bubble">${icon('file')}</span><div class="main-t"><div class="s">Original estimate</div><div class="t">View estimate</div></div>${chev()}</a>
   </div>
-  <h2>Scope of work</h2><div class="card pre">${job.scope || html`<span class="muted">—</span>`}</div>
+  <h2 class="row" style="justify-content:space-between">Scope of work <a href="/estimates/${job.estimate_id}/descriptions" id="edit-scope" style="text-transform:none;letter-spacing:0;font-size:14px">Edit</a></h2>
+  <div class="card pre">${job.scope || html`<span class="muted">—</span>`}</div>
   <div class="actions"><a class="btn secondary" href="/jobs/${job.id}/work-order" id="work-order">${icon('download')}Work order PDF</a></div>
 
   <h2>Job details</h2>
@@ -1609,6 +1632,6 @@ function messagePage(title, message) {
 
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
-  accountPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
+  accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };
