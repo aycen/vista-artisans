@@ -84,6 +84,23 @@ where the test card `4242 4242 4242 4242` pays it. To go live, use live-mode key
 Security: the link between a company and its Stripe account is written only by the server, and webhook events are
 accepted only with a valid signature and only for jobs of the company that owns the sending Stripe account.
 
+## Plans and billing
+
+Companies start on **Free** (one person). **Team** ($49/month or $499/year) allows up to 3 admins and 10 workers;
+**Unlimited** ($99/month or $1,009/year) has no limits. Monthly plans get 50% off the first month (once per company).
+Admins buy and manage plans under **Account → Plan & billing**: Stripe Checkout takes the payment, and Stripe's
+billing portal handles plan changes, card updates, receipts and cancelling. If a plan ends, nobody is removed; the
+company just can't add people until it upgrades again. Limits are enforced in the database. The first company ever
+created (the app owner's) is free on Unlimited (`org_subscriptions.comped`).
+
+Plans are paid to the platform's own Stripe account; products, prices, the coupon and the portal settings are created
+automatically on first use. One-time setup:
+
+1. **Developers → Webhooks → Add endpoint:** URL `https://<your site>/stripe/webhook`, choose **Events on Your account**,
+   and select `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and
+   `customer.subscription.deleted`. Copy its signing secret into Render as `STRIPE_BILLING_WEBHOOK_SECRET`.
+2. Paid plans appear once that secret and `STRIPE_SECRET_KEY` are set.
+
 ## Tests
 
 Both test suites run against a local Postgres 16 server, not your Supabase project.

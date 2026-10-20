@@ -25,5 +25,7 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+      - key: STRIPE_BILLING_WEBHOOK_SECRET
+        sync: false
       - key: DATABASE_URL
         sync: false # Render asks for it when you create the service; it contains the database password

@@ -616,7 +616,8 @@ async function renderTeam(db, org, user, extra = {}, status = 200) {
         WHERE a.org_id = ? AND a.user_id = m.user_id AND j.status = 'completed') AS earned_cents
     FROM org_members(?) m`, org.org_id, org.org_id, org.org_id);
   const joinCode = org.role === 'admin' ? (await db.get('SELECT org_join_code(?) AS code', org.org_id)).code : null;
-  return page(status, v.teamPage({ org, members, me: user.id, joinCode, ...extra }));
+  const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
+  return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, ...extra }));
 }
 route('GET', '/team', ({ db, org, user, url }) => renderTeam(db, org, user, { flash: url.searchParams.get('msg') }));
 route('POST', '/team/add', async ({ db, org, user, form }) => {
@@ -780,7 +781,7 @@ route('GET', '/jobs/:id/work-order', async ({ db, org, id, url }) => {
 });
 
 // Joining or creating a company, and the account page (these work before the user belongs to one)
-const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account']);
+const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile']);
 const orgCookie = (id) => cookie('org', id, 60 * 60 * 24 * 365);
 route('GET', '/welcome', ({ orgs }) => ok(v.welcomePage({ hasOrgs: orgs.length > 0 })), { worker: true });
 route('GET', '/org/new', () => redirect('/welcome'), { worker: true });
@@ -809,7 +810,88 @@ route('POST', '/org/switch', async ({ orgs, form }) => {
   if (!target) return notFound();
   return redirect('/', { 'Set-Cookie': orgCookie(target.org_id) });
 }, { worker: true });
-route('GET', '/account', ({ user, org, orgs, url }) => ok(v.accountPage({ user, org, orgs, flash: url.searchParams.get('msg') })), { worker: true });
+async function renderAccount({ db, user, org, orgs }, extra = {}, status = 200) {
+  const profile = (await db.get('SELECT * FROM profiles WHERE user_id = ?', user.id)) || { full_name: '', phone: '', address: '' };
+  const plan = org && org.role === 'admin' ? (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p : null;
+  return page(status, v.accountPage({ user, org, orgs, plan, values: extra.values || profile, ...extra }));
+}
+route('GET', '/account', (ctx) => renderAccount(ctx, { flash: ctx.url.searchParams.get('msg') }), { worker: true });
+route('POST', '/account/profile', async (ctx) => {
+  const f = formObj(ctx.form);
+  const values = { full_name: str(f.full_name, 200), phone: str(f.phone, 50), address: str(f.address, 500) };
+  if (values.phone && !/^[0-9+().\-\s x]{7,}$/i.test(values.phone)) {
+    return renderAccount(ctx, { values, errors: { phone: 'Phone number does not look valid.' } }, 422);
+  }
+  await ctx.db.run(`INSERT INTO profiles (user_id, full_name, phone, address) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET full_name = excluded.full_name, phone = excluded.phone, address = excluded.address, updated_at = now()`,
+  ctx.user.id, values.full_name, values.phone, values.address);
+  return redirect('/account?msg=Profile+saved');
+}, { worker: true });
+
+// ---------- Plans (Stripe Billing on the app's own Stripe account) ----------
+async function syncSubscription(orgId, customerId, sub) {
+  const d = stripe.describeSubscription(sub);
+  await pool.query('SELECT sync_org_subscription($1, $2, $3, $4, $5, $6, $7, $8)',
+    [orgId, customerId, sub.id, d.plan, d.interval, d.status, d.periodEnd, d.cancelAtEnd]);
+}
+async function renderBilling({ db, org, url }, extra = {}, status = 200) {
+  const sub = (await db.get('SELECT * FROM org_subscriptions WHERE org_id = ?', org.org_id)) || {};
+  const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
+  const counts = await db.get(`SELECT count(*) FILTER (WHERE role = 'admin')::int AS admins, count(*) FILTER (WHERE role = 'worker')::int AS workers
+    FROM org_members(?)`, org.org_id);
+  return page(status, v.billingPage({ org, sub, plan, counts, enabled: stripe.billingConfigured(), testMode: stripe.testMode(),
+    interval: url?.searchParams.get('interval') === 'year' ? 'year' : 'month', flash: url?.searchParams.get('msg'), ...extra }));
+}
+route('GET', '/billing', async (ctx) => {
+  const sessionId = ctx.url.searchParams.get('session_id');
+  if (sessionId && stripe.billingConfigured()) {
+    // Back from Stripe Checkout: record the new plan right away instead of waiting for the webhook.
+    try {
+      const cs = await stripe.getCheckoutSession(sessionId);
+      if (cs.client_reference_id === ctx.org.org_id && cs.subscription && typeof cs.subscription === 'object') {
+        await syncSubscription(ctx.org.org_id, cs.customer, cs.subscription);
+        return redirect('/billing?msg=Thanks!+Your+plan+is+active.');
+      }
+    } catch (e) { console.error('Checkout check failed:', e.message); }
+  }
+  return renderBilling(ctx);
+});
+route('POST', '/billing/checkout', async (ctx) => {
+  const { db, org, req, form } = ctx;
+  if (!stripe.billingConfigured()) return redirect('/billing');
+  const plan = form.get('plan'); const interval = form.get('interval');
+  if (!stripe.PLANS[plan] || !['month', 'year'].includes(interval)) return redirect('/billing');
+  const sub = (await db.get('SELECT * FROM org_subscriptions WHERE org_id = ?', org.org_id)) || {};
+  if (sub.comped) return redirect('/billing');
+  try {
+    // Already paying: plan changes and cancelling happen in Stripe's billing portal.
+    if (sub.stripe_customer_id && ['active', 'trialing', 'past_due'].includes(sub.status)) {
+      return redirect(await stripe.portalSession(sub.stripe_customer_id, `${baseUrl(req)}/billing`));
+    }
+    let customer = sub.stripe_customer_id;
+    if (!customer) {
+      const p = await db.get('SELECT email FROM company_profiles WHERE org_id = ?', org.org_id);
+      customer = await stripe.billingCustomer({ orgId: org.org_id, name: org.name, email: p?.email || ctx.user.email });
+      await pool.query(`INSERT INTO org_subscriptions (org_id, stripe_customer_id) VALUES ($1, $2)
+        ON CONFLICT (org_id) DO UPDATE SET stripe_customer_id = coalesce(org_subscriptions.stripe_customer_id, excluded.stripe_customer_id)`, [org.org_id, customer]);
+      customer = (await pool.query('SELECT stripe_customer_id FROM org_subscriptions WHERE org_id = $1', [org.org_id])).rows[0].stripe_customer_id;
+    }
+    const discount = interval === 'month' && !sub.first_month_discount_used;
+    const cs = await stripe.checkoutSession({ customerId: customer, orgId: org.org_id, plan, interval, discount, baseUrl: baseUrl(req) });
+    return redirect(cs.url);
+  } catch (e) {
+    console.error('Checkout failed:', e.message);
+    return renderBilling(ctx, { error: `Stripe said: ${e.message}` }, 502);
+  }
+});
+route('POST', '/billing/portal', async (ctx) => {
+  const sub = await ctx.db.get('SELECT * FROM org_subscriptions WHERE org_id = ?', ctx.org.org_id);
+  if (!sub?.stripe_customer_id || !stripe.billingConfigured()) return redirect('/billing');
+  try { return redirect(await stripe.portalSession(sub.stripe_customer_id, `${baseUrl(ctx.req)}/billing`)); } catch (e) {
+    console.error('Portal failed:', e.message);
+    return renderBilling(ctx, { error: `Stripe said: ${e.message}` }, 502);
+  }
+});
 
 // Public files for the home-screen app icon (no login needed).
 const fs = require('node:fs');
@@ -853,12 +935,12 @@ async function publicRoute(req, url) {
   if (url.pathname === '/signup') {
     if (req.method === 'GET') return ok(v.signupPage());
     const f = formObj(await readBody(req));
-    const values = { email: str(f.email, 200) };
+    const values = { email: str(f.email, 200), full_name: str(f.full_name, 200), phone: str(f.phone, 50), address: str(f.address, 500) };
     const errors = {};
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = 'Enter a valid email address.';
     if ((f.password || '').length < 8) errors.password = 'Password must be at least 8 characters.';
     if (hasErrors(errors)) return page(422, v.signupPage({ values, errors }));
-    const r = await auth.signUp(values.email, f.password);
+    const r = await auth.signUp(values.email, f.password, { full_name: values.full_name, phone: values.phone, address: values.address });
     if (r.error) return page(422, v.signupPage({ values, errors: { email: r.error } }));
     if (!r.session) return redirect('/login?msg=Check+your+email+to+confirm+your+account%2C+then+log+in.');
     return redirect('/', { 'Set-Cookie': sessionCookies(r.session) });
@@ -875,6 +957,23 @@ async function stripeWebhook(req) {
   if (!event) return { status: 400, body: 'Invalid signature', headers: { 'Content-Type': 'text/plain' } };
   const obj = event.data?.object || {};
   const ack = { status: 200, body: '{"received":true}', headers: { 'Content-Type': 'application/json' } };
+  if (!event.account && (event.type.startsWith('customer.subscription.') || event.type === 'checkout.session.completed')) {
+    // Plan purchases happen on the app's own Stripe account, so these events have no `account`.
+    let sub = obj; let customer = obj.customer;
+    if (event.type === 'checkout.session.completed') {
+      if (obj.mode !== 'subscription' || !obj.subscription) return ack;
+      sub = await stripe.getSubscription(typeof obj.subscription === 'string' ? obj.subscription : obj.subscription.id);
+      customer = obj.customer;
+    }
+    const orgId = sub.metadata?.org_id;
+    if (!orgId) return ack;
+    // Only accept it for the company that owns this Stripe customer (or that has none yet).
+    const row = (await pool.query('SELECT stripe_customer_id FROM org_subscriptions WHERE org_id = $1', [orgId])).rows[0];
+    if (!(await pool.query('SELECT 1 FROM organizations WHERE id = $1', [orgId])).rowCount) return ack;
+    if (row?.stripe_customer_id && row.stripe_customer_id !== customer) return ack;
+    await syncSubscription(orgId, customer, sub);
+    return ack;
+  }
   if (event.type === 'account.updated') {
     await pool.query('SELECT update_stripe_account($1, $2, $3)', [obj.id, !!obj.charges_enabled, !!obj.details_submitted]);
     return ack;
@@ -916,11 +1015,13 @@ async function health() {
     database_schema: await check(async () => {
       const r = await pool.query(`SELECT to_regclass('public.job_assignments') IS NOT NULL AS payouts,
         to_regclass('public.join_attempts') IS NOT NULL AS join_codes, to_regclass('public.company_profiles') IS NOT NULL AS profiles,
-        to_regclass('public.invoices') IS NOT NULL AS invoices`);
+        to_regclass('public.invoices') IS NOT NULL AS invoices,
+        to_regclass('public.org_subscriptions') IS NOT NULL AS plans`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
       if (!r.rows[0].invoices) throw new Error('Run supabase/migrations/0006_invoices.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].plans) throw new Error('Run supabase/migrations/0007_profiles_and_plans.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -966,6 +1067,15 @@ async function handle(req, res) {
   const result = await asUser(user.id, async (db) => {
     const orgs = await db.all(`SELECT m.org_id, m.role, o.name FROM memberships m JOIN organizations o ON o.id = m.org_id
       WHERE m.user_id = ? ORDER BY o.name`, user.id);
+    // Details typed at sign-up wait on the Supabase user until the first login, then become the profile.
+    let profile = await db.get('SELECT full_name FROM profiles WHERE user_id = ?', user.id);
+    if (!profile && user.signupProfile) {
+      const sp = user.signupProfile;
+      profile = { full_name: str(sp.full_name, 200) };
+      await db.run(`INSERT INTO profiles (user_id, full_name, phone, address) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING`,
+        user.id, profile.full_name, str(sp.phone, 50), str(sp.address, 500));
+    }
+    user.name = profile?.full_name || '';
     const org = orgs.find((o) => o.org_id === cookies.org) || orgs[0] || null;
     if (!org && !ORG_ROUTES.has(url.pathname)) return { ...redirect('/welcome'), nav: { user, org, orgs } };
     if (org && org.role !== 'admin' && !r.worker) return { ...notFound(), nav: { user, org, orgs } };

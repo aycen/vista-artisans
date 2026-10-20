@@ -276,14 +276,32 @@ test('full workflow', async () => {
   await post('/org/new', { name: 'Other Co' });
 
   // Alice adds Carol as an admin and Dave as a worker; unknown emails get a clear message
-  as('dave'); await post('/signup', { email: 'dave@vista.test', password: 'dave-password' });
+  // Dave fills in the optional details when signing up; they become his profile on first login
+  as('dave'); await post('/signup', { email: 'dave@vista.test', password: 'dave-password', full_name: 'Dave Diaz', phone: '555-222-3333', address: '4 Pine Ct' });
+  assert.equal((await getPage('/')).location, '/welcome');
   as('alice');
   r = await post('/team/add', { email: 'nobody@x.test', role: 'worker' });
   assert.equal(r.status, 422); assert.match(r.body, /No account uses that email yet/);
+  // The Free plan is one person
+  assert.match((await getPage('/team')).body, /Free plan/);
+  r = await post('/team/add', { email: 'carol@vista.test', role: 'admin' });
+  assert.equal(r.status, 422); assert.match(r.body, /Free plan is for one person/);
+  const vistaOrg = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
+  await dbClient.query("SELECT sync_org_subscription($1, 'cus_vista', 'sub_vista', 'team', 'month', 'active', now() + interval '30 days', false)", [vistaOrg]);
   r = await post('/team/add', { email: 'carol@vista.test', role: 'admin' }); assert.equal(r.status, 303);
   r = await post('/team/add', { email: 'dave@vista.test', role: 'worker' }); assert.equal(r.status, 303);
   page = (await getPage('/team')).body;
-  assert.match(page, /carol@vista\.test/); assert.match(page, /dave@vista\.test/);
+  assert.match(page, /carol@vista\.test/); assert.match(page, /Dave Diaz/); assert.match(page, /Team plan/); assert.match(page, /2 of 3 admins · 1 of 10 workers/);
+  const daveId = (await dbClient.query("SELECT id FROM auth.users WHERE email = 'dave@vista.test'")).rows[0].id;
+  page = (await getPage(`/team/${daveId}`)).body;
+  assert.match(page, /<h1[^>]*>Dave Diaz/); assert.match(page, /555-222-3333/); assert.match(page, /4 Pine Ct/);
+  // Alice edits her own details from Account
+  r = await post('/account/profile', { full_name: 'Alice Avery', phone: 'call me', address: '' });
+  assert.equal(r.status, 422); assert.match(r.body, /Phone number does not look valid/); assert.match(r.body, /value="Alice Avery"/);
+  r = await post('/account/profile', { full_name: 'Alice Avery', phone: '(555) 111-2222', address: '1 Main St' }); assert.equal(r.status, 303);
+  page = (await getPage('/account')).body;
+  assert.match(page, /value="\(555\) 111-2222"/); assert.match(page, /Plan (&amp;|&) billing/);
+  assert.match((await getPage('/')).body, /Alice Avery/);
 
   // An open job for the worker schedule: approve and convert the deck estimate, schedule it
   const deckId = Number((await dbClient.query("SELECT id FROM estimates WHERE project_name = 'Deck'")).rows[0].id);
@@ -575,6 +593,123 @@ test('invoices through Stripe Connect: connect, send, pay by webhook, void', asy
     assert.equal((await post(`/jobs/${deck}/invoices`, { invoice_amount: '1', invoice_email: 'x@y.z', days: '0' })).status, 404);
     assert.equal((await post(`/invoices/${deckInv}/void`, {})).status, 404);
     assert.equal((await post('/settings/stripe/connect', {})).status, 404);
+  } finally {
+    await fakeStripe.close();
+  }
+});
+
+test('plans: Free limits, Stripe Checkout, webhook sync, billing portal, cancel', async () => {
+  const fakeStripe = await startFakeStripe('sk_test_fake');
+  const BILLING = 'whsec_billing_secret';
+  const bobOrg = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Other Co'")).rows[0].id;
+  const vista = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Vista Artisans'")).rows[0].id;
+  const planOf = async (org) => (await dbClient.query('SELECT effective_plan($1) AS p', [org])).rows[0].p;
+  as('bob'); await post('/login', { email: 'bob@other.test', password: 'bob-password' });
+
+  // Billing not switched on yet: plans are shown but can't be bought
+  let page = (await getPage('/billing')).body;
+  assert.match(page, /data-k="plan">Free</); assert.match(page, /Paid plans aren(&#39;|')t available yet/);
+  assert.doesNotMatch(page, /Choose Team/);
+
+  await stop();
+  await start({ STRIPE_SECRET_KEY: 'sk_test_fake', STRIPE_WEBHOOK_SECRET: 'whsec_test_secret', STRIPE_BILLING_WEBHOOK_SECRET: BILLING, STRIPE_API_BASE: fakeStripe.url });
+  const event = (type, obj) => JSON.stringify({ id: `evt_${crypto.randomUUID()}`, type, created: Math.floor(Date.now() / 1000), data: { object: obj } });
+  const sign = (body, secret = BILLING) => { const t = Math.floor(Date.now() / 1000); return `t=${t},v1=${crypto.createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`; };
+  const hook = (body, sig) => fetch(`${BASE}/stripe/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': sig }, body });
+  try {
+    page = (await getPage('/billing')).body;
+    assert.match(page, /Choose Team/); assert.match(page, /\$49<small>\/mo/); assert.match(page, /First month \$24\.50/);
+    page = (await getPage('/billing?interval=year')).body;
+    assert.match(page, /\$499<small>\/yr/); assert.match(page, /\$1,009<small>\/yr/); assert.match(page, /save 15%/);
+
+    // Bob is alone on Free and can't add anyone
+    let r = await post('/team/add', { email: 'erin@vista.test', role: 'worker' });
+    assert.equal(r.status, 422); assert.match(r.body, /Free plan is for one person/);
+
+    // Choose Team monthly: Stripe Checkout with the 50% first-month coupon, on the app's own Stripe account
+    r = await post('/billing/checkout', { plan: 'team', interval: 'month' });
+    assert.equal(r.status, 303); assert.match(r.location, /^https:\/\/checkout\.stripe\.test\/cs_/);
+    const cs = [...fakeStripe.state.sessions.values()].at(-1);
+    assert.equal(cs.client_reference_id, bobOrg); assert.equal(cs.coupon, 'vista-first-month-50');
+    assert.equal(fakeStripe.state.prices.get(cs.price).unit_amount, 4900);
+    assert.equal(fakeStripe.state.customers.get(cs.customer).platform, true);
+    assert.equal((await dbClient.query('SELECT stripe_customer_id FROM org_subscriptions WHERE org_id = $1', [bobOrg])).rows[0].stripe_customer_id, cs.customer);
+    // Choosing again reuses the same Stripe customer
+    r = await post('/billing/checkout', { plan: 'unlimited', interval: 'year' });
+    const cs2 = [...fakeStripe.state.sessions.values()].at(-1);
+    assert.equal(cs2.customer, cs.customer); assert.equal(cs2.coupon, null, 'the 50% coupon is for monthly plans');
+    assert.equal(fakeStripe.state.prices.get(cs2.price).unit_amount, 100900);
+    assert.equal(await planOf(bobOrg), 'free', 'nothing changes until payment');
+
+    // Paid: coming back from Checkout activates the plan right away
+    fakeStripe.completeCheckout(cs.id);
+    as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
+    r = await getPage(`/billing?session_id=${cs.id}`); assert.equal(r.status, 200, "another company's checkout is ignored");
+    assert.equal((await dbClient.query('SELECT stripe_subscription_id FROM org_subscriptions WHERE org_id = $1', [vista])).rows[0].stripe_subscription_id, 'sub_vista');
+    as('bob');
+    r = await getPage(`/billing?session_id=${cs.id}`); assert.equal(r.status, 303); assert.match(r.location, /plan\+is\+active/);
+    assert.equal(await planOf(bobOrg), 'team');
+    page = (await getPage('/billing')).body;
+    assert.match(page, /data-k="plan">Team</); assert.match(page, /Manage billing/); assert.match(page, /Renews/); assert.doesNotMatch(page, /Choose Unlimited/);
+    r = await post('/team/add', { email: 'erin@vista.test', role: 'worker' }); assert.equal(r.status, 303);
+
+    // Already subscribed: plan changes go through Stripe's billing portal
+    r = await post('/billing/checkout', { plan: 'unlimited', interval: 'month' });
+    assert.equal(r.status, 303); assert.match(r.location, /^https:\/\/billing\.stripe\.test\//);
+    r = await post('/billing/portal', {}); assert.match(r.location, new RegExp(cs.customer));
+    assert.equal(fakeStripe.state.portalConfigs.length, 1, 'portal set up once and reused');
+
+    // Team limits: at most 3 admins and 10 workers (checked in the database)
+    const addPerson = async (email, role) => {
+      const u = (await dbClient.query('INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), $1) ON CONFLICT (email) DO UPDATE SET email = excluded.email RETURNING id', [email])).rows[0].id;
+      return dbClient.query('INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)', [bobOrg, u, role]);
+    };
+    await addPerson('a2@other.test', 'admin'); await addPerson('a3@other.test', 'admin');
+    await assert.rejects(addPerson('a4@other.test', 'admin'), /up to 3 admins/);
+    for (let i = 2; i <= 10; i++) await addPerson(`w${i}@other.test`, 'worker');
+    await assert.rejects(addPerson('w11@other.test', 'worker'), /up to 10 workers/);
+    const erin = (await dbClient.query("SELECT id FROM auth.users WHERE email = 'erin@vista.test'")).rows[0].id;
+    r = await post('/team/role', { user_id: erin, role: 'admin' }); assert.equal(r.status, 422); assert.match(r.body, /up to 3 admins/);
+    assert.match((await getPage('/team')).body, /3 of 3 admins · 10 of 10 workers/);
+
+    // Upgrading in the portal arrives by webhook; then no limits
+    const sub = fakeStripe.state.subscriptions.get(fakeStripe.state.sessions.get(cs.id).subscription);
+    const unl = [...fakeStripe.state.prices.values()].find((x) => x.lookup_key === 'vista_unlimited_month');
+    sub.items.data[0].price = unl;
+    let e = event('customer.subscription.updated', sub);
+    assert.equal((await hook(e, sign(e, 'whsec_wrong'))).status, 400);
+    assert.equal((await hook(e, sign(e))).status, 200);
+    assert.equal(await planOf(bobOrg), 'unlimited');
+    await addPerson('w11@other.test', 'worker');
+
+    // An event naming Vista but carrying Bob's Stripe customer is ignored
+    e = event('customer.subscription.deleted', { ...sub, id: 'sub_spoof', status: 'canceled', metadata: { org_id: vista } });
+    assert.equal((await hook(e, sign(e))).status, 200);
+    assert.equal(await planOf(vista), 'team');
+
+    // Cancelling: shown as ending, then Free when Stripe ends it. Nobody is removed; nobody new can join.
+    sub.cancel_at_period_end = true;
+    e = event('customer.subscription.updated', sub); await hook(e, sign(e));
+    assert.match((await getPage('/billing')).body, /Ends on/);
+    sub.status = 'canceled';
+    e = event('customer.subscription.deleted', sub); await hook(e, sign(e));
+    assert.equal(await planOf(bobOrg), 'free');
+    assert.equal((await dbClient.query('SELECT count(*)::int AS n FROM memberships WHERE org_id = $1', [bobOrg])).rows[0].n, 14);
+    await assert.rejects(addPerson('late@other.test', 'worker'), /Free plan/);
+    page = (await getPage('/billing')).body;
+    assert.match(page, /data-k="plan">Free</); assert.match(page, /Choose Team/);
+    assert.doesNotMatch(page, /First month/, 'the 50% first month is a one-time offer');
+    r = await post('/billing/checkout', { plan: 'team', interval: 'month' });
+    assert.equal([...fakeStripe.state.sessions.values()].at(-1).coupon, null);
+
+    // A comped company (the app owner's) has nothing to buy
+    await dbClient.query('UPDATE org_subscriptions SET comped = true WHERE org_id = $1', [vista]);
+    as('alice'); page = (await getPage('/billing')).body;
+    assert.match(page, /data-k="plan">Unlimited</); assert.match(page, /Free for Vista Artisans/); assert.doesNotMatch(page, /Choose/);
+    // Workers can't see billing; admins can't write their own plan
+    as('dave'); assert.equal((await getPage('/billing')).status, 404);
+    await assert.rejects(dbClient.query(`SET ROLE authenticated; SELECT set_config('request.jwt.claim.sub', (SELECT id::text FROM auth.users WHERE email = 'bob@other.test'), false);
+      UPDATE org_subscriptions SET comped = true`).finally(() => dbClient.query('RESET ROLE')));
   } finally {
     await fakeStripe.close();
   }

@@ -21,6 +21,17 @@ select create_organization('Vista Artisans') as vista \gset
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select create_organization('Other Co') as other \gset
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+-- A new company starts on Free (one person); the plan can only be set by the server.
+select pg_temp.expect(effective_plan(:'vista') = 'free', 'new companies start on the Free plan');
+select pg_temp.expect(pg_temp.fails(format('select add_member_by_email(%L, %L, %L)', :'vista', 'carol@vista.test', 'admin')), 'Free plan is one person');
+do $$ begin insert into org_subscriptions (org_id, plan, status) select org_id, 'unlimited', 'active' from memberships limit 1;
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+do $$ begin perform sync_org_subscription((select org_id from memberships limit 1), 'c', 's', 'unlimited', 'month', 'active', now(), false);
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'admins cannot give themselves a plan');
+reset role;
+select sync_org_subscription(:'vista', 'cus_v', 'sub_v', 'team', 'month', 'active', now() + interval '30 days', false);
+set role authenticated;
 select add_member_by_email(:'vista', 'CAROL@vista.test', 'admin');
 select add_member_by_email(:'vista', 'dave@vista.test', 'worker');
 do $$ begin insert into memberships (org_id, user_id, role) select org_id, '00000000-0000-0000-0000-00000000000b', 'admin' from memberships limit 1;
@@ -171,6 +182,25 @@ select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
 do $$ begin insert into stripe_accounts (org_id, account_id) values (current_setting('t.vista')::uuid, 'acct_someone_else');
   raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
 select pg_temp.expect(true, 'admins cannot link a Stripe account directly (only the server can)');
+
+-- Profiles: your own row only; admins see teammates' phone and address, workers see names only
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+insert into profiles (user_id, full_name, phone, address) values ('00000000-0000-0000-0000-00000000000d', 'Dave Diaz', '555-0100', '4 Pine Ct');
+do $$ begin insert into profiles (user_id, full_name) values ('00000000-0000-0000-0000-00000000000a', 'Hacked');
+  raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'cannot write someone else''s profile');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000c');
+insert into profiles (user_id, full_name, phone) values ('00000000-0000-0000-0000-00000000000c', 'Carol Chen', '555-0199');
+select pg_temp.expect((select count(*) from profiles) = 1, 'profiles table shows only your own row');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.expect((select phone from org_members(current_setting('t.vista')::uuid) where full_name = 'Dave Diaz') = '555-0100', 'admins see teammates'' phone');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select phone from org_members(current_setting('t.vista')::uuid) where full_name = 'Carol Chen') = '', 'workers do not see teammates'' phone');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from org_members(current_setting('t.vista')::uuid)) = 0, 'other companies see no members');
+select pg_temp.expect((select count(*) from org_subscriptions) = 0, 'other companies cannot see a plan');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from org_subscriptions) = 0, 'workers cannot see the plan');
 
 -- Signed-out (anon) gets nothing
 reset role; set role anon;

@@ -1,9 +1,10 @@
 'use strict';
-// A small stand-in for the parts of Stripe's API the app uses (customers and invoices), for tests.
+// A small stand-in for the parts of Stripe's API the app uses (Connect, invoices, and plan billing), for tests.
 const http = require('node:http');
 
 function startFakeStripe(secretKey) {
-  const state = { accounts: new Map(), customers: new Map(), invoices: new Map(), sent: [], requests: 0 };
+  const state = { accounts: new Map(), customers: new Map(), invoices: new Map(), sent: [], requests: 0,
+    prices: new Map(), products: new Map(), coupons: new Map(), sessions: new Map(), subscriptions: new Map(), portalConfigs: [], portalSessions: [] };
   const idem = new Map();
   let n = 0;
   const id = (p) => `${p}_${++n}`;
@@ -16,7 +17,7 @@ function startFakeStripe(secretKey) {
     if (key && idem.has(key)) return send(200, idem.get(key));
     state.requests++;
     const done = (data) => { if (key) idem.set(key, data); send(200, data); };
-    const p = new URL(req.url, 'http://x').pathname;
+    const u = new URL(req.url, 'http://x'); const p = u.pathname;
     const acct = req.headers['stripe-account'];
     let m;
     if (p === '/v1/accounts' && req.method === 'POST') {
@@ -30,6 +31,44 @@ function startFakeStripe(secretKey) {
     if (p === '/v1/account_links') {
       if (!state.accounts.has(form.account)) return send(400, { error: { message: 'No such account' } });
       return done({ url: `https://connect.stripe.test/setup/${form.account}?return=${encodeURIComponent(form.return_url)}`, return_url: form.return_url, refresh_url: form.refresh_url });
+    }
+    // ---- Plan billing, on the platform's own account (no Stripe-Account header) ----
+    if (!acct) {
+      if (p === '/v1/prices' && req.method === 'GET') {
+        const keys = u.searchParams.getAll('lookup_keys[]');
+        const data = [...state.prices.values()].filter((x) => keys.includes(x.lookup_key))
+          .map((x) => (u.searchParams.getAll('expand[]').includes('data.product') ? { ...x, product: state.products.get(x.product) } : x));
+        return send(200, { data });
+      }
+      if (p === '/v1/products') { const pr = { id: id('prod'), name: form.name, metadata: { vista_plan: form['metadata[vista_plan]'] } }; state.products.set(pr.id, pr); return done(pr); }
+      if (p === '/v1/prices') {
+        const pr = { id: id('price'), product: form.product, unit_amount: Number(form.unit_amount), lookup_key: form.lookup_key,
+          recurring: { interval: form['recurring[interval]'] }, metadata: { vista_plan: form['metadata[vista_plan]'] } };
+        state.prices.set(pr.id, pr); return done(pr);
+      }
+      if ((m = p.match(/^\/v1\/coupons\/([^/]+)$/))) { const c = state.coupons.get(m[1]); return c ? send(200, c) : send(404, { error: { message: 'No such coupon' } }); }
+      if (p === '/v1/coupons') { const c = { id: form.id, percent_off: Number(form.percent_off), duration: form.duration }; state.coupons.set(c.id, c); return done(c); }
+      if (p === '/v1/customers') { const c = { id: id('cus'), name: form.name, email: form.email, platform: true, metadata: { org_id: form['metadata[org_id]'] } }; state.customers.set(c.id, c); return done(c); }
+      if (p === '/v1/checkout/sessions' && req.method === 'POST') {
+        const cs = { id: id('cs'), mode: form.mode, customer: form.customer, client_reference_id: form.client_reference_id,
+          price: form['line_items[0][price]'], coupon: form['discounts[0][coupon]'] || null, sub_meta_org: form['subscription_data[metadata][org_id]'],
+          success_url: form.success_url, cancel_url: form.cancel_url, subscription: null };
+        cs.url = `https://checkout.stripe.test/${cs.id}`;
+        state.sessions.set(cs.id, cs); return done(cs);
+      }
+      if ((m = p.match(/^\/v1\/checkout\/sessions\/([^/]+)$/))) {
+        const cs = state.sessions.get(m[1]); if (!cs) return send(404, { error: { message: 'No such checkout session' } });
+        return send(200, { ...cs, subscription: cs.subscription ? state.subscriptions.get(cs.subscription) : null });
+      }
+      if ((m = p.match(/^\/v1\/subscriptions\/([^/]+)$/))) {
+        const sub = state.subscriptions.get(m[1]); return sub ? send(200, sub) : send(404, { error: { message: 'No such subscription' } });
+      }
+      if (p === '/v1/billing_portal/configurations' && req.method === 'GET') return send(200, { data: state.portalConfigs });
+      if (p === '/v1/billing_portal/configurations') { const c = { id: id('bpc'), metadata: { vista: form['metadata[vista]'] }, form }; state.portalConfigs.push(c); return done(c); }
+      if (p === '/v1/billing_portal/sessions') {
+        const ps = { id: id('bps'), customer: form.customer, configuration: form.configuration, url: `https://billing.stripe.test/${form.customer}` };
+        state.portalSessions.push(ps); return done(ps);
+      }
     }
     // Everything below happens on a connected account.
     if (!acct || !state.accounts.has(acct)) return send(400, { error: { message: 'Missing or unknown Stripe-Account header' } });
@@ -59,8 +98,16 @@ function startFakeStripe(secretKey) {
     }
     send(404, { error: { message: `Unrecognized request URL ${p}` } });
   });
+  // What Stripe does when someone pays on the Checkout page: it creates the subscription.
+  function completeCheckout(sessionId) {
+    const cs = state.sessions.get(sessionId); const price = state.prices.get(cs.price);
+    const sub = { id: id('sub'), object: 'subscription', customer: cs.customer, status: 'active', cancel_at_period_end: false,
+      metadata: { org_id: cs.sub_meta_org }, items: { data: [{ price, current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400 }] } };
+    state.subscriptions.set(sub.id, sub); cs.subscription = sub.id;
+    return sub;
+  }
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
-    url: `http://127.0.0.1:${server.address().port}`, state, close: () => new Promise((r) => server.close(r)),
+    url: `http://127.0.0.1:${server.address().port}`, state, completeCheckout, close: () => new Promise((r) => server.close(r)),
   })));
 }
 module.exports = { startFakeStripe };

@@ -5,6 +5,9 @@ const { fmt, fmtQty } = require('./money');
 const ESTIMATE_STATUS = { draft: 'Draft', sent: 'Sent', approved: 'Approved', declined: 'Declined' };
 const JOB_STATUS = { not_started: 'Not started', in_progress: 'In progress', completed: 'Completed' };
 const ROLES = { admin: 'Admin', worker: 'Worker' };
+// People show by name when they've given one, otherwise by email.
+const who = (p) => (p && (p.full_name || p.name)) || (p && p.email) || '';
+const initialOf = (p) => (who(p) || '?')[0].toUpperCase();
 
 // ---------- Design system ----------
 const CSS = `
@@ -210,6 +213,22 @@ table.lines tfoot td{border-top:1px solid var(--line);font-weight:750;font-size:
 .notice{background:var(--amber-soft);color:var(--amber);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;font-size:15px}
 .notice a{color:inherit;text-decoration:underline}
 .muted{color:var(--text-2)}
+.plan-strip{display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none;padding:14px 16px}
+.plan-strip .main-t{flex:1;min-width:0}.plan-strip .t{font-weight:600}.plan-strip .s{color:var(--text-2);font-size:14px}
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;margin:6px 0 14px;max-width:340px}
+.seg a{flex:1;text-align:center;padding:9px 10px;border-radius:9px;color:var(--text-2);font-weight:600;text-decoration:none;font-size:15px}
+.seg a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.seg .save{color:var(--green);font-size:12px;margin-left:4px}
+.plans{display:grid;gap:14px;grid-template-columns:1fr;margin-bottom:14px}
+@media(min-width:900px){.plans{grid-template-columns:repeat(3,1fr)}}
+.plan{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;border:2px solid transparent}
+.plan.featured{border-color:var(--accent)}.plan.current{border-color:var(--green)}
+.plan-head{display:flex;justify-content:space-between;align-items:center}.plan h3{margin:0;font-size:18px}
+.plan .price{font-size:34px;font-weight:750;letter-spacing:-.03em;margin-top:8px}.plan .price small{font-size:15px;color:var(--text-2);font-weight:500}
+.plan .price-note{color:var(--text-2);font-size:13px;min-height:18px}
+.plan p{margin:10px 0 6px;font-size:14px}
+.feat{list-style:none;padding:0;margin:0 0 16px;flex:1}.feat li{padding:5px 0 5px 24px;position:relative;font-size:15px}
+.feat li:before{content:"";position:absolute;left:3px;top:10px;width:10px;height:6px;border-left:2px solid var(--green);border-bottom:2px solid var(--green);transform:rotate(-45deg)}
 .code{font:700 30px/1.1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.12em;text-align:center;padding:18px;border-radius:14px;background:var(--surface-2);margin:10px 0;user-select:all}
 
 /* Auth */
@@ -258,6 +277,7 @@ const ICONS = {
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6.5 15h4"/>',
   building: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"/>',
 };
 const icon = (name, cls = '') => raw(`<svg class="svg ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`);
@@ -318,14 +338,14 @@ const activeTab = (path, href) => (href === '/' ? path === '/' || path.startsWit
 
 function nav({ user, org, path = '/' }) {
   const tabs = !org ? [['/account', 'Account', 'account']] : org.role === 'admin' ? ADMIN_TABS : WORKER_TABS;
-  const initial = (user.email || '?')[0].toUpperCase();
+  const initial = initialOf(user);
   return {
     nav: html`<nav class="sidebar" aria-label="Main">
       <a class="brand" href="/"><span class="mark">VA</span>${org ? org.name : 'Vista Artisans'}</a>
       ${tabs.map(([href, label, ic]) => html`<a class="nav ${activeTab(path, href) ? 'on' : ''}" href="${href}">${icon(ic)}${label}</a>`)}
       <span class="grow"></span>
       ${org && org.role === 'admin' ? html`<a class="nav ${path.startsWith('/account') ? 'on' : ''}" href="/account">${icon('account')}Account</a>` : ''}
-      <div class="who"><span class="avatar">${initial}</span><div style="min-width:0">${user.email}<small>${org ? ROLES[org.role] : ''}</small></div></div>
+      <div class="who"><span class="avatar">${initial}</span><div style="min-width:0">${who(user)}<small>${org ? ROLES[org.role] : ''}</small></div></div>
     </nav>
     <nav class="tabbar" aria-label="Tabs">${tabs.map(([href, label, ic]) =>
       html`<a class="${activeTab(path, href) ? 'on' : ''}" href="${href}">${icon(ic)}<span>${label}</span></a>`)}</nav>`.s,
@@ -389,6 +409,11 @@ function signupPage({ errors = {}, values = {} } = {}) {
       <label for="password">Password *</label>
       <input id="password" name="password" type="password" autocomplete="new-password" class="${inv(errors, 'password')}" required>
       ${fieldErr(errors, 'password')}<div class="hint">At least 8 characters.</div>
+      <h3 style="margin-top:18px">About you <span class="muted" style="font-weight:500">(optional)</span></h3>
+      ${input('full_name', 'Your name', values, errors, { autocomplete: 'name' })}
+      ${input('phone', 'Phone', values, errors, { type: 'tel', autocomplete: 'tel', inputmode: 'tel' })}
+      ${input('address', 'Address', values, errors, { autocomplete: 'street-address' })}
+      <div class="hint">Shown to your company's admins. You can change these later in Account.</div>
       <div class="form-actions"><button type="submit">Create account</button></div>
     </form>
     <p class="alt">Already have an account? <a href="/login">Log in</a></p>`);
@@ -411,12 +436,21 @@ function welcomePage({ errors = {}, values = {}, hasOrgs }) {
   </form>`, { sub: hasOrgs ? null : 'One last step before you start.', back: hasOrgs ? { href: '/account', label: 'Account' } : null });
 }
 
-function accountPage({ user, org, orgs, flash }) {
+function accountPage({ user, org, orgs, plan, values = {}, errors = {}, flash }) {
   return layout('Account', html`
   <div class="list">
-    <div class="li"><span class="icon-bubble">${icon('account')}</span><div class="main-t"><div class="t">${user.email}</div>
-      <div class="s">${org ? `${ROLES[org.role]} at ${org.name}` : 'Not in a company yet'}</div></div></div>
+    <div class="li"><span class="avatar">${initialOf(user)}</span><div class="main-t"><div class="t">${who(user)}</div>
+      <div class="s">${user.name ? `${user.email} · ` : ''}${org ? `${ROLES[org.role]} at ${org.name}` : 'Not in a company yet'}</div></div></div>
   </div>
+  ${errorBox(errors)}
+  <form method="post" action="/account/profile" class="form-card" novalidate id="profile-form">
+    <h3>Your details</h3>
+    <div class="hint">All optional. Your company's admins can see them.</div>
+    ${input('full_name', 'Name', values, errors, { autocomplete: 'name' })}
+    ${input('phone', 'Phone', values, errors, { type: 'tel', autocomplete: 'tel', inputmode: 'tel' })}
+    ${input('address', 'Address', values, errors, { autocomplete: 'street-address' })}
+    <div class="form-actions"><button type="submit" class="secondary">Save details</button></div>
+  </form>
   ${orgs.length > 1 ? html`<h2>Switch company</h2><div class="list">${orgs.map((o) => html`
     <form method="post" action="/org/switch" class="li" style="margin:0">
       <input type="hidden" name="org_id" value="${o.org_id}">
@@ -425,7 +459,9 @@ function accountPage({ user, org, orgs, flash }) {
       ${org && o.org_id === org.org_id ? html`<span class="pill completed">Current</span>` : html`<button type="submit" class="sm secondary">Switch</button>`}
     </form>`)}</div>` : ''}
   ${org && org.role === 'admin' ? html`<div class="list"><a class="li" href="/settings"><span class="icon-bubble">${icon('settings')}</span>
-    <div class="main-t"><div class="t">Company profile</div><div class="s">Logo and details on estimates and work orders</div></div>${chev()}</a></div>` : ''}
+    <div class="main-t"><div class="t">Company profile</div><div class="s">Logo and details on estimates and work orders</div></div>${chev()}</a>
+    <a class="li" href="/billing"><span class="icon-bubble">${icon('card')}</span>
+    <div class="main-t"><div class="t">Plan & billing</div><div class="s">${PLAN_NAMES[plan] || 'Free'} plan</div></div>${chev()}</a></div>` : ''}
   <div class="actions">
     <a class="btn secondary" href="/welcome">${icon('key')}Join or create a company</a>
   </div>
@@ -509,11 +545,79 @@ const LOGO_JS = `
   });
 })();`;
 
+// ---------- Plan & billing ----------
+const PLAN_NAMES = { free: 'Free', team: 'Team', unlimited: 'Unlimited' };
+const PLAN_LIMITS = { free: { people: 1 }, team: { admins: 3, workers: 10 }, unlimited: {} };
+const PRICES = { team: { month: 4900, year: 49900 }, unlimited: { month: 9900, year: 100900 } };
+const dollars = (c) => `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
+
+function seatsLeft(plan, members) {
+  const admins = members.filter((m) => m.role === 'admin').length;
+  const workers = members.length - admins;
+  if (plan === 'unlimited') return `${members.length} ${members.length === 1 ? 'person' : 'people'} · no limits`;
+  if (plan === 'team') return `${admins} of 3 admins · ${workers} of 10 workers`;
+  return members.length > 1 ? `${members.length} people · upgrade to add more` : 'Just you · upgrade to add your crew';
+}
+
+function billingPage({ org, sub, plan, counts, enabled, testMode, interval = 'month', error, flash }) {
+  const paid = ['active', 'trialing', 'past_due'].includes(sub.status) && sub.plan !== 'free';
+  const discount = interval === 'month' && !sub.first_month_discount_used;
+  const usage = plan === 'team' ? `${counts.admins} of 3 admins · ${counts.workers} of 10 workers`
+    : plan === 'unlimited' ? `${counts.admins + counts.workers} people` : `${counts.admins + counts.workers} of 1 person`;
+  const renew = sub.current_period_end ? fmtDate(String(sub.current_period_end instanceof Date ? sub.current_period_end.toISOString() : sub.current_period_end).slice(0, 10)) : '';
+  const card = (key, title, blurb, features) => {
+    const price = PRICES[key];
+    const current = plan === key && (key === 'free' || paid || sub.comped);
+    return html`<div class="plan ${current ? 'current' : ''} ${key === 'team' ? 'featured' : ''}" data-plan="${key}">
+      <div class="plan-head"><h3>${title}</h3>${current ? html`<span class="pill completed">Current</span>` : key === 'team' ? html`<span class="pill sent">Popular</span>` : ''}</div>
+      <div class="price">${price ? html`${dollars(price[interval])}<small>/${interval === 'month' ? 'mo' : 'yr'}</small>` : html`$0`}</div>
+      <div class="price-note">${!price ? 'Forever' : interval === 'year' ? `${dollars(Math.round(price.year / 12))}/mo billed yearly · save 15%`
+        : discount ? `First month ${dollars(price.month / 2)} · 50% off` : 'Billed monthly'}</div>
+      <p class="muted">${blurb}</p>
+      <ul class="feat">${features.map((f) => html`<li>${f}</li>`)}</ul>
+      ${price && enabled && !sub.comped && !paid ? html`<form method="post" action="/billing/checkout">
+        <input type="hidden" name="plan" value="${key}"><input type="hidden" name="interval" value="${interval}">
+        <button type="submit" class="block ${key === 'team' ? '' : 'secondary'}">Choose ${title}</button></form>` : ''}
+    </div>`;
+  };
+  return layout('Plan & billing', html`
+  ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
+  ${sub.status === 'past_due' ? html`<div class="errors" role="alert">Your last payment didn't go through. Update your card in Manage billing to keep your plan.</div>` : ''}
+  <div class="card" id="current-plan">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px">
+      <div><div class="muted" style="font-size:13px">Current plan</div>
+        <div style="font-size:24px;font-weight:700;letter-spacing:-.02em" data-k="plan">${PLAN_NAMES[plan]}</div>
+        <div class="muted" style="font-size:14px" data-k="usage">${usage}</div></div>
+      ${sub.comped ? html`<span class="pill completed">Free for ${org.name}</span>` : ''}
+    </div>
+    ${paid ? html`<div class="hint" style="margin-top:10px">${sub.cancel_at_period_end ? `Ends on ${renew}. You'll move to Free after that.` : `Renews ${renew}, billed ${sub.billing_interval === 'year' ? 'yearly' : 'monthly'}.`}</div>
+      <form method="post" action="/billing/portal" style="margin-top:12px"><button type="submit" class="secondary block">${icon('card')}Manage billing</button></form>
+      <div class="hint">Change plan, update your card, see receipts or cancel. Handled securely by Stripe.</div>` : ''}
+  </div>
+  ${!enabled && !sub.comped ? html`<div class="notice">Paid plans aren't available yet. Online billing still needs to be set up for this app.</div>` : ''}
+  ${sub.comped ? '' : html`
+  <div class="seg" role="tablist">
+    <a href="/billing" class="${interval === 'month' ? 'on' : ''}">Monthly</a>
+    <a href="/billing?interval=year" class="${interval === 'year' ? 'on' : ''}">Yearly <span class="save">−15%</span></a>
+  </div>
+  <div class="plans">
+    ${card('free', 'Free', 'For running jobs on your own.', ['1 person', 'Clients, estimates & jobs', 'PDF estimates & invoices'])}
+    ${card('team', 'Team', 'For a small crew.', ['Up to 3 admins', 'Up to 10 workers', 'Everything in Free'])}
+    ${card('unlimited', 'Unlimited', 'For growing companies.', ['Unlimited admins', 'Unlimited workers', 'Everything in Team'])}
+  </div>
+  <p class="hint">Cancel anytime; you keep your plan until the end of the period you paid for. If a plan ends, nothing is deleted. You just can't add more people until you upgrade again.${testMode ? ' Test mode: use card 4242 4242 4242 4242.' : ''}</p>`}`,
+  { flash, back: { href: '/account', label: 'Account' } });
+}
+
 // ---------- Team ----------
-function teamPage({ org, members, me, joinCode, errors = {}, values = {}, flash }) {
+function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, flash }) {
   const admin = org.role === 'admin';
+  const room = admin ? seatsLeft(plan, members) : null;
   return layout('Team', html`
   ${errorBox(errors)}
+  ${admin ? html`<a class="card plan-strip" href="/billing">
+    <span class="icon-bubble">${icon('card')}</span>
+    <div class="main-t"><div class="t">${PLAN_NAMES[plan]} plan</div><div class="s">${room}</div></div>${chev()}</a>` : ''}
   ${admin && joinCode ? html`<div class="card">
     <div class="row" style="justify-content:space-between"><strong>Join code</strong>
       <form method="post" action="/team/code" data-confirm="Make a new code? The current one will stop working.">
@@ -523,9 +627,9 @@ function teamPage({ org, members, me, joinCode, errors = {}, values = {}, flash 
   </div>` : ''}
   <h2>People</h2>
   <div class="list">${members.map((m) => html`<a class="li" href="/team/${m.user_id}">
-    <span class="avatar">${(m.email || '?')[0].toUpperCase()}</span>
-    <div class="main-t"><div class="t">${m.email}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
-      <div class="s">${ROLES[m.role]} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}</div></div>
+    <span class="avatar">${initialOf(m)}</span>
+    <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
+      <div class="s">${ROLES[m.role]} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}${m.full_name ? ` · ${m.email}` : ''}</div></div>
     <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
   </a>`)}</div>
   <p class="hint"><strong>Admins</strong> see and manage everything, including money and the team.
@@ -547,9 +651,14 @@ function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
       <div class="s">${j.client_name}${dateRange(j.start_date, j.end_date) ? ' · ' : ''}${dateRange(j.start_date, j.end_date)}</div></div>
     <div class="r"><span class="amt">${fmt(j.payout_cents)}</span>${pill(j.status, JOB_STATUS)}</div>${chev()}</a>`)}</div>`
     : html`<div class="empty">${empty}</div>`);
-  return layout(member.email, html`
+  return layout(who(member), html`
   <p style="margin:0 2px 14px"><span class="pill ${member.role === 'admin' ? 'sent' : ''}">${ROLES[member.role]}</span></p>
   ${errorBox(errors)}
+  <div class="list" id="contact">
+    <a class="li" href="mailto:${member.email}"><span class="icon-bubble">${icon('mail')}</span><div class="main-t"><div class="s">Email</div><div class="t">${member.email}</div></div></a>
+    ${member.phone ? html`<a class="li" href="tel:${member.phone}"><span class="icon-bubble">${icon('phone')}</span><div class="main-t"><div class="s">Phone</div><div class="t">${member.phone}</div></div></a>` : ''}
+    ${member.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(member.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Address</div><div class="t">${member.address}</div></div></a>` : ''}
+  </div>
   <div class="stats">
     <div class="stat"><div class="k">Jobs completed</div><div class="v" data-k="jobs-done">${done.length}</div></div>
     <div class="stat"><div class="k">Open jobs</div><div class="v" data-k="jobs-open">${open.length}</div></div>
@@ -565,7 +674,7 @@ function memberPage({ org, member, me, jobs, totals, errors = {}, flash }) {
     <label for="role">Role in ${org.name}</label>${roleSelect('role', member.role, 'role')}
     <div class="form-actions"><button type="submit" class="secondary">Save role</button></div>
   </form>
-  ${member.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${member.email} from ${org.name}?">
+  ${member.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${who(member)} from ${org.name}?">
     <input type="hidden" name="user_id" value="${member.user_id}"><button type="submit" class="danger block">Remove from ${org.name}</button></form>` : ''}`,
   { flash, back: { href: '/team', label: 'Team' } });
 }
@@ -941,14 +1050,14 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
 
   <h2>Workers & payouts</h2>
   ${crew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
-    <span class="avatar">${(c.email || '?')[0].toUpperCase()}</span>
-    <div class="main-t"><div class="t">${c.email}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : ROLES[c.role]}</div></div>
+    <span class="avatar">${initialOf(c)}</span>
+    <div class="main-t"><div class="t">${who(c)}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : ROLES[c.role]}</div></div>
     <div class="r"><span class="amt">${fmt(c.payout_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?user_id=${c.user_id}">Work order</a> · <a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></span></div>
   </div>`)}</div>` : html`<div class="empty">Nobody assigned yet.</div>`}
   ${members.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="form-card" novalidate>
     <div class="two stack"><div><label for="assign_user">Person</label>
       <select id="assign_user" name="user_id" class="${inv(af.errors, 'user_id')}">
-        <option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}" ${af.values.user_id === m.user_id ? raw('selected') : ''}>${m.email} (${ROLES[m.role]})</option>`)}
+        <option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}" ${af.values.user_id === m.user_id ? raw('selected') : ''}>${who(m)} (${ROLES[m.role]})</option>`)}
       </select>${fieldErr(af.errors, 'user_id')}</div>
     <div>${input('payout', 'Payout ($)', af.values, af.errors, { required: true, inputmode: 'decimal' })}</div></div>
     <div class="hint">What they'll be paid for this job. They see only their own amount. Records only; nothing is paid through the app.</div>
@@ -1062,6 +1171,6 @@ function messagePage(title, message) {
 
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, schedulePage, scheduleJobPage, confirmPage, loginPage, signupPage, welcomePage,
-  accountPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
+  accountPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
 };

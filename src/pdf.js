@@ -168,7 +168,7 @@ function workOrderPdf({ company, job, client, assignee }) {
     ]);
     if (assignee) {
       infoColumns(doc, [
-        ['Assigned to', [assignee.email]],
+        ['Assigned to', [assignee.full_name || assignee.email, assignee.full_name ? assignee.email : '', assignee.phone]],
         ['Agreed pay for this job', [fmt(assignee.payout_cents)]],
       ]);
     }

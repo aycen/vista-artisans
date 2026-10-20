@@ -25,7 +25,7 @@ function startFakeAuth(pgClient, anonKey) {
 
     if (url.pathname === '/auth/v1/signup') {
       if (users.has(body.email)) return send(422, { msg: 'User already registered' });
-      const u = { id: crypto.randomUUID(), email: body.email, password: body.password };
+      const u = { id: crypto.randomUUID(), email: body.email, password: body.password, user_metadata: body.data || {} };
       await pgClient.query('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [u.id, u.email]);
       users.set(u.email, u);
       return send(200, session(u));
@@ -43,7 +43,7 @@ function startFakeAuth(pgClient, anonKey) {
     }
     if (url.pathname === '/auth/v1/user') {
       const u = access.get(bearer);
-      return u ? send(200, { id: u.id, email: u.email }) : send(401, { msg: 'invalid JWT' });
+      return u ? send(200, { id: u.id, email: u.email, user_metadata: u.user_metadata }) : send(401, { msg: 'invalid JWT' });
     }
     if (url.pathname === '/auth/v1/logout') {
       access.delete(bearer);

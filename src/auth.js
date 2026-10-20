@@ -31,8 +31,9 @@ async function signIn(email, password) {
   return { session: r.data };
 }
 
-async function signUp(email, password) {
-  const r = await call('/signup', { body: { email, password } });
+// `profile` (optional name, phone, address) is kept on the Supabase user until the app saves it on first login.
+async function signUp(email, password, profile = {}) {
+  const r = await call('/signup', { body: { email, password, data: { vista_profile: profile } } });
   if (!r.ok) return { error: message(r.data, 'Could not create the account.') };
   // With email confirmation on, Supabase returns the user but no session.
   return { session: r.data.access_token ? r.data : null };
@@ -49,7 +50,7 @@ async function getUser(accessToken) {
   const hit = cache.get(accessToken);
   if (hit && hit.until > Date.now()) return hit.user;
   const r = await call('/user', { method: 'GET', token: accessToken });
-  const user = r.ok && r.data.id ? { id: r.data.id, email: r.data.email } : null;
+  const user = r.ok && r.data.id ? { id: r.data.id, email: r.data.email, signupProfile: r.data.user_metadata?.vista_profile || null } : null;
   if (cache.size > 1000) cache.clear();
   if (user) cache.set(accessToken, { user, until: Date.now() + 60_000 });
   return user;
