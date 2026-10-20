@@ -4,7 +4,8 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 
-function startFakeAuth(pgClient, anonKey) {
+function startFakeAuth(pgClient, anonKey, serviceKey = 'test-service-key') {
+  const recoveries = []; // { email, redirectTo, token } of reset emails "sent"
   const users = new Map(); // email -> { id, email, password }
   const access = new Map(); // token -> user
   const refresh = new Map(); // token -> user
@@ -19,9 +20,29 @@ function startFakeAuth(pgClient, anonKey) {
     const chunks = []; for await (const c of req) chunks.push(c);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
     const send = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
-    if (req.headers.apikey !== anonKey) return send(401, { message: 'Invalid API key' });
     const url = new URL(req.url, 'http://x');
     const bearer = (req.headers.authorization || '').replace(/^Bearer /, '');
+    const admin = url.pathname.match(/^\/auth\/v1\/admin\/users\/([0-9a-f-]{36})$/);
+    if (admin && req.method === 'DELETE') {
+      if (req.headers.apikey !== serviceKey) return send(401, { message: 'Invalid API key' });
+      if (!body.should_soft_delete) return send(400, { msg: 'expected a soft delete' });
+      for (const [email, u] of users) if (u.id === admin[1]) users.delete(email);
+      for (const m of [access, refresh]) for (const [k, u] of m) if (u.id === admin[1]) m.delete(k);
+      await pgClient.query("UPDATE auth.users SET email = NULL WHERE id = $1", [admin[1]]);
+      return send(200, {});
+    }
+    if (req.headers.apikey !== anonKey) return send(401, { message: 'Invalid API key' });
+    if (url.pathname === '/auth/v1/recover') {
+      const token = crypto.randomBytes(24).toString('hex');
+      if (users.has(body.email)) { access.set(token, users.get(body.email)); recoveries.push({ email: body.email, redirectTo: url.searchParams.get('redirect_to'), token }); }
+      return send(200, {});
+    }
+    if (url.pathname === '/auth/v1/user' && req.method === 'PUT') {
+      const u = access.get(bearer);
+      if (!u) return send(401, { msg: 'invalid JWT' });
+      if (body.password) u.password = body.password;
+      return send(200, { id: u.id, email: u.email });
+    }
 
     if (url.pathname === '/auth/v1/signup') {
       if (users.has(body.email)) return send(422, { msg: 'User already registered' });
@@ -55,6 +76,7 @@ function startFakeAuth(pgClient, anonKey) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
     url: `http://127.0.0.1:${server.address().port}`,
     expireAccessTokens: () => access.clear(),
+    recoveries,
     close: () => new Promise((r) => server.close(r)),
   })));
 }

@@ -156,6 +156,7 @@ async function checkoutSession({ customerId, orgId, plan, interval, discount, ba
 }
 const getCheckoutSession = (id) => call('GET', `/checkout/sessions/${encodeURIComponent(id)}?expand[]=subscription`);
 const getSubscription = (id) => call('GET', `/subscriptions/${encodeURIComponent(id)}`);
+const cancelSubscription = (id) => call('DELETE', `/subscriptions/${encodeURIComponent(id)}`);
 
 // The customer portal lets admins change plan, update their card, see invoices and cancel.
 let portalConfig = null;
@@ -226,7 +227,7 @@ function verifyEvent(rawBody, header, toleranceSeconds = 300) {
 }
 
 module.exports = {
-  configured, billingConfigured, testMode, PLANS, billingCustomer, checkoutSession, getCheckoutSession, getSubscription,
+  configured, billingConfigured, testMode, PLANS, billingCustomer, checkoutSession, getCheckoutSession, getSubscription, cancelSubscription,
   portalSession, describeSubscription, createAccount, getAccount, onboardingLink,
   ensureCustomer, sendInvoice, resendInvoice, voidInvoice, verifyEvent, StripeError,
 };

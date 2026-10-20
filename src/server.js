@@ -986,6 +986,18 @@ async function companyFor(db, org) {
   for (const k of Object.keys(PROFILE_FIELDS)) out[k] = p[k] || '';
   return out;
 }
+route('GET', '/settings/delete-company', ({ org }) => ok(v.deleteCompanyPage({ org })));
+route('POST', '/settings/delete-company', async ({ db, org, form }) => {
+  if (str(form.get('confirm'), 200).toLowerCase() !== org.name.trim().toLowerCase()) {
+    return page(422, v.deleteCompanyPage({ org, error: 'Type the company name exactly as shown to confirm.' }));
+  }
+  try { await cancelPlan(db, org.org_id); } catch (e) {
+    console.error('Cancel plan failed:', e.message);
+    return page(502, v.deleteCompanyPage({ org, error: 'We couldn\'t cancel the paid plan with Stripe, so nothing was deleted. Try again, or cancel it in Plan & billing first.' }));
+  }
+  await db.run('SELECT delete_organization(?)', org.org_id);
+  return redirect(`/account?msg=${encodeURIComponent(`${org.name} was deleted.`)}`);
+});
 route('GET', '/settings', async ({ db, org, url }) => {
   const c = await companyFor(db, org);
   const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
@@ -1120,7 +1132,7 @@ route('GET', '/jobs/:id/work-order', async ({ db, org, id, url }) => {
 });
 
 // Joining or creating a company, and the account page (these work before the user belongs to one)
-const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile', '/account/theme']);
+const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile', '/account/theme', '/account/delete']);
 const orgCookie = (id) => cookie('org', id, 60 * 60 * 24 * 365);
 route('GET', '/welcome', ({ orgs }) => ok(v.welcomePage({ hasOrgs: orgs.length > 0 })), { worker: true });
 route('GET', '/org/new', () => redirect('/welcome'), { worker: true });
@@ -1160,6 +1172,35 @@ route('POST', '/account/theme', ({ form }) => {
   return redirect('/account?msg=Appearance+saved#appearance', { 'Set-Cookie': THEMES.includes(t) ? cookie('theme', t, 60 * 60 * 24 * 365) : cookie('theme', '', 0) });
 }, { worker: true });
 route('GET', '/account', (ctx) => renderAccount(ctx, { flash: ctx.url.searchParams.get('msg') }), { worker: true });
+// Deleting your own account: companies you're the only person in go with it; a company with other people needs another admin first.
+async function renderDeleteAccount({ db, user }, extra = {}, status = 200) {
+  const sole = await db.all('SELECT * FROM my_sole_admin_orgs()');
+  return page(status, v.deleteAccountPage({ user, blockers: sole.filter((o) => o.others > 0), companies: sole.filter((o) => o.others === 0), ...extra }));
+}
+// Stops billing before a company is deleted, so nobody is charged for a company that no longer exists.
+async function cancelPlan(db, orgId) {
+  const sub = await db.get('SELECT stripe_subscription_id, status FROM org_subscriptions WHERE org_id = ?', orgId);
+  if (sub?.stripe_subscription_id && !['canceled', 'incomplete_expired', 'none'].includes(sub.status)) {
+    await stripe.cancelSubscription(sub.stripe_subscription_id);
+  }
+}
+route('GET', '/account/delete', (ctx) => renderDeleteAccount(ctx), { worker: true });
+route('POST', '/account/delete', async (ctx) => {
+  const { db, user, form } = ctx;
+  if (String(form.get('confirm') ?? '').trim().toUpperCase() !== 'DELETE') return renderDeleteAccount(ctx, { error: 'Type DELETE to confirm.' }, 422);
+  if (!auth.canDeleteUsers()) {
+    return renderDeleteAccount(ctx, { error: 'Account deletion is temporarily unavailable. Email support@keystonefsm.com and we\'ll delete it for you.' }, 503);
+  }
+  const sole = await db.all('SELECT * FROM my_sole_admin_orgs()');
+  if (sole.some((o) => o.others > 0)) return renderDeleteAccount(ctx, {}, 409);
+  try { for (const o of sole) await cancelPlan(db, o.org_id); } catch (e) {
+    console.error('Cancel plan failed:', e.message);
+    return renderDeleteAccount(ctx, { error: 'We couldn\'t cancel your paid plan with Stripe, so nothing was deleted. Try again, or cancel it in Plan & billing first.' }, 502);
+  }
+  await db.run('SELECT delete_my_data()');
+  await auth.deleteUser(user.id); // if this fails, the database changes above roll back
+  return redirect('/login?msg=Your+account+was+deleted.', { 'Set-Cookie': clearCookies });
+}, { worker: true });
 route('POST', '/account/profile', async (ctx) => {
   const f = formObj(ctx.form);
   const values = { full_name: str(f.full_name, 200), phone: str(f.phone, 50), zip: str(f.zip, 10) };
@@ -1277,6 +1318,25 @@ async function publicRoute(req, url) {
     if (r.error) return page(401, v.loginPage({ error: r.error, email }));
     return redirect('/', { 'Set-Cookie': sessionCookies(r.session) });
   }
+  if (url.pathname === '/forgot') {
+    if (req.method === 'GET') return ok(v.forgotPage());
+    const email = str(formObj(await readBody(req)).email, 200);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return page(422, v.forgotPage({ email, error: 'Enter a valid email address.' }));
+    const r = await auth.recover(email, `${baseUrl(req)}/reset`);
+    if (r.error) return page(502, v.forgotPage({ email, error: r.error }));
+    return ok(v.forgotPage({ email, sent: true }));
+  }
+  if (url.pathname === '/reset') {
+    if (req.method === 'GET') return ok(v.resetPage());
+    const f = formObj(await readBody(req));
+    const token = str(f.token, 4000);
+    if (!token) return page(400, v.resetPage());
+    if ((f.password || '').length < 8) return page(422, v.resetPage({ token, error: 'Password must be at least 8 characters.' }));
+    const r = await auth.updatePassword(token, f.password);
+    if (r.error === 'expired') return page(400, v.resetPage());
+    if (r.error) return page(422, v.resetPage({ token, error: r.error }));
+    return redirect('/login?msg=Password+updated.+Log+in+with+your+new+password.');
+  }
   if (url.pathname === '/signup') {
     if (req.method === 'GET') return ok(v.signupPage());
     const f = formObj(await readBody(req));
@@ -1364,7 +1424,7 @@ async function health() {
         to_regclass('public.invoices') IS NOT NULL AS invoices,
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
         to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
-        to_regclass('public.time_entries') IS NOT NULL AS time_clock`);
+        to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1374,6 +1434,7 @@ async function health() {
       if (!r.rows[0].crew) throw new Error('Run supabase/migrations/0010_crew_jobs.sql in the Supabase SQL Editor.');
       if (!r.rows[0].receipts) throw new Error('Run supabase/migrations/0011_expense_receipts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].time_clock) throw new Error('Run supabase/migrations/0013_time_clock_photos.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].deletion) throw new Error('Run supabase/migrations/0014_account_deletion.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1554,14 +1615,16 @@ async function handle(req, res) {
     if (host !== req.headers.host) return page(403, v.messagePage('Forbidden', 'Cross-site request blocked.'));
   }
 
-  if (['/login', '/signup'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
+  if (['/login', '/signup', '/forgot', '/reset'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
   if (url.pathname === '/healthz' && req.method === 'GET') return health();
-  if (['/privacy', '/terms'].includes(url.pathname) && req.method === 'GET') return ok(v.legalPage(url.pathname.slice(1)));
+  if (['/privacy', '/terms', '/support', '/data-deletion'].includes(url.pathname) && req.method === 'GET') return ok(v.legalPage(url.pathname.slice(1)));
   if (url.pathname.startsWith('/e/')) return publicEstimate(req, url);
   if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');
 
   const { user, setCookies = [] } = await currentUser(cookies);
   if (!user) {
+    // Logged-out visitors to the home page see what Keystone is (app stores and API reviewers check this page too).
+    if (url.pathname === '/' && req.method === 'GET') return page(200, v.landingPage(), cookies.sa || cookies.sr ? { 'Set-Cookie': clearCookies } : {});
     if (req.method === 'GET') return redirect('/login', { 'Set-Cookie': clearCookies });
     return page(401, v.messagePage('Logged out', 'Your session has ended. Please log in again.'), { 'Set-Cookie': clearCookies });
   }

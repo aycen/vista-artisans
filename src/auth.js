@@ -7,12 +7,15 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   process.exit(1);
 }
 
-async function call(path, { method = 'POST', body, token } = {}) {
+// Server-only secret key, needed just to delete logins. Never sent to browsers.
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+async function call(path, { method = 'POST', body, token, key = SUPABASE_ANON_KEY } = {}) {
   const res = await fetch(`${SUPABASE_URL}/auth/v1${path}`, {
     method,
-    // New-style publishable keys (sb_publishable_...) go only in the apikey header, never as a Bearer token.
+    // New-style keys (sb_publishable_..., sb_secret_...) go only in the apikey header, never as a Bearer token.
     headers: {
-      apikey: SUPABASE_ANON_KEY,
+      apikey: key,
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
@@ -61,4 +64,28 @@ async function signOut(accessToken) {
   await call('/logout', { token: accessToken }).catch(() => {});
 }
 
-module.exports = { signIn, signUp, refresh, getUser, signOut };
+// Emails a password reset link that returns to `redirectTo` with a one-time token. Says nothing about whether the email exists.
+async function recover(email, redirectTo) {
+  const r = await call(`/recover?redirect_to=${encodeURIComponent(redirectTo)}`, { body: { email } });
+  return r.ok || r.status === 404 ? {} : { error: r.status === 429 ? 'Too many reset emails. Wait a minute and try again.' : 'Could not send the reset email. Try again.' };
+}
+
+async function updatePassword(accessToken, password) {
+  const r = await call('/user', { method: 'PUT', token: accessToken, body: { password } });
+  if (r.ok) return {};
+  return { error: r.status === 401 || r.status === 403 ? 'expired' : message(r.data, 'Could not save the new password.') };
+}
+
+// Deletes a login for good. Soft delete removes the email and sign-in methods but keeps the id,
+// so work records other companies keep (assignments, hours) stay intact.
+const canDeleteUsers = () => !!SERVICE_KEY;
+async function deleteUser(userId) {
+  const legacy = !SERVICE_KEY.startsWith('sb_secret_'); // old-style service_role JWTs also go in Authorization
+  const r = await call(`/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE', key: SERVICE_KEY, token: legacy ? SERVICE_KEY : undefined, body: { should_soft_delete: true },
+  });
+  if (!r.ok) throw new Error(`Supabase Auth could not delete the user (${r.status}): ${message(r.data, '')}`);
+  for (const [k, v] of cache) if (v.user.id === userId) cache.delete(k);
+}
+
+module.exports = { signIn, signUp, refresh, getUser, signOut, recover, updatePassword, canDeleteUsers, deleteUser };

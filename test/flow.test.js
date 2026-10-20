@@ -25,7 +25,7 @@ let proc; let fakeAuth; let dbClient;
 
 async function start(extraEnv = {}) {
   proc = spawn(process.execPath, ['--no-warnings', path.join(root, 'src', 'server.js')], {
-    env: { ...process.env, PORT: String(PORT), DATABASE_URL: DB_URL, DATABASE_SSL: '0', SUPABASE_URL: fakeAuth.url, SUPABASE_ANON_KEY: ANON, ...extraEnv },
+    env: { ...process.env, PORT: String(PORT), DATABASE_URL: DB_URL, DATABASE_SSL: '0', SUPABASE_URL: fakeAuth.url, SUPABASE_ANON_KEY: ANON, SUPABASE_SERVICE_ROLE_KEY: 'test-service-key', ...extraEnv },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((resolve) => proc.stdout.once('data', resolve));
@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -96,13 +96,17 @@ test.after(async () => {
 
 test('accounts: sign up, create organization, and everything requires login', async () => {
   as('anon');
-  for (const p of ['/', '/clients', '/estimates', '/jobs', '/clients/1', '/team']) {
+  for (const p of ['/clients', '/estimates', '/jobs', '/clients/1', '/team']) {
     const r = await getPage(p);
     assert.equal(r.status, 303); assert.equal(r.location, '/login');
   }
   assert.equal((await post('/clients', { name: 'Hacker' })).status, 401);
   jars.anon = { sa: 'forged', sr: 'forged' };
-  assert.equal((await getPage('/')).location, '/login');
+  assert.equal((await getPage('/clients')).location, '/login');
+  // Logged out, the home page shows what Keystone is
+  let home = await getPage('/');
+  assert.equal(home.status, 200); assert.match(home.body, /Start free/); assert.match(home.body, /href="\/data-deletion"/);
+  jars.anon = {};
 
   // Validation on sign-up
   let r = await post('/signup', { email: 'bad', password: 'short' });
@@ -517,7 +521,7 @@ test('full workflow', async () => {
 
   // Logout ends the session
   r = await post('/logout', {}); assert.equal(r.status, 303);
-  assert.equal((await getPage('/')).location, '/login');
+  assert.equal((await getPage('/jobs')).location, '/login');
 });
 
 test('invoices through Stripe Connect: connect, send, pay by webhook, void', async () => {
@@ -1112,4 +1116,71 @@ test('privacy policy and terms are public', async () => {
     const r = await getPage(p, { auth: false }); assert.equal(r.status, 200); assert.match(r.body, new RegExp(`<h1>${t}</h1>`));
   }
   assert.match((await getPage('/signup', { auth: false })).body, /href="\/terms"/);
+});
+
+test('public home, support and data deletion pages; forgot password; delete company; delete account', async () => {
+  for (const [p, t] of [['/support', 'Help &amp; support'], ['/data-deletion', 'Delete your data']]) {
+    const r = await getPage(p, { auth: false }); assert.equal(r.status, 200); assert.match(r.body, new RegExp(`<h1>${t}</h1>`));
+  }
+  assert.match((await getPage('/login', { auth: false })).body, /href="\/forgot"/);
+
+  // Frank runs a company with a converted job; Gina joins it as crew
+  as('frank'); await post('/signup', { email: 'frank@keystone.test', password: 'frank-password' });
+  let r = await post('/org/new', { name: 'Frank Painting' }); assert.equal(r.status, 303);
+  const frankOrg = (await dbClient.query("SELECT id FROM organizations WHERE name = 'Frank Painting'")).rows[0].id;
+  await dbClient.query(`INSERT INTO org_subscriptions (org_id, plan, comped) VALUES ($1, 'unlimited', true)
+    ON CONFLICT (org_id) DO UPDATE SET plan = 'unlimited', comped = true`, [frankOrg]);
+  r = await post('/clients', { name: 'Pat Lee', address: '9 Elm St' }); const client = idFrom(r.location);
+  r = await post('/estimates', new URLSearchParams([['client_id', String(client)], ['status', 'approved'], ['deposit_percent', '0'],
+    ['item_desc', 'Paint living room'], ['item_qty', '1'], ['item_price', '1200']]));
+  assert.equal(r.status, 303); const est = idFrom(r.location);
+  r = await post(`/estimates/${est}/convert`, {}); assert.equal(r.status, 303);
+  const code = (await getPage('/team')).body.match(/id="join-code">([A-Z0-9]{4}-[A-Z0-9]{4})</)[1];
+  as('gina'); await post('/signup', { email: 'gina@keystone.test', password: 'gina-password' });
+  assert.equal((await post('/org/join', { code })).status, 303);
+
+  // The only admin of a company with other people can't delete their account yet
+  as('frank');
+  let page = (await getPage('/account')).body; assert.match(page, /href="\/account\/delete"/);
+  page = (await getPage('/account/delete')).body; assert.match(page, /only admin of <strong>Frank Painting<\/strong>/);
+  assert.equal((await post('/account/delete', { confirm: 'DELETE' })).status, 409);
+
+  // Forgot password: the emailed link returns to /reset with a one-time token
+  as('anon');
+  r = await post('/forgot', { email: 'nope' }); assert.equal(r.status, 422);
+  r = await post('/forgot', { email: 'frank@keystone.test' }); assert.equal(r.status, 200); assert.match(r.body, /reset link is on its way/);
+  r = await post('/forgot', { email: 'nobody@keystone.test' }); assert.equal(r.status, 200, 'never reveals whether an account exists');
+  const rec = fakeAuth.recoveries.at(-1); assert.equal(rec.email, 'frank@keystone.test'); assert.equal(rec.redirectTo, `${BASE}/reset`);
+  assert.equal((await getPage('/reset')).status, 200);
+  r = await post('/reset', { token: rec.token, password: 'short' }); assert.equal(r.status, 422); assert.match(r.body, new RegExp(`value="${rec.token}"`));
+  r = await post('/reset', { token: 'bad-token', password: 'long-enough-1' }); assert.equal(r.status, 400);
+  r = await post('/reset', { token: rec.token, password: 'frank-new-password' }); assert.equal(r.status, 303); assert.match(r.location, /Password\+updated/);
+  assert.equal((await post('/login', { email: 'frank@keystone.test', password: 'frank-password' })).status, 401);
+  as('frank'); assert.equal((await post('/login', { email: 'frank@keystone.test', password: 'frank-new-password' })).status, 303);
+
+  // Gina deletes her account: her login and membership go, Frank's company stays
+  as('gina');
+  page = (await getPage('/account/delete')).body; assert.match(page, /Type DELETE to confirm/); assert.doesNotMatch(page, /Because you're the only person/);
+  assert.equal((await post('/account/delete', { confirm: 'nope' })).status, 422);
+  r = await post('/account/delete', { confirm: 'delete' }); assert.equal(r.status, 303); assert.match(r.location, /account\+was\+deleted/);
+  assert.match(r.setCookies.join(), /sa=;/);
+  as('anon'); assert.equal((await post('/login', { email: 'gina@keystone.test', password: 'gina-password' })).status, 401);
+  const gina = (await dbClient.query("SELECT count(*)::int AS n FROM auth.users WHERE email = 'gina@keystone.test'")).rows[0].n;
+  assert.equal(gina, 0);
+  as('frank'); assert.doesNotMatch((await getPage('/team')).body, /gina@keystone/);
+
+  // Frank deletes the company (typed name must match); its converted job and estimate go with it
+  page = (await getPage('/settings')).body; assert.match(page, /href="\/settings\/delete-company"/);
+  assert.equal((await post('/settings/delete-company', { confirm: 'Frank' })).status, 422);
+  r = await post('/settings/delete-company', { confirm: 'frank painting' }); assert.equal(r.status, 303);
+  const left = await dbClient.query('SELECT (SELECT count(*) FROM organizations WHERE id = $1)::int AS orgs, (SELECT count(*) FROM jobs WHERE org_id = $1)::int AS jobs', [frankOrg]);
+  assert.deepEqual(left.rows[0], { orgs: 0, jobs: 0 });
+  assert.equal((await getPage('/')).location, '/welcome');
+
+  // A company where Frank is the only person is deleted along with his account
+  await post('/org/new', { name: 'Solo Co' });
+  page = (await getPage('/account/delete')).body; assert.match(page, /this also deletes <strong>Solo Co<\/strong>/);
+  r = await post('/account/delete', { confirm: 'DELETE' }); assert.equal(r.status, 303);
+  assert.equal((await dbClient.query("SELECT count(*)::int AS n FROM organizations WHERE name = 'Solo Co'")).rows[0].n, 0);
+  assert.equal((await getPage('/account')).location, '/login');
 });

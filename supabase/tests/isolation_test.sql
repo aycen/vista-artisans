@@ -253,6 +253,18 @@ select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect((select count(*) from email_log) = 0, 'other companies cannot see email history');
 select pg_temp.expect((select count(*) from estimates where public_token is not null) = 0, 'other companies cannot see estimate links');
 
+-- Deleting: only an admin can delete their own company; deleting your account never touches a company others are in
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'other companies cannot delete a company');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'crew cannot delete their company');
+select pg_temp.expect((select count(*) from my_sole_admin_orgs()) = 0, 'crew are nobody''s only admin');
+select delete_my_data();
+reset role;
+select pg_temp.expect((select count(*) from organizations where id = current_setting('t.vista')::uuid) = 1, 'a crew member deleting their account leaves the company');
+select pg_temp.expect((select count(*) from memberships where user_id = '00000000-0000-0000-0000-00000000000d') = 0, 'and removes their memberships');
+set role authenticated;
+
 -- Signed-out (anon) gets nothing
 reset role; set role anon;
 do $$ begin perform count(*) from clients; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;

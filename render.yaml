@@ -27,6 +27,8 @@ services:
         sync: false
       - key: STRIPE_BILLING_WEBHOOK_SECRET
         sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false # Supabase secret key; only used to delete logins when someone deletes their account
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

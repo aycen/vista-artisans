@@ -2,7 +2,7 @@
   "name": "vista-artisans",
   "version": "1.0.0",
   "private": true,
-  "description": "Clients, estimates, jobs, costs and payments for Vista Artisans",
+  "description": "Keystone: field service software for trade contractors",
   "engines": {
     "node": ">=22.13"
   },

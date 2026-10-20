@@ -216,6 +216,15 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .progress-presets{margin:4px 0 10px;padding:0;flex-wrap:wrap}.progress-presets .chip{min-height:36px;padding:6px 14px;box-shadow:none;background:var(--surface-2);color:var(--text);border:1px solid var(--line)}.progress-presets .chip.on{background:var(--accent);color:var(--on-accent)}
 .clock{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .clock .t{font-weight:700}.clock .s{font-size:13px;color:var(--text-2)}
+.landing{max-width:1040px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 12px) 16px 40px}
+.lp-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0 24px}
+.lp-brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:20px;color:var(--text);text-decoration:none}
+.lp-top nav{display:flex;align-items:center;gap:14px}
+.lp-hero{text-align:center;max-width:720px;margin:24px auto 36px}.lp-hero h1{font-size:clamp(30px,6vw,48px);letter-spacing:-.03em;line-height:1.1;margin:0 0 14px}
+.lp-hero p{color:var(--text-2);font-size:18px;line-height:1.5}.lp-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:22px 0 8px}
+.lp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.lp-grid .card h3{margin:10px 0 6px}.lp-grid .card p{margin:0;color:var(--text-2);line-height:1.5}
+.lp-pricing{margin-top:40px;text-align:center}.lp-pricing .card{text-align:left}.lp-price{font-size:30px;font-weight:800;margin:4px 0 8px}.lp-price span{font-size:15px;font-weight:500;color:var(--text-2)}
+.lp-foot{text-align:center;margin-top:40px}.footer-links{margin-top:28px}.footer-links a{white-space:nowrap}
 .legal{max-width:720px;margin:0 auto;padding:24px 4px 48px;line-height:1.6}.legal h1{margin:12px 0 4px}.legal h2{margin-top:26px}.legal ul{padding-left:20px}.legal li{margin:6px 0}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .delta{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:13px;font-weight:700;background:rgba(255,255,255,.2);color:#fff;margin-top:8px}
@@ -498,13 +507,37 @@ const LEGAL = {
     <p>Each company's records are kept separate and are visible only to that company's team. Admins see everything in their company; crew see only the jobs assigned to them and their own pay. Your clients see only the estimates and invoices you send them.</p>
     <p>We share data with the service providers that run Keystone, only as needed: Supabase (database and sign-in), Render (hosting), Stripe (payments and subscriptions) and Resend (email delivery). We may disclose information if the law requires it.</p>
     <h2>Keeping and deleting data</h2>
-    <p>We keep your records while your company uses Keystone. To delete your account or your company's data, email us and we'll remove it within 30 days, except where we must keep records by law (for example, billing records).</p>
+    <p>We keep your records while your company uses Keystone. You can delete your account yourself at any time in the app (Account, then Delete account), and an admin can delete their company and all of its records (Company profile, then Delete company). Deletion takes effect right away; copies in our backups are erased within 30 days. You can also email us to ask for deletion or a copy of your data. We keep only what the law requires, such as billing records. See <a href="/data-deletion">how to delete your data</a>.</p>
     <h2>Security</h2>
     <p>Data is sent over encrypted connections, access is limited by company and role in the database itself, and connection tokens can be read only by the Keystone server. No system is perfectly secure, so please use a strong, unique password.</p>
     <h2>Children</h2>
     <p>Keystone is for businesses and isn't meant for anyone under 18.</p>
     <h2>Changes</h2>
     <p>If we change this policy, we'll update the date above and, for significant changes, tell account admins by email or in the app.</p>` },
+  support: { title: 'Help & support', body: html`
+    <p>We're here to help with anything in Keystone: setting up your company, inviting your crew, estimates, invoicing and your plan.</p>
+    <h2>Contact us</h2>
+    <p>Email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> and we'll reply within one business day. Include your company name and what you were trying to do.</p>
+    <h2>Common questions</h2>
+    <ul>
+      <li><strong>Forgot your password?</strong> Use <a href="/forgot">Reset your password</a> and we'll email you a link.</li>
+      <li><strong>Joining your company?</strong> Create an account, then enter the join code your admin gives you.</li>
+      <li><strong>Getting paid online?</strong> Admins connect their own Stripe account in Company profile. Payments go straight to you.</li>
+      <li><strong>Changing or cancelling your plan?</strong> Admins can do it any time in Account, then Plan &amp; billing.</li>
+      <li><strong>Deleting your account or data?</strong> See <a href="/data-deletion">how to delete your data</a>.</li>
+    </ul>` },
+  'data-deletion': { title: 'Delete your data', body: html`
+    <p>You can delete your Keystone data yourself at any time. Deletion can't be undone.</p>
+    <h2>Delete your account</h2>
+    <ol>
+      <li>Log in and open <strong>Account</strong> (your initial at the top of the screen).</li>
+      <li>Choose <strong>Delete account</strong> at the bottom and confirm.</li>
+    </ol>
+    <p>This removes your login, your profile and your access to every company. If you're the only admin of a company that has other people on it, make someone else an admin or delete the company first. Records a company keeps about work you did for it (such as jobs and hours) stay with that company, without your name or email.</p>
+    <h2>Delete a company</h2>
+    <p>Admins can open <strong>Company profile</strong> and choose <strong>Delete company</strong>. This permanently deletes all of that company's clients, estimates, jobs, photos, receipts, invoices and payments records, and cancels its paid plan. Payments already collected in your own Stripe account stay there.</p>
+    <h2>Can't log in?</h2>
+    <p>Email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> from the address on your account and we'll delete it within 30 days. Copies in our backups are erased within 30 days of deletion.</p>` },
   terms: { title: 'Terms of Use', body: html`
     <p>These terms are an agreement between you (and the company you use Keystone for) and Keystone ("we", "us"). By creating an account or using Keystone, you agree to them.</p>
     <h2>Your account</h2>
@@ -533,8 +566,40 @@ function legalPage(kind) {
     <h1>${d.title}</h1><p class="muted">Keystone · Last updated ${LEGAL_UPDATED}</p>
     ${d.body}
     <h2>Contact</h2><p>Questions or requests: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
-    <p class="muted" style="margin-top:28px"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Use</a></p>
+    ${footerLinks()}
   </div>`, { bare: true, docTitle: `${d.title} · Keystone` });
+}
+const footerLinks = () => html`<p class="muted footer-links"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/support">Support</a> · <a href="/data-deletion">Delete your data</a></p>`;
+
+// Public home page for people who aren't logged in (also what app stores and Google/Meta reviewers see).
+const FEATURES = [
+  ['file', 'Estimates that close', 'Good, better and best options, a link your client approves and signs on their phone, and the deposit invoiced automatically.'],
+  ['calendar', 'Schedule and crew', 'Jobs on a calendar, crew assigned in a tap, and each person sees only their own jobs, address and scope.'],
+  ['check', 'Time clock and payouts', 'W-2 crew clock in on the job; subcontractors get fixed payouts. Labor lands on the job automatically.'],
+  ['card', 'Invoices and payments', 'Deposits and progress invoices paid online by card or bank, straight to your own Stripe account.'],
+  ['camera', 'Photos and receipts', 'Before and after photos and expense receipts stored right on the job.'],
+  ['briefcase', 'Know your numbers', 'Real gross profit on every job and revenue by month, so you see which work pays.'],
+];
+function landingPage() {
+  return layout('Keystone', html`<div class="landing">
+    <header class="lp-top"><a class="lp-brand" href="/"><span class="mark">${LOGO}</span>Keystone</a>
+      <nav><a href="/login">Log in</a><a class="btn sm" href="/signup">Start free</a></nav></header>
+    <section class="lp-hero">
+      <h1>Run your crews, estimates and payments in one place.</h1>
+      <p>Keystone is field service software for painters, remodelers, flooring and other trade contractors. Win the job, schedule the crew, track the cost and get paid.</p>
+      <div class="lp-cta"><a class="btn" href="/signup">Start free</a><a class="btn secondary" href="/login">Log in</a></div>
+      <p class="hint">Free for one person. No credit card needed.</p>
+    </section>
+    <section class="lp-grid">${FEATURES.map(([ic, t, d]) => html`<div class="card"><span class="icon-bubble">${icon(ic)}</span><h3>${t}</h3><p>${d}</p></div>`)}</section>
+    <section class="lp-pricing"><h2>Simple pricing</h2>
+      <div class="lp-grid">
+        <div class="card"><h3>Free</h3><div class="lp-price">$0</div><p>One person running their own business.</p></div>
+        <div class="card"><h3>Team</h3><div class="lp-price">${dollars(PRICES.team.month)}<span>/mo</span></div><p>Up to 3 admins and 10 crew. ${dollars(PRICES.team.year)} a year if you pay yearly.</p></div>
+        <div class="card"><h3>Unlimited</h3><div class="lp-price">${dollars(PRICES.unlimited.month)}<span>/mo</span></div><p>Unlimited admins and crew. ${dollars(PRICES.unlimited.year)} a year if you pay yearly.</p></div>
+      </div>
+      <p class="hint">50% off your first month on monthly plans.</p></section>
+    <footer class="lp-foot">${footerLinks()}<p class="muted">© ${new Date().getFullYear()} Keystone · <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></footer>
+  </div>`, { bare: true, docTitle: 'Keystone · Field service software for trade contractors' });
 }
 
 // ---------- Auth & onboarding ----------
@@ -557,8 +622,40 @@ function loginPage({ error, notice, email = '' } = {}) {
       <input id="password" name="password" type="password" autocomplete="current-password" required>
       <div class="form-actions"><button type="submit">Log in</button></div>
     </form>
+    <p class="alt"><a href="/forgot">Forgot your password?</a></p>
     <p class="alt">New here? <a href="/signup">Create an account</a></p>
-    <p class="hint" style="text-align:center"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>`);
+    <div style="text-align:center">${footerLinks()}</div>`);
+}
+
+function forgotPage({ sent = false, error, email = '' } = {}) {
+  return authPage('Reset your password', 'We\'ll email you a link to choose a new one.', html`
+    ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
+    ${sent ? html`<div class="notice">If there's a Keystone account for ${email}, a reset link is on its way. Check your inbox and spam folder.</div>` : html`
+    <form method="post" action="/forgot" class="form-card" novalidate>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="email" inputmode="email" value="${email}" required autofocus>
+      <div class="form-actions"><button type="submit">Email me a link</button></div>
+    </form>`}
+    <p class="alt"><a href="/login">Back to log in</a></p>`);
+}
+
+// The emailed link lands here with the one-time token in the address's #fragment, which only the browser sees.
+function resetPage({ error, token = '' } = {}) {
+  return authPage('Choose a new password', 'At least 8 characters.', html`
+    ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
+    <div class="errors" role="alert" id="link-error" style="display:none">This reset link is invalid or has expired. <a href="/forgot">Get a new link</a>.</div>
+    <form method="post" action="/reset" class="form-card" id="reset-form" novalidate>
+      <input type="hidden" name="token" id="token" value="${token}">
+      <label for="password">New password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" required>
+      <div class="form-actions"><button type="submit">Save new password</button></div>
+    </form>
+    <p class="alt"><a href="/login">Back to log in</a></p>
+    <script>${raw(`(function () {
+      var h = new URLSearchParams(location.hash.slice(1)); var t = h.get('access_token');
+      if (t && h.get('type') === 'recovery') { document.getElementById('token').value = t; history.replaceState(null, '', location.pathname); }
+      else if (!document.getElementById('token').value) { document.getElementById('link-error').style.display = ''; document.getElementById('reset-form').style.display = 'none'; }
+    })();`)}</script>`);
 }
 
 function signupPage({ errors = {}, values = {} } = {}) {
@@ -633,7 +730,39 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
   <div class="actions">
     <a class="btn secondary" href="/welcome">${icon('key')}Join or create a company</a>
   </div>
-  <form method="post" action="/logout"><button type="submit" class="danger block">${icon('logout')}Log out</button></form>`, { flash });
+  <form method="post" action="/logout"><button type="submit" class="danger block">${icon('logout')}Log out</button></form>
+  <p class="hint" style="text-align:center;margin-top:18px"><a href="/account/delete" id="delete-account" style="color:var(--red)">Delete account</a></p>
+  <div style="text-align:center">${footerLinks()}</div>`, { flash });
+}
+
+// Deleting your own account (required by the app stores). Blocked while you're the only admin of a company with other people.
+function deleteAccountPage({ user, blockers = [], companies = [], error }) {
+  return layout('Delete account', html`
+  ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
+  ${blockers.length ? html`<div class="card">
+    <h3>First, hand off or delete your company</h3>
+    <p>You're the only admin of ${blockers.map((b, i) => html`${i ? ', ' : ''}<strong>${b.name}</strong>`)}, which has other people on it.
+      Make someone else an admin on the Team page, or delete the company in Company profile, then come back here.</p>
+  </div>` : html`<form method="post" action="/account/delete" class="form-card" novalidate>
+    <p style="margin-top:0">This permanently deletes the Keystone login for <strong>${user.email}</strong> and your profile, and removes you from every company. It can't be undone.</p>
+    ${companies.length ? html`<p>Because you're the only person in it, this also deletes ${companies.map((c, i) => html`${i ? ', ' : ''}<strong>${c.name}</strong>`)} and all of its records, and cancels its paid plan.</p>` : ''}
+    <p class="muted">Records other companies keep about work you did for them (such as jobs and hours) stay with them, without your name or email.</p>
+    <label for="confirm">Type DELETE to confirm</label>
+    <input id="confirm" name="confirm" autocomplete="off" autocapitalize="characters">
+    <div class="form-actions"><a class="btn secondary" href="/account">Cancel</a><button type="submit" class="danger">Delete my account</button></div>
+  </form>`}`, { back: { href: '/account', label: 'Account' } });
+}
+
+function deleteCompanyPage({ org, error }) {
+  return layout('Delete company', html`
+  ${error ? html`<div class="errors" role="alert">${error}</div>` : ''}
+  <form method="post" action="/settings/delete-company" class="form-card" novalidate>
+    <p style="margin-top:0">This permanently deletes <strong>${org.name}</strong> for everyone on its team: all clients, estimates, jobs, photos, receipts, time entries, invoices and payment records. Its paid plan is cancelled. It can't be undone.</p>
+    <p class="muted">Payments already collected stay in your own Stripe account. Your login stays, so you can still use other companies or start a new one.</p>
+    <label for="confirm">Type the company name to confirm</label>
+    <input id="confirm" name="confirm" autocomplete="off" placeholder="${org.name}">
+    <div class="form-actions"><a class="btn secondary" href="/settings">Cancel</a><button type="submit" class="danger">Delete company</button></div>
+  </form>`, { back: { href: '/settings', label: 'Company profile' } });
 }
 
 // ---------- Company profile ----------
@@ -661,7 +790,7 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
       <div class="two stack"><div>${input('phone', 'Phone', values, errors, { type: 'tel', inputmode: 'tel' })}</div>
       <div>${input('email', 'Email', values, errors, { type: 'email', inputmode: 'email' })}</div></div>
       ${input('address', 'Business address', values, errors)}
-      <div class="two stack"><div>${input('website', 'Website', values, errors, { placeholder: 'vistaartisans.com' })}</div>
+      <div class="two stack"><div>${input('website', 'Website', values, errors, { placeholder: 'yourcompany.com' })}</div>
       <div>${input('license_number', 'License number', values, errors)}</div></div>
     </div>
     <div class="form-card">
@@ -673,6 +802,9 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
   </form>
   ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
   ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled) : ''}
+  <h2>Danger zone</h2>
+  <div class="list"><a class="li" href="/settings/delete-company" id="delete-company"><div class="main-t"><div class="t" style="color:var(--red)">Delete company</div>
+    <div class="s">Permanently delete ${org.name} and all of its records</div></div>${chev()}</a></div>
   <script>${raw(LOGO_JS)}</script>`, { flash, back: { href: '/account', label: 'Account' } });
 }
 
@@ -1878,5 +2010,5 @@ function messagePage(title, message) {
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
-  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage,
+  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage,
 };

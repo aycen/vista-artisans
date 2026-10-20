@@ -64,7 +64,16 @@ join as workers and an admin can promote them. Admins can also add someone who a
    Render shows at your domain registrar. Render adds `www.keystonefsm.com` too and redirects it. Wait until both show **Verified**.
 2. In Render → **Environment**, set `APP_URL` to `https://keystonefsm.com`. Once keystonefsm.com opens the app, also set
    `FORWARD_TO_APP_URL` to `1` so pages opened on the old `onrender.com` address move there (webhooks and `/healthz` keep working on both).
-3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to `https://keystonefsm.com/login`.
+3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to `https://keystonefsm.com/login` and add
+   `https://keystonefsm.com/reset` under **Redirect URLs** (the password reset link returns there).
+
+### Account deletion and password reset
+
+People can delete their own account (Account → Delete account) and admins can delete their company (Company profile → Delete company),
+as the App Store, Google Play and Meta require. Deleting a login needs Supabase's secret key: in Supabase → **Project Settings → API Keys**,
+copy the **secret** key (`sb_secret_...`, or the legacy `service_role` key) and set it in Render as `SUPABASE_SERVICE_ROLE_KEY`.
+Never put it anywhere else. Password reset emails are sent by Supabase Auth; to send them from your own domain, set up custom SMTP
+in Supabase → **Authentication → Emails** (Resend works: host `smtp.resend.com`, user `resend`, password = a Resend API key).
 
 On a phone, use the browser's **Add to Home Screen** to get an app icon that opens full screen.
 
