@@ -62,8 +62,8 @@ join as workers and an admin can promote them. Admins can also add someone who a
 
 1. In Render, open the service → **Settings → Custom Domains → Add**, enter `keystonefsm.com` and add the DNS records
    Render shows at your domain registrar. Render adds `www.keystonefsm.com` too and redirects it. Wait until both show **Verified**.
-2. In Render → **Environment**, set `APP_URL` to `https://keystonefsm.com`. Pages opened on the old `onrender.com` address then
-   move to keystonefsm.com (webhooks and `/healthz` keep working on both).
+2. In Render → **Environment**, set `APP_URL` to `https://keystonefsm.com`. Once keystonefsm.com opens the app, also set
+   `FORWARD_TO_APP_URL` to `1` so pages opened on the old `onrender.com` address move there (webhooks and `/healthz` keep working on both).
 3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to `https://keystonefsm.com/login`.
 
 On a phone, use the browser's **Add to Home Screen** to get an app icon that opens full screen.

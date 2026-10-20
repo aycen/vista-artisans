@@ -13,7 +13,8 @@ const crypto = require('node:crypto');
 const PORT = Number(process.env.PORT || 3000);
 const APP_TIMEZONE = process.env.APP_TIMEZONE || 'America/Los_Angeles'; // decides which payments count as "this month"
 const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
-const CANONICAL = (() => { try { const u = new URL(process.env.APP_URL); return /\.onrender\.com$/i.test(u.hostname) ? null : u; } catch { return null; } })();
+// Forwarding from onrender.com to the custom domain is switched on separately (FORWARD_TO_APP_URL=1), only once the domain works.
+const CANONICAL = (() => { try { const u = new URL(process.env.APP_URL); return process.env.FORWARD_TO_APP_URL !== '1' || /\.onrender\.com$/i.test(u.hostname) ? null : u; } catch { return null; } })();
 
 // ---------- responses ----------
 // Handlers return a response; it is sent only after the request's database transaction commits.
@@ -1316,7 +1317,7 @@ async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const cookies = parseCookies(req);
 
-  // Once APP_URL is the custom domain (https://keystonefsm.com), pages opened on the old onrender.com address move there.
+  // Once APP_URL is the custom domain (https://keystonefsm.com) and forwarding is on, pages opened on the old onrender.com address move there.
   // Webhooks (POST) and the health check keep working on either address.
   if (CANONICAL && ['GET', 'HEAD'].includes(req.method) && url.pathname !== '/healthz'
     && /\.onrender\.com$/i.test(String(req.headers.host || '').split(':')[0]) && req.headers.host !== CANONICAL.host) {
