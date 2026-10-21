@@ -209,6 +209,10 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
     payments: await db.all(`SELECT payments.*, invoices.number AS invoice_number FROM payments
       LEFT JOIN invoices ON invoices.payment_id = payments.id WHERE payments.job_id = ? ORDER BY payments.paid_on, payments.id`, id),
     crew: await db.all('SELECT * FROM job_team(?)', id),
+    subCrew: await db.all(`SELECT a.sub_id, a.payout_cents, s.name, s.company, s.email, s.phone FROM sub_assignments a
+      JOIN subcontractors s ON s.id = a.sub_id WHERE a.job_id = ? ORDER BY lower(s.name)`, id),
+    subs: await db.all('SELECT id, name, company FROM subcontractors WHERE org_id = ? ORDER BY lower(name)', org),
+    canEmail: email.configured(),
     members: await db.all(`SELECT m.*, coalesce(p.pay_type, 'sub') AS pay_type, p.hourly_rate_cents FROM org_members(?) m
       LEFT JOIN member_pay p ON p.org_id = ? AND p.user_id = m.user_id`, org, org),
     photos: await photosFor(db, id),
@@ -741,10 +745,19 @@ route('POST', '/jobs/:id/assignments', async ({ db, org, id, form }) => {
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
   const values = { user_id: str(form.get('user_id'), 64), payout: form.get('payout') ?? '' };
   const errors = {};
-  if (!UUID_RE.test(values.user_id)) errors.user_id = 'Choose who to assign.';
+  const subId = /^sub:(\d{1,15})$/.exec(values.user_id)?.[1];
+  if (!UUID_RE.test(values.user_id) && !subId) errors.user_id = 'Choose who to assign.';
   const amt = String(values.payout).trim() === '' ? { value: 0 } : parseMoney(values.payout, 'Payout');
   if (amt.error) errors.payout = amt.error;
   if (hasErrors(errors)) return renderJob(db, org.org_id, id, { forms: { assign: { values, errors } } }, 422);
+  if (subId) {
+    if (!(await db.get('SELECT id FROM subcontractors WHERE id = ? AND org_id = ?', Number(subId), org.org_id))) {
+      return renderJob(db, org.org_id, id, { forms: { assign: { values, errors: { user_id: 'Choose who to assign.' } } } }, 422);
+    }
+    await db.run(`INSERT INTO sub_assignments (org_id, job_id, sub_id, payout_cents) VALUES (?, ?, ?, ?)
+      ON CONFLICT (job_id, sub_id) DO UPDATE SET payout_cents = excluded.payout_cents, updated_at = now()`, org.org_id, id, Number(subId), amt.value);
+    return redirect(`/jobs/${id}?msg=Payout+saved`);
+  }
   const r = await attempt(db, () => db.run(`INSERT INTO job_assignments (org_id, job_id, user_id, payout_cents) VALUES (?, ?, ?, ?)
     ON CONFLICT (job_id, user_id) DO UPDATE SET payout_cents = excluded.payout_cents, updated_at = now()`,
   org.org_id, id, values.user_id, amt.value));
@@ -773,6 +786,27 @@ route('POST', '/jobs/:id/assignments/remove', async ({ db, org, id, url }) => {
   const userId = url.searchParams.get('user_id');
   if (!(await loadAssignment(db, org, id, userId))) return notFound();
   await db.run('DELETE FROM job_assignments WHERE job_id = ? AND user_id = ?', id, userId);
+  return redirect(`/jobs/${id}?msg=Assignment+removed`);
+});
+
+// Taking a subcontractor (without an account) off a job
+async function loadSubAssignment(db, org, id, subId) {
+  if (!/^\d{1,15}$/.test(subId || '')) return null;
+  return db.get(`SELECT a.*, s.name, j.project_name FROM sub_assignments a JOIN subcontractors s ON s.id = a.sub_id JOIN jobs j ON j.id = a.job_id
+    WHERE a.job_id = ? AND a.sub_id = ? AND a.org_id = ?`, id, Number(subId), org.org_id);
+}
+route('GET', '/jobs/:id/subs/remove', async ({ db, org, id, url }) => {
+  const subId = url.searchParams.get('sub_id');
+  const a = await loadSubAssignment(db, org, id, subId);
+  if (!a) return notFound();
+  return ok(v.confirmPage({ title: 'Remove this assignment?', button: 'Yes, remove',
+    action: `/jobs/${id}/subs/remove?sub_id=${a.sub_id}`, cancelHref: `/jobs/${id}`,
+    message: `${a.name} will be taken off "${a.project_name}" and their payout record deleted.` }));
+});
+route('POST', '/jobs/:id/subs/remove', async ({ db, org, id, url }) => {
+  const a = await loadSubAssignment(db, org, id, url.searchParams.get('sub_id'));
+  if (!a) return notFound();
+  await db.run('DELETE FROM sub_assignments WHERE job_id = ? AND sub_id = ?', id, a.sub_id);
   return redirect(`/jobs/${id}?msg=Assignment+removed`);
 });
 
@@ -912,7 +946,10 @@ async function renderTeam(db, org, user, extra = {}, status = 200) {
     FROM org_members(?) m LEFT JOIN member_pay p ON p.org_id = ? AND p.user_id = m.user_id`, org.org_id, org.org_id, org.org_id, org.org_id, org.org_id);
   const joinCode = org.role === 'admin' ? (await db.get('SELECT org_join_code(?) AS code', org.org_id)).code : null;
   const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
-  return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, ...extra }));
+  const subs = await db.all(`SELECT s.*, (SELECT count(*)::int FROM sub_assignments a WHERE a.sub_id = s.id) AS job_count,
+      (SELECT coalesce(sum(a.payout_cents), 0) FROM sub_assignments a JOIN jobs j ON j.id = a.job_id WHERE a.sub_id = s.id AND j.status = 'completed') AS earned_cents
+    FROM subcontractors s WHERE s.org_id = ? ORDER BY lower(s.name)`, org.org_id);
+  return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, subs, ...extra }));
 }
 route('GET', '/team', ({ db, org, user, url }) => renderTeam(db, org, user, { flash: url.searchParams.get('msg') }), { worker: true });
 route('POST', '/team/add', async ({ db, org, user, form }) => {
@@ -925,6 +962,59 @@ route('POST', '/team/add', async ({ db, org, user, form }) => {
     return renderTeam(db, org, user, { values: { email, role }, errors: { email: dbMessage(r.error) } }, 422);
   }
   return redirect('/team?msg=Teammate+added');
+});
+// Subcontractors without accounts
+function validateSub(f) {
+  const values = { name: str(f.get('name'), 200), company: str(f.get('company'), 200), email: str(f.get('email'), 200), phone: str(f.get('phone'), 50) };
+  const errors = {};
+  if (!values.name) errors.name = 'Name is required.';
+  if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = 'Email address does not look valid.';
+  if (values.phone && !/^[0-9+().\-\s x]{7,}$/i.test(values.phone)) errors.phone = 'Phone number does not look valid.';
+  return { values, errors };
+}
+route('POST', '/team/subs', async ({ db, org, user, form }) => {
+  const { values, errors } = validateSub(form);
+  if (hasErrors(errors)) return renderTeam(db, org, user, { subForm: { values, errors } }, 422);
+  const r = await db.run('INSERT INTO subcontractors (org_id, name, company, email, phone) VALUES (?, ?, ?, ?, ?) RETURNING id',
+    org.org_id, values.name, values.company, values.email, values.phone);
+  return redirect(`/team/subs/${r.id}?msg=Subcontractor+added`);
+});
+async function renderSub(db, org, id, extra = {}, status = 200) {
+  const sub = await db.get('SELECT * FROM subcontractors WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!sub) return notFound();
+  const jobs = await db.all(`SELECT jobs.id, jobs.project_name, jobs.status, jobs.start_date, jobs.end_date, clients.name AS client_name, a.payout_cents
+    FROM sub_assignments a JOIN jobs ON jobs.id = a.job_id JOIN clients ON clients.id = jobs.client_id WHERE a.sub_id = ?
+    ORDER BY jobs.status = 'completed', coalesce(jobs.end_date, jobs.start_date) DESC NULLS LAST, jobs.id DESC`, id);
+  const sum = (list) => list.reduce((t, j) => t + j.payout_cents, 0);
+  const totals = { earned: sum(jobs.filter((j) => j.status === 'completed')), upcoming: sum(jobs.filter((j) => j.status !== 'completed')) };
+  const members = await db.all('SELECT * FROM org_members(?)', org.org_id);
+  return page(status, v.subPage({ sub, jobs, totals, members, ...extra }));
+}
+route('GET', '/team/subs/:id', ({ db, org, id, url }) => renderSub(db, org, id, { flash: url.searchParams.get('msg') }));
+route('POST', '/team/subs/:id', async ({ db, org, id, form }) => {
+  if (!(await db.get('SELECT id FROM subcontractors WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
+  const { values, errors } = validateSub(form);
+  if (hasErrors(errors)) return renderSub(db, org, id, { form: { values, errors } }, 422);
+  await db.run('UPDATE subcontractors SET name = ?, company = ?, email = ?, phone = ?, updated_at = now() WHERE id = ?',
+    values.name, values.company, values.email, values.phone, id);
+  return redirect(`/team/subs/${id}?msg=Saved`);
+});
+route('POST', '/team/subs/:id/link', async ({ db, org, id, form }) => {
+  const userId = str(form.get('user_id'), 64);
+  if (!UUID_RE.test(userId)) return renderSub(db, org, id, { errors: { link: 'Choose their account.' } }, 422);
+  const r = await attempt(db, () => db.run('SELECT link_subcontractor(?, ?::uuid)', id, userId));
+  if (r.error) {
+    if (!dbMessage(r.error)) throw r.error;
+    return renderSub(db, org, id, { errors: { link: dbMessage(r.error) } }, 422);
+  }
+  return redirect(`/team/${userId}?msg=Linked.+Their+jobs+and+pay+are+on+their+account+now.`);
+});
+route('POST', '/team/subs/:id/delete', async ({ db, org, id }) => {
+  const sub = await db.get('SELECT * FROM subcontractors WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!sub) return notFound();
+  if (await db.get('SELECT 1 FROM sub_assignments WHERE sub_id = ?', id)) return renderSub(db, org, id, { errors: { del: 'Remove them from their jobs first.' } }, 409);
+  await db.run('DELETE FROM subcontractors WHERE id = ?', id);
+  return redirect('/team?msg=Subcontractor+deleted#subs');
 });
 route('POST', '/team/role', async ({ db, org, user, form }) => {
   const r = await attempt(db, () => db.run('SELECT set_member_role(?, ?::uuid, ?)', org.org_id, str(form.get('user_id'), 64), str(form.get('role'), 20)));
@@ -1211,15 +1301,41 @@ route('GET', '/estimates/:id/pdf', async ({ db, org, id }) => {
 route('GET', '/jobs/:id/work-order', async ({ db, org, id, url }) => {
   const job = await db.get('SELECT * FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id);
   if (!job) return notFound();
-  const who = url.searchParams.get('user_id');
-  let assignee = null;
-  if (who) {
-    assignee = /^[0-9a-f-]{36}$/.test(who) ? await db.get('SELECT * FROM job_team(?) WHERE user_id = ?::uuid', id, who) : null;
-    if (!assignee) return notFound();
-  }
+  const assignee = await workOrderAssignee(db, id, url.searchParams);
+  if (assignee === undefined) return notFound();
   const buf = await pdf.workOrderPdf({ company: await companyFor(db, org), job, assignee,
     client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id) });
   return pdfResponse(buf, `Work order WO-${id} ${job.project_name}`);
+});
+// Who a work order is for: a teammate (user_id), a subcontractor without an account (sub_id), or nobody (the general one).
+// undefined = asked for someone who isn't on this job.
+async function workOrderAssignee(db, jobId, params) {
+  const uid = params.get('user_id'); const subId = params.get('sub_id');
+  if (uid) return (UUID_RE.test(uid) && (await db.get('SELECT * FROM job_team(?) WHERE user_id = ?::uuid', jobId, uid))) || undefined;
+  if (subId) {
+    const s = /^\d{1,15}$/.test(subId) && await db.get(`SELECT s.name AS full_name, s.email, s.phone, a.payout_cents, 0 AS labor_cents
+      FROM sub_assignments a JOIN subcontractors s ON s.id = a.sub_id WHERE a.job_id = ? AND a.sub_id = ?`, jobId, Number(subId));
+    return s || undefined;
+  }
+  return null;
+}
+route('POST', '/jobs/:id/work-order/send', async ({ db, org, id, form }) => {
+  const job = await db.get('SELECT * FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!job) return notFound();
+  const assignee = await workOrderAssignee(db, id, form);
+  if (!assignee) return notFound();
+  const back = (msg) => redirect(`/jobs/${id}?msg=${encodeURIComponent(msg)}`);
+  if (!email.configured()) return back('Email sending is not set up for this app yet. Download the work order and send it yourself.');
+  if (!email.validEmail(assignee.email)) return back(`Add an email address for ${assignee.full_name || 'them'} first.`);
+  const company = await companyFor(db, org);
+  const buf = await pdf.workOrderPdf({ company, job, assignee, client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id) });
+  const result = await asServer(async (sdb) => {
+    const c = await mailer.companyOf(sdb, org.org_id);
+    const t = mailer.templates.work_order({ company: c, job, name: assignee.full_name || assignee.email, payout: assignee.payout_cents });
+    return mailer.deliver(sdb, { orgId: org.org_id, kind: 'work_order', to: assignee.email, ...t, company: c, jobId: id,
+      attachments: [{ filename: `Work order WO-${id}.pdf`, content: buf }] });
+  });
+  return back(result.ok ? `Work order emailed to ${assignee.email}` : `The work order could not be sent: ${result.error}`);
 });
 
 // Joining or creating a company, and the account page (these work before the user belongs to one)
@@ -1526,7 +1642,7 @@ async function health() {
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
         to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
         to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion,
-        to_regclass('public.sms_senders') IS NOT NULL AS texting`);
+        to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1538,6 +1654,7 @@ async function health() {
       if (!r.rows[0].time_clock) throw new Error('Run supabase/migrations/0013_time_clock_photos.sql in the Supabase SQL Editor.');
       if (!r.rows[0].deletion) throw new Error('Run supabase/migrations/0014_account_deletion.sql in the Supabase SQL Editor.');
       if (!r.rows[0].texting) throw new Error('Run supabase/migrations/0015_text_messages.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].subs) throw new Error('Run supabase/migrations/0016_subcontractors.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };

@@ -10,7 +10,8 @@ const validEmail = (e) => /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(Strin
 // Display names can't carry quotes, angle brackets or line breaks.
 const displayName = (name) => String(name || 'Keystone').replace(/["<>\r\n\\]/g, '').slice(0, 80).trim() || 'Keystone';
 
-async function send({ fromName, to, replyTo, subject, html, text }) {
+// attachments: [{ filename, content: Buffer }]
+async function send({ fromName, to, replyTo, subject, html, text, attachments = [] }) {
   if (!configured()) throw new Error('Email is not set up.');
   const res = await fetch(`${API}/emails`, {
     method: 'POST',
@@ -18,6 +19,7 @@ async function send({ fromName, to, replyTo, subject, html, text }) {
     body: JSON.stringify({
       from: `${displayName(fromName)} <${FROM}>`, to: [to], subject: String(subject).replace(/[\r\n]+/g, ' ').slice(0, 200),
       html, text, ...(validEmail(replyTo) ? { reply_to: replyTo } : {}),
+      ...(attachments.length ? { attachments: attachments.map((a) => ({ filename: a.filename, content: a.content.toString('base64') })) } : {}),
     }),
     signal: AbortSignal.timeout(15_000),
   });

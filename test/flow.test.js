@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -1317,5 +1317,75 @@ test('text message follow-ups: optional, only with consent and a registered send
     assert.equal(twilio.sent.length, 2, 'no text after STOP');
   } finally {
     await stop(); await start(); await twilio.close();
+  }
+});
+test('subcontractors without accounts: on the team, assigned to jobs, work orders by email, linked when they sign up', async () => {
+  const mail = await startFakeEmail('re_test_key');
+  const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
+  await stop();
+  await start({ RESEND_API_KEY: 're_test_key', EMAIL_FROM: 'estimates@vista.test', EMAIL_API_BASE: mail.url, APP_URL: BASE });
+  try {
+    as('june'); await post('/signup', { email: 'june@keystone.test', password: 'june-password' });
+    await post('/org/new', { name: 'June Floors' });
+    const org = (await q("SELECT id FROM organizations WHERE name = 'June Floors'"))[0].id;
+
+    // Add a sub (name required, email checked); the Team page lists them
+    let r = await post('/team/subs', { name: '', email: 'nope' });
+    assert.equal(r.status, 422); assert.match(r.body, /Name is required/); assert.match(r.body, /does not look valid/);
+    r = await post('/team/subs', { name: 'Leo Tile', company: 'Leo Tile LLC', email: 'leo@tile.test', phone: '717-555-0199' });
+    const leo = idFrom(r.location); assert.match(r.location, /^\/team\/subs\/\d+/);
+    assert.match((await getPage('/team')).body, /Leo Tile/);
+
+    // A job, with Leo assigned at $1,200
+    r = await post('/clients', { name: 'Ann Cole' }); const ann = idFrom(r.location);
+    r = await post('/estimates', new URLSearchParams([['client_id', String(ann)], ['status', 'approved'], ['deposit_percent', '0'], ['address', '9 Oak St'],
+      ['item_desc', 'Kitchen tile'], ['item_qty', '1'], ['item_price', '4000']]));
+    r = await post(`/estimates/${idFrom(r.location)}/convert`, {}); const job = idFrom(r.location);
+    r = await post(`/jobs/${job}/assignments`, { user_id: `sub:${leo}`, payout: '1200' }); assert.equal(r.status, 303);
+    r = await post(`/jobs/${job}/assignments`, { user_id: 'sub:999999', payout: '5' }); assert.equal(r.status, 422);
+    assert.equal((await q('SELECT payouts_cents::int FROM job_totals WHERE job_id = $1', [job]))[0].payouts_cents, 120000);
+    let page = (await getPage(`/jobs/${job}`)).body;
+    assert.match(page, /Leo Tile/); assert.match(page, new RegExp(`work-order\\?sub_id=${leo}`));
+    assert.match((await getPage(`/team/subs/${leo}`)).body, /Kitchen tile|9 Oak St/);
+
+    // Work order: download, then email it with the PDF attached
+    r = await getPage(`/jobs/${job}/work-order?sub_id=${leo}`); assert.equal(r.type, 'application/pdf');
+    assert.equal((await getPage(`/jobs/${job}/work-order?sub_id=999999`)).status, 404);
+    r = await post(`/jobs/${job}/work-order/send`, { sub_id: String(leo) });
+    assert.match(decodeURIComponent(r.location), /Work order emailed to leo@tile\.test/);
+    const m = mail.sent.at(-1);
+    assert.deepEqual(m.to, ['leo@tile.test']); assert.match(m.subject, /[Ww]ork order/);
+    assert.equal(m.attachments[0].filename, `Work order WO-${job}.pdf`);
+    assert.ok(Buffer.from(m.attachments[0].content, 'base64').subarray(0, 5).toString() === '%PDF-');
+    assert.equal((await q("SELECT count(*)::int AS n FROM email_log WHERE org_id = $1 AND kind = 'work_order'", [org]))[0].n, 1);
+
+    // Can't delete while on a job; other companies can't see Leo
+    r = await post(`/team/subs/${leo}/delete`, {}); assert.equal(r.status, 409);
+    as('alice'); await post('/login', { email: 'alice@vista.test', password: 'alice-password' });
+    assert.equal((await getPage(`/team/subs/${leo}`)).status, 404);
+    assert.equal((await post(`/team/subs/${leo}/link`, { user_id: '00000000-0000-0000-0000-000000000000' })).status, 404);
+    assert.equal((await q('SELECT count(*)::int AS n FROM subcontractors WHERE id = $1', [leo]))[0].n, 1);
+    as('june');
+
+    // Leo signs up and joins; linking moves his job and pay onto his account
+    as('kim'); await post('/signup', { email: 'leo@tile.test', password: 'leo-password' });
+    const kim = (await q("SELECT id FROM auth.users WHERE email = 'leo@tile.test'"))[0].id;
+    await q("INSERT INTO org_subscriptions (org_id, plan, comped) VALUES ($1, 'team', true) ON CONFLICT (org_id) DO UPDATE SET plan = 'team', comped = true", [org]);
+    await q("INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, 'worker')", [org, kim]);
+    as('june');
+    assert.match((await getPage(`/team/subs/${leo}`)).body, /id="link-suggestion"/);
+    r = await post(`/team/subs/${leo}/link`, { user_id: kim }); assert.match(r.location, new RegExp(`/team/${kim}`));
+    assert.equal((await q('SELECT count(*)::int AS n FROM subcontractors WHERE org_id = $1', [org]))[0].n, 0);
+    assert.equal((await q('SELECT payout_cents::int FROM job_assignments WHERE job_id = $1 AND user_id = $2', [job, kim]))[0].payout_cents, 120000);
+    assert.equal((await q('SELECT payouts_cents::int FROM job_totals WHERE job_id = $1', [job]))[0].payouts_cents, 120000);
+    as('kim'); assert.match((await getPage('/')).body, /Kitchen tile|9 Oak St/);
+
+    // A sub with no jobs can be deleted
+    as('june');
+    r = await post('/team/subs', { name: 'Max Drywall' }); const max = idFrom(r.location);
+    r = await post(`/team/subs/${max}/delete`, {}); assert.match(r.location, /^\/team/);
+    assert.equal((await getPage(`/team/subs/${max}`)).status, 404);
+  } finally {
+    await stop(); await start(); await mail.close();
   }
 });

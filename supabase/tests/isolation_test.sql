@@ -253,6 +253,27 @@ select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect((select count(*) from email_log) = 0, 'other companies cannot see email history');
 select pg_temp.expect((select count(*) from estimates where public_token is not null) = 0, 'other companies cannot see estimate links');
 
+-- Subcontractors without accounts: admins only, within their company
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+insert into subcontractors (org_id, name) values (current_setting('t.vista')::uuid, 'Leo Tile');
+select set_config('t.sub', (select id::text from subcontractors where name = 'Leo Tile'), false);
+insert into sub_assignments (org_id, job_id, sub_id, payout_cents)
+  select org_id, id, current_setting('t.sub')::bigint, 5000 from jobs where org_id = current_setting('t.vista')::uuid limit 1;
+select pg_temp.expect((select count(*) from sub_assignments) = 1, 'admins assign subs to jobs');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from subcontractors) = 0 and (select count(*) from sub_assignments) = 0, 'other companies cannot see subs');
+do $$ begin insert into subcontractors (org_id, name) values (current_setting('t.vista')::uuid, 'Spy'); raise exception 'should fail';
+  exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'other companies cannot add subs');
+select pg_temp.expect(pg_temp.fails(format('select link_subcontractor(%s, %L)', current_setting('t.sub'), '00000000-0000-0000-0000-00000000000b')), 'other companies cannot link a sub');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from subcontractors) = 0, 'crew cannot see subs');
+select pg_temp.expect(pg_temp.fails(format('select link_subcontractor(%s, %L)', current_setting('t.sub'), '00000000-0000-0000-0000-00000000000d')), 'crew cannot link a sub');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.expect(pg_temp.fails(format('select link_subcontractor(%s, %L)', current_setting('t.sub'), '00000000-0000-0000-0000-00000000000b')), 'subs link only to someone on the team');
+select link_subcontractor(current_setting('t.sub')::bigint, '00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from subcontractors) = 0 and (select count(*) from job_assignments where user_id = '00000000-0000-0000-0000-00000000000d' and payout_cents >= 5000) >= 1, 'linking moves the work to their account');
+
 -- Deleting: only an admin can delete their own company; deleting your account never touches a company others are in
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'other companies cannot delete a company');

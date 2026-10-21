@@ -46,11 +46,11 @@ async function companyOf(db, orgId) {
 }
 
 // Sends one email and records it in email_log (sent or failed). `db` must be able to write email_log (asServer).
-async function deliver(db, { orgId, kind, to, subject, content, company, estimateId = null, jobId = null }) {
+async function deliver(db, { orgId, kind, to, subject, content, company, estimateId = null, jobId = null, attachments = [] }) {
   const { html, text } = render(company, content);
   let providerId = ''; let error = '';
   try {
-    providerId = await email.send({ fromName: company.name, to, replyTo: company.email, subject, html, text });
+    providerId = await email.send({ fromName: company.name, to, replyTo: company.email, subject, html, text, attachments });
   } catch (e) {
     error = e.message.slice(0, 500);
     console.error(`Email (${kind}) to ${to} failed:`, error);
@@ -127,6 +127,15 @@ const templates = {
       heading: 'Thank you for choosing us',
       paragraphs: [`Hi ${firstName(client.name)},`, `Thanks for trusting ${company.name} with ${job.project_name}. If you were happy with the work, a quick review would mean a lot to our small business.`],
       button: { label: 'Leave a review', url: company.review_url },
+    },
+  }),
+  work_order: ({ company, job, name, payout }) => ({
+    subject: `Work order from ${company.name}: ${job.project_name}`,
+    content: {
+      heading: `Work order: ${job.project_name}`,
+      paragraphs: [`Hi ${firstName(name)},`,
+        `Here's the work order for ${job.project_name}${job.address ? ` at ${job.address}` : ''}${job.start_date ? `, starting ${longDate(job.start_date)}` : ''}. It's attached as a PDF with the scope of work${payout != null ? ' and the agreed pay' : ''}.`,
+        'Reply to this email with any questions.'],
     },
   }),
   estimate_approved: ({ company, estimate, client, job, total, deposit, base }) => ({

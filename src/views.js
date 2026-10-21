@@ -1011,7 +1011,7 @@ function billingPage({ org, sub, plan, counts, enabled, testMode, interval = 'mo
 }
 
 // ---------- Team ----------
-function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, flash }) {
+function teamPage({ org, members, me, joinCode, plan, subs = [], subForm = { values: {}, errors: {} }, errors = {}, values = {}, flash }) {
   const admin = org.role === 'admin';
   const room = admin ? seatsLeft(plan, members) : null;
   return layout('Team', html`
@@ -1040,7 +1040,20 @@ function teamPage({ org, members, me, joinCode, plan, errors = {}, values = {}, 
   </a>`))}</div>
   <p class="hint"><strong>Admins</strong> see and manage everything, including money and the team.
     <strong>Crew</strong> see only the jobs assigned to them (dates, address, scope of work and their own pay) and who is on the team.</p>
-  ${admin ? html`<form method="post" action="/team/add" class="form-card" novalidate>
+  ${admin ? html`<h2 id="subs">Subcontractors</h2>
+  ${subs.length ? html`<div class="list" id="sub-list">${subs.map((sb) => html`<a class="li" href="/team/subs/${sb.id}">
+    <span class="avatar">${(sb.name[0] || '?').toUpperCase()}</span>
+    <div class="main-t"><div class="t">${sb.name}</div><div class="s">${sb.company ? `${sb.company} · ` : ''}No account · ${sb.job_count} job${sb.job_count === 1 ? '' : 's'}</div></div>
+    <div class="r"><span class="amt">${fmt(sb.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
+  </a>`)}</div>` : html`<div class="empty">No subcontractors yet.</div>`}
+  <form method="post" action="/team/subs" class="form-card" novalidate id="add-sub">
+    <h3>Add a subcontractor</h3>
+    <div class="hint">For subs who don't use Keystone. Assign them to jobs with a fixed payout and email them work orders. They don't count toward your plan's crew limit.</div>
+    ${errorBox(subForm.errors)}
+    ${subFields(subForm.values, subForm.errors)}
+    <div class="form-actions"><button type="submit" class="secondary">Add subcontractor</button></div>
+  </form>
+  <form method="post" action="/team/add" class="form-card" novalidate>
     <h3>Add by email</h3>
     <div class="hint">For someone who already has an account.</div>
     ${input('email', 'Email', values, errors, { type: 'email', required: true, inputmode: 'email' })}
@@ -1096,6 +1109,55 @@ function memberPage({ org, member, me, jobs, totals, pay = { pay_type: 'sub' }, 
   ${member.user_id !== me ? html`<form method="post" action="/team/remove" data-confirm="Remove ${who(member)} from ${org.name}?">
     <input type="hidden" name="user_id" value="${member.user_id}"><button type="submit" class="danger block">Remove from ${org.name}</button></form>` : ''}`,
   { flash, back: { href: '/team', label: 'Team' } });
+}
+
+// Subcontractors without accounts (see migration 0016).
+function subFields(values = {}, errors = {}) {
+  return html`${input('name', 'Name', values, errors, { required: true, placeholder: 'e.g. Luis Arce' })}
+    ${input('company', 'Company', values, errors, { placeholder: 'e.g. Arce Drywall' })}
+    <div class="two stack"><div>${input('phone', 'Phone', values, errors, { type: 'tel', inputmode: 'tel' })}</div>
+    <div>${input('email', 'Email', values, errors, { type: 'email', inputmode: 'email', hint: 'Needed to email work orders.' })}</div></div>`;
+}
+function subPage({ sub, jobs, totals, members = [], form = null, errors = {}, flash }) {
+  const open = jobs.filter((j) => j.status !== 'completed');
+  const done = jobs.filter((j) => j.status === 'completed');
+  const rows = (list, empty) => (list.length ? html`<div class="list">${list.map((j) => html`<a class="li" href="/jobs/${j.id}">
+    <div class="main-t"><div class="t">${j.project_name}</div>
+      <div class="s">${j.client_name}${dateRange(j.start_date, j.end_date) ? ' · ' : ''}${dateRange(j.start_date, j.end_date)}</div></div>
+    <div class="r"><span class="amt">${fmt(j.payout_cents)}</span>${pill(j.status, JOB_STATUS)}</div>${chev()}</a>`)}</div>`
+    : html`<div class="empty">${empty}</div>`);
+  const match = members.find((m) => sub.email && m.email.toLowerCase() === sub.email.toLowerCase());
+  return layout(sub.name, html`
+  <p style="margin:0 2px 14px"><span class="pill">Subcontractor · no account</span>${sub.company ? html` <span class="muted" style="margin-left:6px">${sub.company}</span>` : ''}</p>
+  ${errorBox(errors)}
+  ${match ? html`<form method="post" action="/team/subs/${sub.id}/link" class="card" id="link-suggestion">
+    <input type="hidden" name="user_id" value="${match.user_id}">
+    <strong>${sub.name} has joined ${who(match) !== sub.name ? `as ${who(match)}` : 'Keystone'}</strong>
+    <p class="hint">Link them so their jobs and pay move to their account and they can see their jobs on their phone.</p>
+    <button type="submit">Link to their account</button></form>` : ''}
+  <div class="stats">
+    <div class="stat"><div class="k">Jobs completed</div><div class="v" data-k="jobs-done">${done.length}</div></div>
+    <div class="stat"><div class="k">Open jobs</div><div class="v" data-k="jobs-open">${open.length}</div></div>
+    <div class="stat"><div class="k">Pay on completed jobs</div><div class="v" data-k="earned">${fmt(totals.earned)}</div></div>
+    <div class="stat"><div class="k">Pay on open jobs</div><div class="v" data-k="upcoming">${fmt(totals.upcoming)}</div></div>
+  </div>
+  <h2>Open jobs</h2>${rows(open, 'No open jobs assigned. Assign them from a job\'s Crew & payouts section.')}
+  <h2>Completed jobs</h2>${rows(done, 'No completed jobs yet.')}
+  <h2>Details</h2>
+  <form method="post" action="/team/subs/${sub.id}" class="form-card" novalidate>
+    ${subFields(form ? form.values : sub, form ? form.errors : {})}
+    <div class="form-actions"><button type="submit" class="secondary">Save details</button></div>
+  </form>
+  ${members.length && !match ? html`<h2>Signed up?</h2>
+  <form method="post" action="/team/subs/${sub.id}/link" class="form-card" novalidate>
+    <div class="hint">Using Keystone is optional for subs. If ${sub.name} creates an account and joins with your company's code, link them here: their jobs and pay move to their account.</div>
+    <label for="link_user">Their account</label>
+    <select id="link_user" name="user_id"><option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}">${who(m)}${m.full_name ? ` (${m.email})` : ''}</option>`)}</select>
+    <div class="form-actions"><button type="submit" class="secondary">Link account</button></div>
+  </form>` : ''}
+  ${jobs.length ? html`<p class="hint">To delete ${sub.name}, first remove them from their jobs.</p>`
+    : html`<form method="post" action="/team/subs/${sub.id}/delete" data-confirm="Delete ${sub.name}?"><button type="submit" class="danger block">Delete subcontractor</button></form>`}`,
+  { flash, back: { href: '/team#subs', label: 'Team' } });
 }
 
 // ---------- Crew ----------
@@ -1492,7 +1554,7 @@ const ESTIMATE_JS = `
 const fmtWhen = (ts) => (ts ? new Intl.DateTimeFormat('en-US', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles',
   month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(ts)) : '');
 const EMAIL_KINDS = { estimate: 'Estimate sent', estimate_reminder: 'Follow-up', appointment_reminder: 'Appointment reminder',
-  review_request: 'Review request', estimate_approved: 'Approval notice to you', estimate_declined: 'Decline notice to you' };
+  review_request: 'Review request', estimate_approved: 'Approval notice to you', estimate_declined: 'Decline notice to you', work_order: 'Work order' };
 function emailHistory(emails) {
   if (!emails?.length) return '';
   return html`<h2>Messages</h2><div class="list" id="email-history">${emails.map((m) => html`<div class="li">
@@ -1796,7 +1858,7 @@ function jobsPage({ jobs, status, cal, flash }) {
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
 }
 
-function jobPage({ job, client, expenses, payments, crew = [], members = [], invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
+function jobPage({ job, client, expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes, address: job.address }, errors: {} };
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
@@ -1840,18 +1902,23 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
   </form>
 
   <h2>Crew & payouts</h2>
-  ${crew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
+  ${crew.length || subCrew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
     <span class="avatar">${initialOf(c)}</span>
     <div class="main-t"><div class="t">${who(c)}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : `${ROLES[c.role]} · ${payLabel(c)}`}${c.pay_type === 'w2' || c.minutes ? ` · ${fmtHours(c.minutes)} worked` : ''}</div></div>
-    <div class="r"><span class="amt">${fmt(c.payout_cents + c.labor_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?user_id=${c.user_id}">Work order</a> · <a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></span></div>
+    <div class="r"><span class="amt">${fmt(c.payout_cents + c.labor_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?user_id=${c.user_id}">Work order</a>${canEmail ? html` · ${sendWo(job.id, 'user_id', c.user_id)}` : ''} · <a href="/jobs/${job.id}/assignments/remove?user_id=${c.user_id}">Remove</a></span></div>
+  </div>`)}${subCrew.map((c) => html`<div class="li sub-row">
+    <span class="avatar">${(c.name[0] || '?').toUpperCase()}</span>
+    <div class="main-t"><div class="t"><a href="/team/subs/${c.sub_id}" style="color:inherit">${c.name}</a></div><div class="s">Subcontractor · no account${c.company ? ` · ${c.company}` : ''}</div></div>
+    <div class="r"><span class="amt">${fmt(c.payout_cents)}</span><span style="font-size:14px"><a href="/jobs/${job.id}/work-order?sub_id=${c.sub_id}">Work order</a>${canEmail && c.email ? html` · ${sendWo(job.id, 'sub_id', c.sub_id)}` : ''} · <a href="/jobs/${job.id}/subs/remove?sub_id=${c.sub_id}">Remove</a></span></div>
   </div>`)}</div>` : html`<div class="empty">Nobody assigned yet.</div>`}
-  ${members.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="form-card" novalidate>
+  ${members.length || subs.length ? html`<form method="post" action="/jobs/${job.id}/assignments" class="form-card" novalidate>
     <div class="two stack"><div><label for="assign_user">Person</label>
       <select id="assign_user" name="user_id" class="${inv(af.errors, 'user_id')}">
         <option value="">Choose…</option>${members.map((m) => html`<option value="${m.user_id}" ${af.values.user_id === m.user_id ? raw('selected') : ''}>${who(m)} (${m.pay_type === 'w2' ? 'W-2' : 'Sub'})</option>`)}
+        ${subs.length ? html`<optgroup label="Subcontractors without an account">${subs.map((sb) => html`<option value="sub:${sb.id}" ${af.values.user_id === `sub:${sb.id}` ? raw('selected') : ''}>${sb.name}${sb.company ? ` (${sb.company})` : ''}</option>`)}</optgroup>` : ''}
       </select>${fieldErr(af.errors, 'user_id')}</div>
     <div>${input('payout', 'Fixed payout ($)', af.values, af.errors, { inputmode: 'decimal' })}</div></div>
-    <div class="hint">Subcontractors: the fixed amount for this job. W-2 employees: leave blank; they clock in and their hours × hourly rate count automatically. Each person sees only their own pay. Records only; nothing is paid through the app.</div>
+    <div class="hint">Add subs without an account on the <a href="/team#subs">Team page</a>. Subcontractors: the fixed amount for this job. W-2 employees: leave blank; they clock in and their hours × hourly rate count automatically. Each person sees only their own pay. Records only; nothing is paid through the app.</div>
     <div class="form-actions"><button type="submit" class="secondary">Assign / update payout</button></div>
   </form>` : ''}
 
@@ -1903,6 +1970,9 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], inv
   </form>
   ${emailHistory(emails)}`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
+
+const sendWo = (jobId, key, val) => html`<form method="post" action="/jobs/${jobId}/work-order/send" style="display:inline" data-confirm="Email this work order now?">
+  <input type="hidden" name="${key}" value="${val}"><button type="submit" class="link" style="font-size:14px">Email it</button></form>`;
 
 // Job photos: a grid of thumbnails (tap to open full size) plus an "Add photos" button.
 function photoSection(jobId, photos, canDelete) {
@@ -2096,5 +2166,5 @@ function messagePage(title, message) {
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
-  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage,
+  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
 };
