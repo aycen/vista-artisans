@@ -1396,7 +1396,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
   const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
   const recheck = (org) => q("UPDATE sms_registrations SET checked_at = now() - interval '2 minutes' WHERE org_id = $1", [org]);
   await stop();
-  await start({ TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url, APP_URL: BASE });
+  await start({ TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url, APP_URL: BASE, TWILIO_CUSTOMER_PROFILE_SID: 'BU123' });
   try {
     as('lou'); await post('/signup', { email: 'lou@keystone.test', password: 'lou-password' });
     await post('/org/new', { name: 'Lou Flooring' });
@@ -1428,7 +1428,8 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     assert.equal(twilio.numbers.size, 1, 'one number bought'); assert.equal(twilio.services.size, 1);
     const [svc] = twilio.services.values(); assert.equal(svc.inbound, `${BASE}/twilio/inbound`); assert.equal(svc.numbers.length, 1);
     const [tv] = twilio.verifications.values();
-    assert.equal(tv.fields.get('BusinessRegistrationNumber'), '12-3456789'); assert.equal(tv.fields.get('BusinessStateProvinceRegion'), 'PA');
+    assert.equal(tv.fields.get('BusinessRegistrationNumber'), '12-3456789');
+    assert.equal(tv.fields.has('CustomerProfileSid'), false, "filed under the company's own details, not Keystone's profile"); assert.equal(tv.fields.get('BusinessCity'), 'Lancaster'); assert.equal(tv.fields.get('BusinessStateProvinceRegion'), 'PA');
     assert.equal(tv.fields.get('BusinessWebsite'), 'https://louflooring.com'); assert.equal(tv.fields.get('BusinessContactPhone'), '+17175550100');
     assert.deepEqual(tv.fields.getAll('UseCaseCategories'), ['ACCOUNT_NOTIFICATIONS', 'CUSTOMER_CARE']);
     assert.equal(tv.fields.get('OptInImageUrls'), `${BASE}/texting?company=Lou%20Flooring%20LLC`);

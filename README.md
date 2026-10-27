@@ -149,8 +149,8 @@ every 30 minutes (and whenever the admin opens the page); when the carriers appr
 Deleting a company releases its number. `/texting` is the public page explaining how consent works (sent as the opt-in proof).
 
 1. Upgrade the Twilio account (not trial) and set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in Render.
-2. In Twilio Trust Hub, get Keystone's own **Primary Customer Profile** approved (needs Keystone's business details) and set
-   `TWILIO_CUSTOMER_PROFILE_SID` (starts with BU) in Render. Twilio requires it for verifications filed for other businesses.
+2. In Twilio Trust Hub, get Keystone's own **Primary Customer Profile** approved (needs Keystone's business details). Don't
+   pass it on verifications: each one is filed with the company's own business details, not Keystone's.
 3. Optional: `TWILIO_NOTIFICATION_EMAIL` gets Twilio's verification emails (default support@keystonefsm.com).
 
 A company can also be connected by hand (for a number registered outside Keystone):

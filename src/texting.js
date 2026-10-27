@@ -53,7 +53,6 @@ const verificationFields = (r, base) => ({
   BusinessContactEmail: r.contact_email, BusinessContactPhone: r.contact_phone,
   BusinessType: r.business_type,
   ...(r.ein ? { BusinessRegistrationNumber: r.ein, BusinessRegistrationAuthority: 'EIN', BusinessRegistrationCountry: 'US' } : {}),
-  CustomerProfileSid: process.env.TWILIO_CUSTOMER_PROFILE_SID || '',
   ExternalReferenceId: r.org_id,
 });
 
