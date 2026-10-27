@@ -84,12 +84,18 @@ async function submit(orgId, values, base) {
       if (r.verification_sid && r.edit_allowed) {
         await sms.updateVerification(r.verification_sid, { ...fields, EditReason: 'Updated business details' });
       } else {
-        if (r.verification_sid) await sms.deleteVerification(r.verification_sid).catch(() => {});
+        // Remove the old request once, and forget it, so a retry doesn't ask Twilio to delete it again.
+        if (r.verification_sid) {
+          await sms.deleteVerification(r.verification_sid).catch((e) => console.error('Old verification delete:', e.message));
+          r.verification_sid = '';
+          await save("verification_sid = ''");
+        }
         // Twilio removes the old request in the background and refuses a new one until it's gone (a few seconds).
         let tv;
         for (let i = 0; ; i++) {
           try { tv = await sms.submitVerification(fields); break; } catch (e) {
-            if (i >= 5 || !/delete is in progress/i.test(e.message)) throw e;
+            if (!/delete is in progress/i.test(e.message)) throw e;
+            if (i >= 5) throw new sms.SmsError('Twilio is still removing your earlier request. Wait a few minutes, then submit again.');
             await new Promise((ok) => setTimeout(ok, RETRY_MS));
           }
         }

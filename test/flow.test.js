@@ -1442,6 +1442,16 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     r = await post('/settings/texting', { ...details, website: 'https://lou.example.com' }); assert.equal(r.status, 303);
     assert.equal(twilio.verifications.size, 1, 'the old request is replaced'); assert.equal(twilio.numbers.size, 1);
     tv = [...twilio.verifications.values()][0]; assert.equal(tv.fields.get('BusinessWebsite'), 'https://lou.example.com');
+    // Twilio takes longer than the retries: the page says to wait, and the next try doesn't delete again
+    const deletes = () => twilio.calls.filter((c) => /^DELETE \/v1\/Tollfree/.test(c)).length;
+    const before = deletes(); twilio.state.deleting = 100;
+    r = await post('/settings/texting?edit=1', details);
+    assert.match((await getPage('/settings/texting')).body, /still removing your earlier request/);
+    twilio.state.deleting = 0;
+    r = await post('/settings/texting', details);
+    assert.equal(deletes(), before + 1, 'the old request is deleted only once');
+    assert.match((await getPage('/settings/texting')).body, /Waiting for carrier approval/);
+    tv = [...twilio.verifications.values()][0];
     assert.match((await getPage('/settings')).body, /waiting for carrier approval/);
 
     // The public consent page the carriers look at
