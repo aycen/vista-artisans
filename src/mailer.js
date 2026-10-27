@@ -265,4 +265,4 @@ function startAutomations(intervalMs = Number(process.env.AUTOMATION_INTERVAL_MS
   setInterval(tick, intervalMs).unref();
 }
 
-module.exports = { templates, texts, deliver, deliverText, companyOf, estimateTotals, runAutomations, startAutomations, appUrl, render };
+module.exports = { templates, texts, deliver, deliverText, textable, companyOf, estimateTotals, runAutomations, startAutomations, appUrl, render };

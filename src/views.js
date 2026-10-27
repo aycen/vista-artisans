@@ -379,6 +379,7 @@ const ICONS = {
   download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
+  chat: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
   card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6.5 15h4"/>',
   building: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"/>',
 };
@@ -443,7 +444,7 @@ ${fab ? html`<a class="fab" href="${fab.href}">${icon('plus')}${fab.label}</a>` 
 </body></html>`.s;
 }
 
-const ADMIN_TABS = [['/', 'Home', 'home'], ['/clients', 'Clients', 'users'], ['/estimates', 'Estimates', 'file'], ['/jobs', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
+const ADMIN_TABS = [['/', 'Home', 'home'], ['/clients', 'Clients', 'users'], ['/texts', 'Texts', 'chat'], ['/jobs', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
 const CREW_TABS = [['/', 'Overview', 'home'], ['/schedule', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
 const activeTab = (path, href) => (href === '/' ? path === '/' : path.startsWith(href));
 
@@ -959,6 +960,66 @@ function textingPage({ reg, values = {}, errors = {}, plan, configured, flash })
   </form>`);
 }
 
+// ---------- Texts tab ----------
+const ago = (ts) => fmtWhen(ts);
+function textingSetupCard({ configured, reg, plan }) {
+  if (!configured) return html`<div class="card" id="texting-setup"><strong>Texting isn't available yet.</strong><div class="hint">It hasn't been switched on for this app.</div></div>`;
+  if (reg?.status === 'pending') {
+    return html`<div class="card" id="texting-setup"><div class="row" style="justify-content:space-between"><strong>Waiting for carrier approval</strong><span class="pill in_progress">In review</span></div>
+      <div class="hint">Your number will be ${reg.phone}. The carriers usually approve in a few business days, and your texts will show here once they do.</div>
+      <div class="actions" style="margin:12px 0 0"><a class="btn secondary" href="/settings/texting">See details</a></div></div>`;
+  }
+  const paid = plan !== 'free';
+  return html`<div class="card" id="texting-setup" style="text-align:center;padding:28px 20px">
+    <div style="font-size:20px;font-weight:700;margin-bottom:6px">Text your clients</div>
+    <div class="hint" style="max-width:460px;margin:0 auto 16px">Send estimate follow-ups, appointment reminders and review requests by text, and see replies right here, from your own business number.</div>
+    ${reg?.status === 'rejected' || reg?.status === 'failed' ? html`<div class="notice" style="text-align:left">Your setup needs attention: ${reg.problem}</div>` : ''}
+    ${paid ? html`<a class="btn" href="/settings/texting" id="setup-text">${reg ? 'Finish texting setup' : 'Set up texting'}</a>`
+      : html`<a class="btn" href="/billing" id="setup-text">Set up texting</a><div class="hint" style="margin-top:8px">Included with the Team and Unlimited plans.</div>`}
+  </div>`;
+}
+function textsPage({ setup, ready, phone, convos = [], unknown = [], clients = [], flash }) {
+  if (!ready) return layout('Texts', textingSetupCard(setup), { flash });
+  return layout('Texts', html`
+  <p class="hint" style="margin:0 2px 12px">Your number: <strong>${phone}</strong> · <a href="/settings#emails">Automatic texts</a></p>
+  <form method="get" action="/texts/open" class="row" style="gap:8px;margin-bottom:16px;flex-wrap:nowrap" id="new-text">
+    <select name="client_id" style="flex:1;min-width:0" aria-label="Client"><option value="">Text a client…</option>
+      ${clients.map((c) => html`<option value="${c.id}">${c.name}</option>`)}</select>
+    <button type="submit" class="secondary">Open</button></form>
+  ${clients.length ? '' : html`<div class="hint" style="margin:-8px 2px 16px">Only clients marked "OK to text" (on their client page) can be texted.</div>`}
+  ${convos.length ? html`<div class="list" id="conversations">${convos.map((c) => html`<a class="li" href="/texts/${c.client_id}">
+      <div class="main-t"><div class="t">${c.name}${c.unread ? html` <span class="pill sent">${c.unread} new</span>` : ''}</div>
+      <div class="s">${c.direction === 'in' ? '' : 'You: '}${c.body.length > 90 ? c.body.slice(0, 90) + '…' : c.body}</div></div>
+      <div class="s muted" style="white-space:nowrap">${ago(c.created_at)}</div>${chev()}</a>`)}</div>`
+    : html`<div class="empty">No texts yet. Texts you send and replies from clients show up here.</div>`}
+  ${unknown.length ? html`<h2>From numbers not in your clients</h2><div class="list">${unknown.map((m) => html`<div class="li"><div class="main-t">
+      <div class="t">${m.phone}</div><div class="s">${m.body}</div></div><div class="s muted" style="white-space:nowrap">${ago(m.created_at)}</div></div>`)}</div>` : ''}`,
+  { flash });
+}
+function textThreadPage({ client, messages, canText, why, values = {}, errors = {}, flash }) {
+  return layout(client.name, html`
+  <p class="hint" style="margin:0 2px 12px">${client.phone || 'No phone number'} · <a href="/clients/${client.id}">Client page</a></p>
+  <div class="thread" id="thread">${messages.length ? messages.map((m) => html`<div class="bubble ${m.direction === 'in' ? 'in' : 'out'}">
+      <div class="txt">${m.body}</div><div class="meta">${ago(m.created_at)}${m.status === 'failed' ? ' · Not delivered' : ''}</div></div>`)
+    : html`<div class="empty">No texts with ${client.name} yet.</div>`}</div>
+  ${errorBox(errors)}
+  ${canText ? html`<form method="post" action="/texts/${client.id}" class="form-card" novalidate id="send-text">
+      <label for="body">Text ${client.name}</label>
+      <textarea id="body" name="body" maxlength="1000" class="${errors.body ? 'invalid' : ''}" placeholder="Type a message">${values.body || ''}</textarea>
+      <div class="hint">Starts with your company name so they know who it's from.</div>
+      <div class="form-actions"><button type="submit">Send text</button></div></form>`
+    : html`<div class="notice" id="cant-text">${{
+      setup: html`Texting isn't set up yet. <a href="/texts">Set up texting</a>.`,
+      phone: html`Add a mobile number for ${client.name} on their <a href="/clients/${client.id}/edit">client page</a> to text them.`,
+      stop: `${client.name} replied STOP, so they can't be texted until they reply START.`,
+      consent: html`${client.name} hasn't agreed to texts. Once they do, check "OK to text" on their <a href="/clients/${client.id}/edit">client page</a>.`,
+    }[why]}</div>`}
+  <style>.thread{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}.bubble{max-width:78%;padding:10px 14px;border-radius:16px;word-wrap:break-word}.bubble .txt{white-space:pre-wrap}
+    .bubble.in{align-self:flex-start;background:var(--surface);box-shadow:var(--shadow)}.bubble.out{align-self:flex-end;background:var(--accent);color:#fff}
+    .bubble .meta{font-size:12px;opacity:.75;margin-top:4px}</style>`,
+  { flash, back: { href: '/texts', label: 'Texts' } });
+}
+
 // Public page explaining how businesses on Keystone get consent to text (carriers' reviewers read it).
 function textingPolicyPage(company) {
   const who = company || 'Businesses using Keystone';
@@ -1381,10 +1442,11 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
   <div class="actions">
     <a class="btn secondary" href="/clients/new">${icon('plus')}New Client</a>
     <a class="btn" href="/estimates/new">${icon('plus')}New Estimate</a>
+    <a class="btn secondary" href="/estimates" id="view-estimates">${icon('file')}View estimates</a>
   </div>
   ${revenueByMonth?.length ? revenueChart(revenueByMonth) : ''}
   <h2>Active jobs</h2>${jobList(activeJobs, 'No active jobs.')}
-  <h2>Open estimates</h2>${estimateList(openEstimates, 'No open estimates.')}`, { flash, pageTitle: 'Overview' });
+  <h2 class="row" style="justify-content:space-between">Open estimates <a href="/estimates" style="font-size:15px;font-weight:600">View all</a></h2>${estimateList(openEstimates, 'No open estimates.')}`, { flash, pageTitle: 'Overview' });
 }
 
 function estimateList(rows, empty, { showClient = true } = {}) {
@@ -2239,5 +2301,5 @@ function messagePage(title, message) {
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
-  jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
+  jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, textsPage, textThreadPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
 };

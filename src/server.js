@@ -1184,6 +1184,73 @@ async function renderTexting(db, org, extra = {}, status = 200) {
   }
   return page(status, v.textingPage({ reg, plan, configured: sms.configured(), ...extra, values }));
 }
+// ---------- Texts tab: setup, conversations with clients, sending a text by hand ----------
+// Texts with one client: automatic ones (email_log, matched by phone) and replies / hand-sent ones (sms_messages).
+const SMS_THREAD_SQL = `
+  SELECT 'out' AS direction, l.subject AS body, l.status, l.created_at FROM email_log l
+    WHERE l.org_id = $1 AND l.channel = 'sms' AND length(regexp_replace($3::text, '\\D', '', 'g')) >= 10
+      AND right(regexp_replace(l.to_email, '\\D', '', 'g'), 10) = right(regexp_replace($3::text, '\\D', '', 'g'), 10)
+  UNION ALL
+  SELECT direction, body, status, created_at FROM sms_messages WHERE org_id = $1 AND client_id = $2`;
+route('GET', '/texts', async ({ db, org, url }) => {
+  const t = await textingFor(db, org.org_id);
+  const flash = url.searchParams.get('msg');
+  if (!t.ready) {
+    await texting.check(org.org_id);
+    const reg = await db.get('SELECT * FROM sms_registrations WHERE org_id = ?', org.org_id);
+    const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
+    if (reg?.status === 'approved') return redirect('/texts');
+    return ok(v.textsPage({ ready: false, setup: { configured: sms.configured(), reg, plan }, flash }));
+  }
+  const convos = await db.all(`SELECT DISTINCT ON (c.id) c.id AS client_id, c.name, m.direction, m.body, m.created_at,
+      (SELECT count(*)::int FROM sms_messages u WHERE u.client_id = c.id AND u.direction = 'in' AND u.read_at IS NULL) AS unread
+    FROM clients c CROSS JOIN LATERAL (${SMS_THREAD_SQL.replace(/\$1/g, 'c.org_id').replace(/\$2/g, 'c.id').replace(/\$3/g, 'c.phone')}) m
+    WHERE c.org_id = ? ORDER BY c.id, m.created_at DESC`, org.org_id);
+  convos.sort((a, b) => b.created_at - a.created_at);
+  const unknown = await db.all(`SELECT phone, body, created_at FROM sms_messages WHERE org_id = ? AND client_id IS NULL AND direction = 'in'
+    ORDER BY created_at DESC LIMIT 20`, org.org_id);
+  const clients = await db.all(`SELECT id, name FROM clients WHERE org_id = ? AND sms_consent AND sms_opted_out_at IS NULL AND phone <> ''
+    ORDER BY lower(name)`, org.org_id);
+  return ok(v.textsPage({ ready: true, phone: t.phone, convos, unknown, clients, flash }));
+});
+route('GET', '/texts/open', async ({ url }) => {
+  const id = url.searchParams.get('client_id');
+  return redirect(/^\d{1,15}$/.test(id || '') ? `/texts/${id}` : '/texts');
+});
+async function renderThread(db, org, id, extra = {}, status = 200) {
+  const client = await db.get('SELECT * FROM clients WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!client) return notFound();
+  const messages = await db.all(`${SMS_THREAD_SQL} ORDER BY created_at`, org.org_id, id, client.phone || '');
+  await db.run("UPDATE sms_messages SET read_at = now() WHERE org_id = ? AND client_id = ? AND direction = 'in' AND read_at IS NULL", org.org_id, id);
+  const t = await textingFor(db, org.org_id);
+  const why = !t.ready ? 'setup' : !sms.e164(client.phone) ? 'phone' : client.sms_opted_out_at ? 'stop' : !client.sms_consent ? 'consent' : '';
+  return page(status, v.textThreadPage({ client, messages, canText: !why, why, ...extra }));
+}
+route('GET', '/texts/:id', ({ db, org, id, url }) => renderThread(db, org, id, { flash: url.searchParams.get('msg') }));
+route('POST', '/texts/:id', async ({ db, org, id, form }) => {
+  const client = await db.get('SELECT * FROM clients WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!client) return notFound();
+  const body = str(form.get('body'), 1000);
+  if (!body) return renderThread(db, org, id, { errors: { body: 'Type a message to send.' } }, 422);
+  const result = await asServer(async (sdb) => {
+    const company = await mailer.companyOf(sdb, org.org_id);
+    const to = mailer.textable(company, client);
+    if (!to) return { skipped: true };
+    const text = `${company.name}: ${body}`.slice(0, 1600);
+    let providerId = ''; let error = '';
+    try { providerId = await sms.send({ messagingServiceSid: company.sms_sender, to, body: text }); } catch (e) {
+      error = e.message.slice(0, 500);
+      if (e.code === sms.UNSUBSCRIBED) await sdb.run('UPDATE clients SET sms_opted_out_at = now() WHERE id = ?', client.id);
+    }
+    await sdb.run(`INSERT INTO sms_messages (org_id, client_id, direction, phone, body, status, error, provider_id) VALUES (?, ?, 'out', ?, ?, ?, ?, ?)`,
+      org.org_id, client.id, to, text, error ? 'failed' : 'sent', error, providerId);
+    return { error };
+  });
+  if (result.skipped) return renderThread(db, org, id, {}, 409);
+  if (result.error) return renderThread(db, org, id, { values: { body }, errors: { body: `The text could not be sent: ${result.error}` } }, 502);
+  return redirect(`/texts/${id}`);
+});
+
 route('GET', '/settings/texting', async ({ db, org, url }) => {
   await texting.check(org.org_id);
   return renderTexting(db, org, { flash: url.searchParams.get('msg') });
@@ -1642,6 +1709,7 @@ async function twilioInbound(req, url) {
   if (!sms.validSignature(signed, params, req.headers['x-twilio-signature'])) return { status: 403, body: 'Invalid signature', headers: { 'Content-Type': 'text/plain' } };
   const k = sms.keyword(params.get('Body'));
   if (k) await pool.query('SELECT record_sms_reply($1, $2, $3)', [str(params.get('To'), 20), str(params.get('From'), 20), k === 'stop']);
+  await pool.query('SELECT record_sms_inbound($1, $2, $3, $4)', [str(params.get('To'), 20), str(params.get('From'), 20), str(params.get('Body'), 1600), str(params.get('MessageSid'), 64)]);
   return { status: 200, body: '<Response></Response>', headers: { 'Content-Type': 'text/xml' } };
 }
 function readRaw(req) {
@@ -1672,7 +1740,8 @@ async function health() {
         to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
         to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion,
         to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs,
-        to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup`);
+        to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup,
+        to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1686,6 +1755,7 @@ async function health() {
       if (!r.rows[0].texting) throw new Error('Run supabase/migrations/0015_text_messages.sql in the Supabase SQL Editor.');
       if (!r.rows[0].subs) throw new Error('Run supabase/migrations/0016_subcontractors.sql in the Supabase SQL Editor.');
       if (!r.rows[0].sms_signup) throw new Error('Run supabase/migrations/0017_texting_signup.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].sms_inbox) throw new Error('Run supabase/migrations/0018_text_inbox.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };

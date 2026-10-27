@@ -286,6 +286,23 @@ select pg_temp.expect(true, 'companies cannot mark their own texting approved');
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect((select count(*) from sms_registrations) = 0, 'other companies cannot see a texting signup');
 
+-- Texts: the server files replies; admins see only their company's and can only mark them read
+reset role;
+insert into sms_senders (org_id, messaging_service_sid, phone) values (current_setting('t.vista')::uuid, 'MG0123456789abcdef0123456789abcdef', '+18335550000');
+select record_sms_inbound('+18335550000', '+12155550000', 'Hello', 'SM1');
+select record_sms_inbound('+19999999999', '+12155550000', 'Not ours', 'SM2');
+set role authenticated;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.expect((select count(*) from sms_messages) = 1, 'admins see replies to their number only');
+update sms_messages set read_at = now();
+do $$ begin update sms_messages set body = 'Forged'; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+do $$ begin insert into sms_messages (org_id, direction, phone, body) values (current_setting('t.vista')::uuid, 'in', '+1', 'x'); raise exception 'should fail';
+  exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'companies cannot forge texts');
+select pg_temp.expect(pg_temp.denied($q$select record_sms_inbound('+18335550000', '+1', 'x', '')$q$), 'only the server files incoming texts');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from sms_messages) = 0, 'other companies cannot see texts');
+
 -- Deleting: only an admin can delete their own company; deleting your account never touches a company others are in
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'other companies cannot delete a company');

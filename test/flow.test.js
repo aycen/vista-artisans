@@ -1403,12 +1403,15 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     const org = (await q("SELECT id FROM organizations WHERE name = 'Lou Flooring'"))[0].id;
     assert.match((await getPage('/settings')).body, /id="setup-texting"/);
 
-    // Free plan: texting is a paid feature
-    let page = (await getPage('/settings/texting')).body; assert.match(page, /comes with Team and Unlimited/);
+    // Free plan: texting is a paid feature (the Texts tab says so)
+    let page = (await getPage('/')).body; assert.match(page, /href="\/texts"/); assert.match(page, /id="view-estimates"/);
+    page = (await getPage('/texts')).body; assert.match(page, /<a class="btn" href="\/billing" id="setup-text">Set up texting/);
+    page = (await getPage('/settings/texting')).body; assert.match(page, /comes with Team and Unlimited/);
     let r = await post('/settings/texting', { business_name: 'Lou Flooring LLC' }); assert.equal(r.status, 303);
     assert.equal(twilio.calls.length, 0);
     await q("INSERT INTO org_subscriptions (org_id, plan, comped) VALUES ($1, 'team', true) ON CONFLICT (org_id) DO UPDATE SET plan = 'team', comped = true", [org]);
 
+    assert.match((await getPage('/texts')).body, /href="\/settings\/texting" id="setup-text"/);
     // The form: prefilled from the company, and checked
     page = (await getPage('/settings/texting')).body; assert.match(page, /id="texting-form"/); assert.match(page, /value="Lou Flooring"/);
     const details = { business_name: 'Lou Flooring LLC', business_type: 'PRIVATE_PROFIT', ein: '123456789', street: '5 Main St', city: 'Lancaster', state: 'pa', zip: '17601',
@@ -1451,6 +1454,33 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     const sender = (await q('SELECT messaging_service_sid, phone FROM sms_senders WHERE org_id = $1', [org]))[0];
     assert.equal(sender.messaging_service_sid, svc.sid); assert.match(sender.phone, /^\+1833555/);
     page = (await getPage('/settings')).body; assert.doesNotMatch(page, /not set up yet/);
+
+    // Texts tab: text a client who agreed, see their reply, and replies from unknown numbers
+    r = await post('/clients', { name: 'Pat Lee', phone: '(717) 555-0123', sms_consent: 'on' }); const pat = idFrom(r.location);
+    r = await post('/clients', { name: 'Quinn Diaz', phone: '717-555-0456' }); const quinn = idFrom(r.location);
+    page = (await getPage('/texts')).body; assert.match(page, /Your number: <strong>\+1833555/); assert.match(page, /No texts yet/);
+    assert.match(page, new RegExp(`<option value="${pat}">Pat Lee`)); assert.doesNotMatch(page, /Quinn Diaz/);
+    assert.match((await getPage(`/texts/${quinn}`)).body, /id="cant-text">Quinn Diaz hasn&#39;t agreed|id="cant-text">Quinn Diaz hasn't agreed/);
+    assert.equal((await post(`/texts/${quinn}`, { body: 'Hi' })).status, 409);
+    assert.equal((await post(`/texts/${pat}`, { body: '  ' })).status, 422);
+    r = await post(`/texts/${pat}`, { body: 'We can start Monday. Does 8am work?' }); assert.equal(r.status, 303);
+    const sentText = twilio.sent.at(-1);
+    assert.equal(sentText.To, '+17175550123'); assert.equal(sentText.MessagingServiceSid, svc.sid);
+    assert.equal(sentText.Body, 'Lou Flooring: We can start Monday. Does 8am work?');
+    const inbound = async (from, body) => {
+      const p = new URLSearchParams({ To: sender.phone, From: from, Body: body, MessageSid: `SM${Date.now()}` });
+      const sig = require('node:crypto').createHmac('sha1', 'twilio-token').update(`${BASE}/twilio/inbound` + [...p.keys()].sort().map((k) => k + p.get(k)).join('')).digest('base64');
+      return fetch(`${BASE}/twilio/inbound`, { method: 'POST', body: p, headers: { 'x-twilio-signature': sig } });
+    };
+    assert.equal((await inbound('+17175550123', 'Yes 8 is great')).status, 200);
+    assert.equal((await inbound('+12155550000', 'Who is this?')).status, 200);
+    page = (await getPage('/texts')).body;
+    assert.match(page, /Pat Lee <span class="pill sent">1 new<\/span>/); assert.match(page, /Yes 8 is great/);
+    assert.match(page, /From numbers not in your clients/); assert.match(page, /Who is this\?/);
+    page = (await getPage(`/texts/${pat}`)).body;
+    assert.ok(page.indexOf('Does 8am work?') < page.indexOf('Yes 8 is great'), 'oldest first');
+    assert.match(page, /id="send-text"/);
+    assert.doesNotMatch((await getPage('/texts')).body, /1 new/, 'opening the conversation marks it read');
 
     // Deleting the company gives the number back
     r = await post('/settings/delete-company', { confirm: 'lou flooring' }); assert.equal(r.status, 303);
