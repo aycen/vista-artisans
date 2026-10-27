@@ -1602,10 +1602,13 @@ test('change orders signed by the client, the client portal, and reports with CS
 
 test('crew portal: job offers, referrals, shirt and call requests, profile photos', async () => {
   const mail = await startFakeEmail('re_test_key');
+  const { startFakeTwilio } = require('./fake-twilio');
+  const twilio = await startFakeTwilio('ACtest', 'twilio-token');
   const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
   const PNG = 'data:image/png;base64,' + Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
   await stop();
-  await start({ RESEND_API_KEY: 're_test_key', EMAIL_FROM: 'estimates@vista.test', EMAIL_API_BASE: mail.url, APP_URL: BASE });
+  await start({ RESEND_API_KEY: 're_test_key', EMAIL_FROM: 'estimates@vista.test', EMAIL_API_BASE: mail.url, APP_URL: BASE,
+    TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url });
   try {
     as('nia'); await post('/signup', { email: 'nia@keystone.test', password: 'nia-password' });
     await post('/org/new', { name: 'Nia Painting' });
@@ -1618,6 +1621,7 @@ test('crew portal: job offers, referrals, shirt and call requests, profile photo
       assert.equal((await post('/org/join', { code })).status, 303);
       await post('/account/profile', { full_name: who2 === 'oz' ? 'Oz Ruiz' : 'Pat Kim', phone: '717-555-0100', zip: '' });
     }
+    await q("INSERT INTO sms_senders (org_id, messaging_service_sid, phone) VALUES ($1, 'MG0123456789abcdef0123456789abcdef', '+18335550111')", [org]);
     const [oz, pat] = (await q("SELECT id::text FROM auth.users WHERE email IN ('oz@crew.test', 'pat@crew.test') ORDER BY email")).map((x) => x.id);
 
     // Perks are off until the company turns them on
@@ -1632,14 +1636,23 @@ test('crew portal: job offers, referrals, shirt and call requests, profile photo
     r = await post(`/estimates/${idFrom(r.location)}/convert`, {}); const job = idFrom(r.location);
     page = (await getPage(`/jobs/${job}`)).body; assert.match(page, /Offer this job to crew/);
     r = await post(`/jobs/${job}/offers`, { payout: '800' }); assert.equal(r.status, 422); assert.match(r.body, /Choose who to offer it to/);
-    r = await post(`/jobs/${job}/offers`, new URLSearchParams([['user_id', oz], ['user_id', pat], ['payout', '800'], ['note', 'Two days'], ['first_come', 'on']]));
-    assert.match(decodeURIComponent(r.location), /offered to 2 people and emailed/);
-    assert.equal(mail.sent.filter((m) => /Job offer from Nia Painting/.test(m.subject)).length, 2);
+    r = await post(`/jobs/${job}/offers`, new URLSearchParams([['user_id', oz], ['payout', '800'], ['respond_by', '2001-01-01T17:00']]));
+    assert.equal(r.status, 422); assert.match(r.body, /has to be in the future/);
+    await post(`/jobs/${job}`, { status: 'not_started', start_date: '2031-11-03', end_date: '2031-11-04', notes: '' });
+    r = await post(`/jobs/${job}/offers`, new URLSearchParams([['user_id', oz], ['user_id', pat], ['payout', '800'], ['note', 'Two days'], ['first_come', 'on'], ['respond_by', '2031-10-30T17:00']]));
+    assert.match(decodeURIComponent(r.location), /offered to 2 people \(emailed 2 and texted 2\)/);
+    const offerMails = mail.sent.filter((m) => /Job offer from Nia Painting/.test(m.subject));
+    assert.equal(offerMails.length, 2); assert.match(offerMails[0].subject, /accept by Thu, Oct 30, 5:00 PM/);
+    assert.match(offerMails[0].text, /Pay: \$800\.00\nStarts: Monday, November 3\nEnds: Tuesday, November 4\nAccept by: Thu, Oct 30, 5:00 PM/);
+    assert.equal(offerMails[0].attachments[0].filename, `Work order WO-${job}.pdf`);
+    const offerText = twilio.sent.at(-1);
+    assert.equal(offerText.To, '+17175550100');
+    assert.match(offerText.Body, /^Nia Painting: New job offer, 9 Oak St\. Pay \$800\.00\. Starts Monday, November 3\. Accept by Thu, Oct 30, 5:00 PM\. Accept or decline: http\S+\/offers\/\d+ Reply STOP to opt out\.$/);
     const offers = await q('SELECT id, user_id::text FROM job_offers WHERE job_id = $1 ORDER BY id', [job]);
-    page = (await getPage(`/jobs/${job}`)).body; assert.match(page, /Offered to Oz Ruiz/); assert.match(page, /Waiting/);
+    page = (await getPage(`/jobs/${job}`)).body; assert.match(page, /Offered to Oz Ruiz/); assert.match(page, /Waiting/); assert.match(page, /accept by Oct 30, 5:00 PM/);
 
     as('oz'); page = (await getPage('/')).body;
-    assert.match(page, /Job offers/); assert.match(page, /9 Oak St/); assert.match(page, /\$800\.00/); assert.doesNotMatch(page, /\$5,000/, 'crew never see the contract price');
+    assert.match(page, /Accept by Oct 30, 5:00 PM/); assert.match(page, /Job offers/); assert.match(page, /9 Oak St/); assert.match(page, /\$800\.00/); assert.doesNotMatch(page, /\$5,000/, 'crew never see the contract price');
     page = (await getPage(`/offers/${offers.find((o) => o.user_id === oz).id}`)).body; assert.match(page, /Paint exterior/);
     as('pat'); assert.equal((await post(`/offers/${offers.find((o) => o.user_id === oz).id}/accept`, {})).status, 303);
     assert.equal((await q("SELECT count(*)::int AS n FROM job_assignments WHERE job_id = $1", [job]))[0].n, 0, "can't accept someone else's offer");
@@ -1648,6 +1661,17 @@ test('crew portal: job offers, referrals, shirt and call requests, profile photo
     assert.match(mail.sent.at(-1).subject, /Job offer accepted/);
     assert.equal((await q('SELECT payout_cents::int FROM job_assignments WHERE job_id = $1 AND user_id = $2', [job, oz]))[0].payout_cents, 80000);
     as('pat'); assert.doesNotMatch((await getPage('/')).body, /Job offers/);
+    // An offer past its deadline can't be accepted
+    as('nia'); r = await post('/clients', { name: 'Bo Diaz' });
+    r = await post('/estimates', new URLSearchParams([['client_id', String(idFrom(r.location))], ['status', 'approved'], ['deposit_percent', '0'], ['address', '2 Elm St'],
+      ['item_desc', 'Trim'], ['item_qty', '1'], ['item_price', '900']]));
+    r = await post(`/estimates/${idFrom(r.location)}/convert`, {}); const job3 = idFrom(r.location);
+    await post(`/jobs/${job3}/offers`, new URLSearchParams([['user_id', pat], ['payout', '100'], ['respond_by', '']]));
+    const late = (await q('SELECT id FROM job_offers WHERE job_id = $1', [job3]))[0].id;
+    await q("UPDATE job_offers SET respond_by = now() - interval '1 minute' WHERE id = $1", [late]);
+    assert.match((await getPage(`/jobs/${job3}`)).body, /Expired/);
+    as('pat'); assert.doesNotMatch((await getPage('/')).body, /2 Elm St/);
+    r = await post(`/offers/${late}/accept`, {}); assert.match(decodeURIComponent(r.location), /deadline to accept this offer has passed/);
     r = await post(`/offers/${offers.find((o) => o.user_id === pat).id}/accept`, {});
     assert.match(decodeURIComponent(r.location), /someone else already took this job/);
 
@@ -1685,6 +1709,6 @@ test('crew portal: job offers, referrals, shirt and call requests, profile photo
     assert.equal((await fetch(`${BASE}/c/${token}/crew/${pat}/photo`)).status, 404, 'only crew on their jobs');
     as('mo'); assert.equal((await getPage(`/people/${oz}/photo`)).status, 404, 'other companies cannot see the photo');
   } finally {
-    await stop(); await start(); await mail.close();
+    await stop(); await start(); await mail.close(); await twilio.close();
   }
 });

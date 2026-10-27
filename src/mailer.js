@@ -16,6 +16,8 @@ const longDate = (d) => {
   const [y, m, day] = String(d).slice(0, 10).split('-').map(Number);
   return `${DAYS[new Date(Date.UTC(y, m - 1, day)).getUTCDay()]}, ${MONTHS[m - 1]} ${day}`;
 };
+// A moment in the company's time zone, like "Wed, Oct 29, 5:00 PM".
+const whenLabel = (ts) => new Intl.DateTimeFormat('en-US', { timeZone: APP_TIMEZONE, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(ts));
 const firstName = (name) => String(name || '').trim().split(/\s+/)[0] || 'there';
 
 // A plain, phone-friendly email: heading, paragraphs, one button, and the company's contact details.
@@ -86,6 +88,8 @@ const texts = {
     `${company.name}: Hi ${firstName(client.name)}, just checking in on your estimate for ${estimate.project_name}. Review and approve here: ${estimateLink(base, estimate)} ${STOP}`,
   appointment_reminder: ({ company, job, client }) =>
     `${company.name}: Hi ${firstName(client.name)}, a reminder that we're scheduled to start ${job.project_name} on ${longDate(job.start_date)}.${company.phone ? ` Questions? Call ${company.phone}.` : ''} ${STOP}`,
+  job_offer: ({ company, job, offer, url, deadline }) =>
+    `${company.name}: New job offer, ${job.project_name}. Pay ${fmt(offer.payout_cents)}. Starts ${job.start_date ? longDate(job.start_date) : 'TBD'}.${deadline ? ` Accept by ${deadline}.` : ''} Accept or decline: ${url} ${STOP}`,
   review_request: ({ company, job, client }) =>
     `${company.name}: Thanks for choosing us for ${job.project_name}, ${firstName(client.name)}! If you were happy with the work, a quick review would mean a lot: ${company.review_url} ${STOP}`,
 };
@@ -157,13 +161,14 @@ const templates = {
       note: 'You can review the change and approve it online with your signature.',
     },
   }),
-  job_offer: ({ company, job, offer, name, url }) => ({
-    subject: `Job offer from ${company.name}: ${job.project_name}`,
+  job_offer: ({ company, job, offer, name, url, deadline }) => ({
+    subject: `Job offer from ${company.name}: ${job.project_name}${deadline ? ` (accept by ${deadline})` : ''}`,
     content: {
       heading: `New job offer: ${job.project_name}`,
-      paragraphs: [`Hi ${firstName(name)},`, `${company.name} is offering you ${job.project_name}${job.start_date ? `, starting ${longDate(job.start_date)}` : ''}. Pay: ${fmt(offer.payout_cents)}.`,
+      paragraphs: [`Hi ${firstName(name)},`, `${company.name} is offering you this job. The work order is attached.`,
+        `Pay: ${fmt(offer.payout_cents)}\nStarts: ${job.start_date ? longDate(job.start_date) : 'To be scheduled'}${job.end_date && job.end_date !== job.start_date ? `\nEnds: ${longDate(job.end_date)}` : ''}${deadline ? `\nAccept by: ${deadline}` : ''}`,
         offer.note, offer.first_come ? 'It goes to the first person who accepts.' : ''].filter(Boolean),
-      button: { label: 'See the offer', url },
+      button: { label: 'Accept or decline', url },
     },
   }),
   portal: ({ company, client, url }) => ({
@@ -308,4 +313,4 @@ function startAutomations(intervalMs = Number(process.env.AUTOMATION_INTERVAL_MS
   setInterval(tick, intervalMs).unref();
 }
 
-module.exports = { templates, texts, deliver, deliverText, textable, companyOf, estimateTotals, runAutomations, startAutomations, appUrl, render };
+module.exports = { whenLabel, templates, texts, deliver, deliverText, textable, companyOf, estimateTotals, runAutomations, startAutomations, appUrl, render };

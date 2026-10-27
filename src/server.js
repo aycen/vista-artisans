@@ -812,9 +812,13 @@ route('POST', '/jobs/:id/offers', async ({ db, org, id, form, req }) => {
   const job = await db.get('SELECT * FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id);
   if (!job) return notFound();
   const values = { user_ids: form.getAll('user_id').map((u) => str(u, 40)), payout: str(form.get('payout'), 30), note: str(form.get('note'), 2000),
-    first_come: form.get('first_come') === 'on' };
+    first_come: form.get('first_come') === 'on', respond_by: str(form.get('respond_by'), 20) };
   const errors = {};
   if (!values.user_ids.length) errors.offer_to = 'Choose who to offer it to.';
+  if (values.respond_by && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(values.respond_by)) errors.offer_deadline = 'Choose a date and time to accept by.';
+  else if (values.respond_by && !(await db.get('SELECT ?::timestamp AT TIME ZONE ? > now() AS ok', values.respond_by, APP_TIMEZONE)).ok) {
+    errors.offer_deadline = 'The deadline to accept has to be in the future.';
+  }
   const m = parseMoney(values.payout, 'Pay');
   if (m.error) errors.offer_payout = m.error;
   const again = (errs, status) => renderJob(db, org.org_id, id, { forms: { offer: { values, errors: errs } } }, status);
@@ -824,27 +828,43 @@ route('POST', '/jobs/:id/offers', async ({ db, org, id, form, req }) => {
     for (const uid of values.user_ids) {
       if (!/^[0-9a-f-]{36}$/.test(uid)) throw Object.assign(new Error('That person is not on your team.'), { code: 'VA001' });
       if (await db.get("SELECT 1 FROM job_offers WHERE job_id = ? AND user_id = ? AND status = 'open'", id, uid)) continue;
-      out.push(await db.get(`INSERT INTO job_offers (org_id, job_id, user_id, payout_cents, note, first_come) VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
-        org.org_id, id, uid, m.value, values.note, values.first_come));
+      out.push(await db.get(`INSERT INTO job_offers (org_id, job_id, user_id, payout_cents, note, first_come, respond_by)
+        VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? = '' THEN NULL ELSE ?::timestamp AT TIME ZONE ? END) RETURNING *`,
+        org.org_id, id, uid, m.value, values.note, values.first_come, values.respond_by, values.respond_by || null, APP_TIMEZONE));
     }
     return out;
   });
   if (r.error) { const msg = dbMessage(r.error); if (!msg) throw r.error; return again({ offer_to: msg }, 422); }
-  let emailed = 0;
-  if (email.configured() && r.value.length) {
+  // Each person gets an email with the work order attached and, when the company texts and they have a phone, a text.
+  let emailed = 0; let texted = 0;
+  if (r.value.length) {
     const people = await db.all('SELECT * FROM org_members(?)', org.org_id);
+    const client = await db.get('SELECT * FROM clients WHERE id = ?', job.client_id);
+    const pdfCompany = await companyFor(db, org);
     await asServer(async (sdb) => {
       const company = await mailer.companyOf(sdb, org.org_id);
       for (const o of r.value) {
         const p = people.find((x) => x.user_id === o.user_id);
-        if (!p || !email.validEmail(p.email)) continue;
-        const t = mailer.templates.job_offer({ company, job, offer: o, name: p.full_name || '', url: `${baseUrl(req)}/offers/${o.id}` });
-        if ((await mailer.deliver(sdb, { orgId: org.org_id, kind: 'job_offer', to: p.email, ...t, company, jobId: job.id })).ok) emailed += 1;
+        if (!p) continue;
+        const url = `${baseUrl(req)}/offers/${o.id}`;
+        const deadline = o.respond_by ? mailer.whenLabel(o.respond_by) : '';
+        if (email.configured() && email.validEmail(p.email)) {
+          const buf = await pdf.workOrderPdf({ company: pdfCompany, job, client,
+            assignee: { full_name: p.full_name || p.email, email: p.email, phone: p.phone, payout_cents: o.payout_cents, labor_cents: 0 } });
+          const t = mailer.templates.job_offer({ company, job, offer: o, name: p.full_name || '', url, deadline });
+          if ((await mailer.deliver(sdb, { orgId: org.org_id, kind: 'job_offer', to: p.email, ...t, company, jobId: job.id,
+            attachments: [{ filename: `Work order WO-${job.id}.pdf`, content: buf }] })).ok) emailed += 1;
+        }
+        if (sms.configured() && company.sms_sender && sms.e164(p.phone)) {
+          const body = mailer.texts.job_offer({ company, job, offer: o, url, deadline });
+          if ((await mailer.deliverText(sdb, { orgId: org.org_id, kind: 'job_offer', client: { id: null, phone: p.phone }, body, company, jobId: job.id })).ok) texted += 1;
+        }
       }
     });
   }
   const n = r.value.length;
-  return redirect(`/jobs/${id}?msg=${encodeURIComponent(`Job offered to ${n} ${n === 1 ? 'person' : 'people'}${emailed ? ' and emailed' : ''}. They'll see it on their Overview.`)}#crew`);
+  const sent = [emailed && `emailed ${emailed}`, texted && `texted ${texted}`].filter(Boolean).join(' and ');
+  return redirect(`/jobs/${id}?msg=${encodeURIComponent(`Job offered to ${n} ${n === 1 ? 'person' : 'people'}${sent ? ` (${sent})` : ''}. They'll see it on their Overview.`)}#crew`);
 });
 route('POST', '/offers/:id/withdraw', async ({ db, org, id }) => {
   const o = await db.get('SELECT * FROM job_offers WHERE id = ? AND org_id = ?', id, org.org_id);
@@ -2071,7 +2091,8 @@ async function health() {
         to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs,
         to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup,
         to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox, to_regclass('public.change_orders') IS NOT NULL AS change_orders,
-        to_regclass('public.job_offers') IS NOT NULL AS crew_portal`);
+        to_regclass('public.job_offers') IS NOT NULL AS crew_portal,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'job_offers' AND column_name = 'respond_by') AS offer_deadline`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -2088,6 +2109,7 @@ async function health() {
       if (!r.rows[0].sms_inbox) throw new Error('Run supabase/migrations/0018_text_inbox.sql in the Supabase SQL Editor.');
       if (!r.rows[0].change_orders) throw new Error('Run supabase/migrations/0019_change_orders_and_portal.sql in the Supabase SQL Editor.');
       if (!r.rows[0].crew_portal) throw new Error('Run supabase/migrations/0020_crew_portal.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].offer_deadline) throw new Error('Run supabase/migrations/0021_offer_deadline.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };

@@ -1346,6 +1346,7 @@ const offerCard = (o) => html`<div class="card offer" data-offer="${o.offer_id}"
     <a href="/offers/${o.offer_id}" style="color:inherit;min-width:0"><div class="t" style="font-weight:700">${o.project_name}</div>
       <div class="muted" style="font-size:14px">${dateRange(o.start_date, o.end_date) || 'Dates to be set'}${o.address && o.address !== o.project_name ? ` · ${o.address}` : ''}</div></a>
     <div class="amt" style="font-size:18px;font-weight:750">${fmt(o.payout_cents)}</div></div>
+  ${o.respond_by ? html`<div class="hint" style="margin-top:6px"><strong>Accept by ${fmtWhen(o.respond_by)}</strong></div>` : ''}
   ${o.note ? html`<div class="hint" style="margin-top:6px">${o.note}</div>` : ''}
   <div class="row" style="gap:8px;margin-top:12px">
     <form method="post" action="/offers/${o.offer_id}/accept" style="flex:1"><button type="submit" class="block">${icon('check')}Accept</button></form>
@@ -1355,7 +1356,7 @@ const offerCard = (o) => html`<div class="card offer" data-offer="${o.offer_id}"
 function offerPage({ offer, flash }) {
   return layout(offer.project_name, html`
   <div class="hero"><div class="k">Pay for this job</div><div class="v">${fmt(offer.payout_cents)}</div>
-    <div class="s">${dateRange(offer.start_date, offer.end_date) || 'Dates to be set'}</div></div>
+    <div class="s">${dateRange(offer.start_date, offer.end_date) || 'Dates to be set'}${offer.respond_by ? html` · Accept by ${fmtWhen(offer.respond_by)}` : ''}</div></div>
   <div class="list"><div class="kv"><span class="k">Address</span><span class="v">${offer.address || '—'}</span></div></div>
   ${offer.note ? html`<h2>Note</h2><div class="card pre">${offer.note}</div>` : ''}
   <h2>Scope of work</h2><div class="card pre">${offer.scope || '—'}</div>
@@ -1836,7 +1837,7 @@ const ESTIMATE_JS = `
 const fmtWhen = (ts) => (ts ? new Intl.DateTimeFormat('en-US', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles',
   month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(ts)) : '');
 const EMAIL_KINDS = { estimate: 'Estimate sent', estimate_reminder: 'Follow-up', appointment_reminder: 'Appointment reminder',
-  review_request: 'Review request', estimate_approved: 'Approval notice to you', estimate_declined: 'Decline notice to you', work_order: 'Work order' };
+  review_request: 'Review request', estimate_approved: 'Approval notice to you', estimate_declined: 'Decline notice to you', work_order: 'Work order', job_offer: 'Job offer', change_order: 'Change order', change_order_approved: 'Change order approved', change_order_declined: 'Change order declined', crew_request: 'Crew notice to you', portal: 'Portal link' };
 function emailHistory(emails) {
   if (!emails?.length) return '';
   return html`<h2>Messages</h2><div class="list" id="email-history">${emails.map((m) => html`<div class="li">
@@ -2444,6 +2445,9 @@ function changeOrderSection(job, client, changeOrders, cf, canEmail) {
 }
 const hasErrs = (e) => !!e && Object.keys(e).length > 0;
 // ---------- Job offers (on the job page): offer the job to crew members, who accept or decline in the app ----------
+// Tomorrow at 5 PM in the company's time zone, as a datetime-local value.
+const defaultDeadline = () => `${addDays(new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()), 1)}T17:00`;
+const offerExpired = (o) => o.status === 'open' && o.respond_by && new Date(o.respond_by) <= new Date();
 const OFFER_STATUS = { open: 'Waiting', declined: 'Declined', taken: 'Someone else took it' };
 function offerSection(job, offers, members, crew, of) {
   const assigned = new Set(crew.map((c) => c.user_id));
@@ -2453,8 +2457,8 @@ function offerSection(job, offers, members, crew, of) {
   if (!eligible.length && !offers.length) return '';
   return html`<div id="offers" style="margin-top:6px">
   ${offers.length ? html`<div class="list">${offers.map((o) => html`<div class="li"${o.status === 'open' ? '' : raw(' style="opacity:.7"')}>
-    <div class="main-t"><div class="t">Offered to ${o.name}</div><div class="s">${fmt(o.payout_cents)} · ${fmtWhen(o.created_at)}${o.note ? ` · ${o.note}` : ''}</div></div>
-    <div class="r">${pill(o.status === 'open' ? 'sent' : o.status === 'declined' ? 'declined' : 'draft', { sent: OFFER_STATUS.open, declined: OFFER_STATUS.declined, draft: OFFER_STATUS.taken })}
+    <div class="main-t"><div class="t">Offered to ${o.name}</div><div class="s">${fmt(o.payout_cents)} · ${o.respond_by ? `accept by ${fmtWhen(o.respond_by)}` : fmtWhen(o.created_at)}${o.note ? ` · ${o.note}` : ''}</div></div>
+    <div class="r">${offerExpired(o) ? pill('draft', { draft: 'Expired' }) : pill(o.status === 'open' ? 'sent' : o.status === 'declined' ? 'declined' : 'draft', { sent: OFFER_STATUS.open, declined: OFFER_STATUS.declined, draft: OFFER_STATUS.taken })}
       ${o.status === 'open' ? html`<form method="post" action="/offers/${o.id}/withdraw" data-confirm="Withdraw this offer?"><button type="submit" class="link" style="font-size:14px">Withdraw</button></form>` : ''}</div></div>`)}</div>` : ''}
   ${eligible.length ? html`${open ? '' : html`<button type="button" class="secondary block" id="offer-btn" style="margin-top:10px"
       onclick="document.getElementById('offer-form').hidden=false;this.hidden=true">${icon('team')}Offer this job to crew</button>`}
@@ -2468,6 +2472,9 @@ function offerSection(job, offers, members, crew, of) {
     <input id="offer_payout" name="payout" inputmode="decimal" value="${of.values.payout ?? ''}" class="${inv(of.errors, 'offer_payout')}">${fieldErr(of.errors, 'offer_payout')}
     <label for="offer_note">Note (optional)</label>
     <input id="offer_note" name="note" value="${of.values.note ?? ''}" placeholder="Needs to be done by Friday">
+    <label for="offer_deadline">Accept by</label>
+    <input id="offer_deadline" name="respond_by" type="datetime-local" value="${of.values.respond_by ?? defaultDeadline()}" class="${inv(of.errors, 'offer_deadline')}">${fieldErr(of.errors, 'offer_deadline')}
+    <div class="hint">Clear it for no deadline. They get an email with the work order and, if your company texts, a text.</div>
     <label class="check"><input type="checkbox" name="first_come" ${of.values.first_come === false ? '' : raw('checked')}> <span>First to accept gets the job</span></label>
     <div class="form-actions"><button type="submit">Send offer</button> <a class="btn secondary" href="/jobs/${job.id}#crew">Cancel</a></div>
   </form>` : ''}</div>`;
