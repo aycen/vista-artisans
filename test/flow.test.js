@@ -1346,6 +1346,7 @@ test('subcontractors without accounts: on the team, assigned to jobs, work order
     r = await post(`/jobs/${job}/assignments`, { user_id: 'sub:999999', payout: '5' }); assert.equal(r.status, 422);
     assert.equal((await q('SELECT payouts_cents::int FROM job_totals WHERE job_id = $1', [job]))[0].payouts_cents, 120000);
     let page = (await getPage(`/jobs/${job}`)).body;
+    assert.equal(stat(page, 'payouts'), '$1,200.00'); assert.equal(stat(page, 'profit'), '$2,800.00');
     assert.match(page, /Leo Tile/); assert.match(page, new RegExp(`work-order\\?sub_id=${leo}`));
     assert.match((await getPage(`/team/subs/${leo}`)).body, /Kitchen tile|9 Oak St/);
 

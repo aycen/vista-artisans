@@ -81,6 +81,7 @@ const JOB_TOTALS_SQL = `
   (SELECT COALESCE(SUM(amount_cents), 0) FROM expenses WHERE job_id = jobs.id) AS expenses_cents,
   (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE job_id = jobs.id) AS payments_cents,
   (SELECT COALESCE(SUM(payout_cents), 0) FROM job_assignments WHERE job_id = jobs.id)
+    + (SELECT COALESCE(SUM(payout_cents), 0) FROM sub_assignments WHERE job_id = jobs.id)
     + (SELECT COALESCE(SUM(labor_cents(clock_in, clock_out, rate_cents)), 0) FROM time_entries WHERE job_id = jobs.id) AS payouts_cents`;
 
 function withJobMath(job) {
