@@ -44,7 +44,8 @@ language plpgsql security definer set search_path = public as $$
 declare v_contract bigint;
 begin
   if tg_op = 'DELETE' then
-    if old.status = 'approved' then
+    -- (Deleting the whole job or company still removes it.)
+    if old.status = 'approved' and exists (select 1 from jobs where id = old.job_id) then
       raise exception 'An approved change order is part of the contract and can''t be deleted.' using errcode = 'VA001';
     end if;
     return old;

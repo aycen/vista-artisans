@@ -318,6 +318,10 @@ select pg_temp.expect(pg_temp.fails($q$delete from change_orders where title = '
 select pg_temp.expect(pg_temp.denied($q$update change_orders set signer_name = 'Forged'$q$), 'companies cannot forge the client''s signature');
 select pg_temp.expect(pg_temp.fails(format($q$insert into change_orders (org_id, job_id, title, amount_cents, status) values (%L, %s, 'Too big', -999999999, 'approved')$q$,
   current_setting('t.vista'), current_setting('t.job'))), 'a credit cannot take the contract below zero');
+reset role;
+begin; delete from jobs where id = current_setting('t.job')::bigint;
+select pg_temp.expect((select count(*) from change_orders where job_id = current_setting('t.job')::bigint) = 0, 'deleting a job removes its change orders'); rollback;
+set role authenticated;
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect((select count(*) from change_orders) = 0, 'other companies cannot see change orders');
 select pg_temp.expect(pg_temp.denied(format($q$insert into change_orders (org_id, job_id, title, amount_cents) values (%L, %s, 'x', 1)$q$,
