@@ -47,6 +47,8 @@ const verificationFields = (r, base) => ({
   ProductionMessageSample: `${r.business_name}: Hi Pat, a reminder that we're scheduled to start 12 Oak St tomorrow, Tuesday, March 3. Questions? Call ${r.contact_phone}. Reply STOP to opt out.`,
   OptInImageUrls: [`${base}/texting?company=${encodeURIComponent(r.business_name)}`],
   OptInType: 'VERBAL', MessageVolume: '1,000',
+  PrivacyPolicyUrl: `${base}/privacy#text-messages`, TermsAndConditionsUrl: `${base}/terms#text-messages`,
+  HelpMessageSample: `${r.business_name}: For help, call ${r.contact_phone} or email ${r.contact_email}. Msg & data rates may apply. Reply STOP to opt out.`,
   TollfreePhoneNumberSid: r.phone_number_sid,
   BusinessStreetAddress: r.street, BusinessCity: r.city, BusinessStateProvinceRegion: r.state, BusinessPostalCode: r.zip, BusinessCountry: 'US',
   BusinessContactFirstName: r.contact_first_name, BusinessContactLastName: r.contact_last_name,

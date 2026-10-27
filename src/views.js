@@ -109,7 +109,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 a.li:active{background:var(--surface-2)}
 @media (hover:hover){a.li:hover{background:var(--surface-2)}}
 .li .main-t{flex:1;min-width:0}
-.li .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .t{font-weight:600;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .li .s{font-size:14px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .li .r{text-align:right;flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .li .amt{font-weight:650;font-variant-numeric:tabular-nums}
@@ -444,7 +444,7 @@ ${fab ? html`<a class="fab" href="${fab.href}">${icon('plus')}${fab.label}</a>` 
 </body></html>`.s;
 }
 
-const ADMIN_TABS = [['/', 'Home', 'home'], ['/clients', 'Clients', 'users'], ['/texts', 'Texts', 'chat'], ['/jobs', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
+const ADMIN_TABS = [['/', 'Home', 'home'], ['/clients', 'Clients', 'users'], ['/texts', 'Messages', 'chat'], ['/jobs', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
 const CREW_TABS = [['/', 'Overview', 'home'], ['/schedule', 'Jobs', 'briefcase'], ['/team', 'Team', 'team']];
 const activeTab = (path, href) => (href === '/' ? path === '/' : path.startsWith(href));
 
@@ -491,7 +491,7 @@ const options = (labels, selected) => Object.entries(labels).map(([k, l]) =>
 const roleSelect = (name, selected, id) => html`<select name="${name}" ${id ? raw(`id="${id}"`) : ''}>${options(ROLES, selected)}</select>`;
 
 // ---------- Privacy policy and terms (public) ----------
-const LEGAL_UPDATED = 'October 20, 2026';
+const LEGAL_UPDATED = 'October 27, 2026';
 const SUPPORT_EMAIL = 'support@keystonefsm.com';
 const LEGAL = {
   privacy: { title: 'Privacy Policy', body: html`
@@ -510,6 +510,11 @@ const LEGAL = {
     <p>We share data with the service providers that run Keystone, only as needed: Supabase (database and sign-in), Render (hosting), Stripe (payments and subscriptions) and Resend (email delivery). We may disclose information if the law requires it.</p>
     <h2>Keeping and deleting data</h2>
     <p>We keep your records while your company uses Keystone. You can delete your account yourself at any time in the app (Account, then Delete account), and an admin can delete their company and all of its records (Company profile, then Delete company). Deletion takes effect right away; copies in our backups are erased within 30 days. You can also email us to ask for deletion or a copy of your data. We keep only what the law requires, such as billing records. See <a href="/data-deletion">how to delete your data</a>.</p>
+    <h2 id="text-messages">Text messages</h2>
+    <p>When a business using Keystone texts its clients, we use the client's mobile number only to send that business's texts about the client's
+      estimates and jobs. Mobile numbers and text message consent are never sold, rented or shared with third parties or affiliates for
+      marketing or promotional purposes. Text messaging opt-in data and consent are not shared with any third parties, except the text
+      message provider that delivers the texts (Twilio). Reply STOP to any text to stop receiving them. See <a href="/texting">Text messages</a>.</p>
     <h2>Security</h2>
     <p>Data is sent over encrypted connections, access is limited by company and role in the database itself, and connection tokens can be read only by the Keystone server. No system is perfectly secure, so please use a strong, unique password.</p>
     <h2>Children</h2>
@@ -552,6 +557,11 @@ const LEGAL = {
     <p>Some features need a paid plan. Paid plans renew automatically each month or year until cancelled, and are billed through Stripe. You can cancel any time from Plan &amp; billing; your plan stays active until the end of the paid period. Except where the law requires, payments aren't refunded. We'll give notice before changing prices.</p>
     <h2>Connected services</h2>
     <p>Stripe and other services you connect are provided by their own companies under their own terms. Payments you collect go to your own Stripe account; Keystone isn't a party to them. We aren't responsible for those services' availability or for changes you make in them.</p>
+    <h2 id="text-messages">Text messages</h2>
+    <p>Businesses using Keystone may text clients who agreed to receive texts, about their estimates and jobs only (estimate follow-ups,
+      appointment reminders and review requests). Message frequency varies, usually one to three texts per estimate or job. Message and data
+      rates may apply. Reply STOP to stop all texts from that business, or HELP for help; reply START to receive them again. Carriers are not
+      liable for delayed or undelivered messages. Businesses must collect each client's consent before texting them. See <a href="/texting">Text messages</a>.</p>
     <h2>No warranty</h2>
     <p>Keystone is provided "as is". We work to keep it accurate and available but don't promise it will be error-free or uninterrupted. Totals, profit figures and synced records are tools to help you; check them before relying on them for tax, payroll or legal purposes.</p>
     <h2>Limitation of liability</h2>
@@ -887,8 +897,9 @@ function emailSettings(ev, errors, enabled, texting = {}) {
   const toggle = (name, label, hint) => html`<label class="check"><input type="checkbox" name="${name}" ${ev[name] ? raw('checked') : ''}>
     <span>${label}<div class="hint" style="font-weight:400;margin:2px 0 0">${hint}</div></span></label>`;
   // Each follow-up has its own email and text switch; texts can be switched on only once texting is set up for the company.
-  const textToggle = (name) => html`<label class="check" style="margin-top:0"><input type="checkbox" name="${name}" ${ev[name] ? raw('checked') : ''} ${texting.ready ? '' : raw('disabled')}>
-    <span>Also by text${texting.ready ? '' : html` <span class="muted" style="font-weight:400">(not set up yet)</span>`}</span></label>`;
+  // The text switches show only once texting is set up for the company.
+  const textToggle = (name) => (texting.ready ? html`<label class="check" style="margin-top:0"><input type="checkbox" name="${name}" ${ev[name] ? raw('checked') : ''}>
+    <span>Also by text</span></label>` : '');
   return html`<h2 id="emails">Automatic follow-ups</h2>
   ${errorBox(errors)}
   <form method="post" action="/settings/emails" class="form-card" novalidate id="email-settings">
@@ -936,7 +947,7 @@ function textingPage({ reg, values = {}, errors = {}, plan, configured, flash })
     <option value="">Choose…</option>${Object.entries(opts).map(([k, l]) => html`<option value="${k}" ${values[name] === k ? raw('selected') : ''}>${l}</option>`)}</select>${fieldErr(errors, name)}`;
   return wrap(html`
   ${reg?.status === 'rejected' ? html`<div class="notice" id="texting-problem"><strong>The carriers didn't approve it yet.</strong> They said: ${reg.problem}. Fix the details below and submit again.</div>` : ''}
-  ${reg?.status === 'failed' ? html`<div class="notice" id="texting-problem"><strong>Setup didn't finish.</strong> ${reg.problem}. Submit again to pick up where it stopped.</div>` : ''}
+  ${reg?.status === 'failed' ? html`<div class="notice" id="texting-problem"><strong>Setup didn't finish.</strong> ${reg.problem} Submit again to pick up where it stopped.</div>` : ''}
   ${errorBox(errors)}
   <p class="hint" style="margin:0 2px 14px">Text clients from your own toll-free number. US phone carriers require every business that texts customers to be verified,
     so enter your business exactly as it's registered. Keystone gets your number and files the verification for you. Approval usually takes a few business days.</p>
@@ -971,7 +982,7 @@ function textingSetupCard({ configured, reg, plan }) {
   }
   const paid = plan !== 'free';
   return html`<div class="card" id="texting-setup" style="text-align:center;padding:28px 20px">
-    <div style="font-size:20px;font-weight:700;margin-bottom:6px">Text your clients</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:6px">Message your clients by text</div>
     <div class="hint" style="max-width:460px;margin:0 auto 16px">Send estimate follow-ups, appointment reminders and review requests by text, and see replies right here, from your own business number.</div>
     ${reg?.status === 'rejected' || reg?.status === 'failed' ? html`<div class="notice" style="text-align:left">Your setup needs attention: ${reg.problem}</div>` : ''}
     ${paid ? html`<a class="btn" href="/settings/texting" id="setup-text">${reg ? 'Finish texting setup' : 'Set up texting'}</a>`
@@ -979,11 +990,11 @@ function textingSetupCard({ configured, reg, plan }) {
   </div>`;
 }
 function textsPage({ setup, ready, phone, convos = [], unknown = [], clients = [], flash }) {
-  if (!ready) return layout('Texts', textingSetupCard(setup), { flash });
-  return layout('Texts', html`
+  if (!ready) return layout('Messages', textingSetupCard(setup), { flash });
+  return layout('Messages', html`
   <p class="hint" style="margin:0 2px 12px">Your number: <strong>${phone}</strong> · <a href="/settings#emails">Automatic texts</a></p>
   <form method="get" action="/texts/open" class="row" style="gap:8px;margin-bottom:16px;flex-wrap:nowrap" id="new-text">
-    <select name="client_id" style="flex:1;min-width:0" aria-label="Client"><option value="">Text a client…</option>
+    <select name="client_id" style="flex:1;min-width:0" aria-label="Client"><option value="">Message a client…</option>
       ${clients.map((c) => html`<option value="${c.id}">${c.name}</option>`)}</select>
     <button type="submit" class="secondary">Open</button></form>
   ${clients.length ? '' : html`<div class="hint" style="margin:-8px 2px 16px">Only clients marked "OK to text" (on their client page) can be texted.</div>`}
@@ -991,7 +1002,7 @@ function textsPage({ setup, ready, phone, convos = [], unknown = [], clients = [
       <div class="main-t"><div class="t">${c.name}${c.unread ? html` <span class="pill sent">${c.unread} new</span>` : ''}</div>
       <div class="s">${c.direction === 'in' ? '' : 'You: '}${c.body.length > 90 ? c.body.slice(0, 90) + '…' : c.body}</div></div>
       <div class="s muted" style="white-space:nowrap">${ago(c.created_at)}</div>${chev()}</a>`)}</div>`
-    : html`<div class="empty">No texts yet. Texts you send and replies from clients show up here.</div>`}
+    : html`<div class="empty">No messages yet. Texts you send and replies from clients show up here.</div>`}
   ${unknown.length ? html`<h2>From numbers not in your clients</h2><div class="list">${unknown.map((m) => html`<div class="li"><div class="main-t">
       <div class="t">${m.phone}</div><div class="s">${m.body}</div></div><div class="s muted" style="white-space:nowrap">${ago(m.created_at)}</div></div>`)}</div>` : ''}`,
   { flash });
@@ -1017,7 +1028,7 @@ function textThreadPage({ client, messages, canText, why, values = {}, errors = 
   <style>.thread{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}.bubble{max-width:78%;padding:10px 14px;border-radius:16px;word-wrap:break-word}.bubble .txt{white-space:pre-wrap}
     .bubble.in{align-self:flex-start;background:var(--surface);box-shadow:var(--shadow)}.bubble.out{align-self:flex-end;background:var(--accent);color:#fff}
     .bubble .meta{font-size:12px;opacity:.75;margin-top:4px}</style>`,
-  { flash, back: { href: '/texts', label: 'Texts' } });
+  { flash, back: { href: '/texts', label: 'Messages' } });
 }
 
 // Public page explaining how businesses on Keystone get consent to text (carriers' reviewers read it).
@@ -1163,7 +1174,7 @@ function teamPage({ org, members, me, joinCode, plan, subs = [], subForm = { val
     <span class="avatar">${initialOf(m)}</span>
     <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
       <div class="s">${ROLES[m.role]} · ${payLabel(m)} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}</div></div>
-    <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
+    <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">earned</span></div>${chev()}
   </a>` : html`<a class="li" href="mailto:${m.email}">
     <span class="avatar">${initialOf(m)}</span>
     <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
@@ -1176,7 +1187,7 @@ function teamPage({ org, members, me, joinCode, plan, subs = [], subForm = { val
   ${subs.length ? html`<div class="list" id="sub-list">${subs.map((sb) => html`<a class="li" href="/team/subs/${sb.id}">
     <span class="avatar">${(sb.name[0] || '?').toUpperCase()}</span>
     <div class="main-t"><div class="t">${sb.name}</div><div class="s">${sb.company ? `${sb.company} · ` : ''}No account · ${sb.job_count} job${sb.job_count === 1 ? '' : 's'}</div></div>
-    <div class="r"><span class="amt">${fmt(sb.earned_cents)}</span><span class="muted" style="font-size:12px">paid on completed jobs</span></div>${chev()}
+    <div class="r"><span class="amt">${fmt(sb.earned_cents)}</span><span class="muted" style="font-size:12px">earned</span></div>${chev()}
   </a>`)}</div>` : html`<div class="empty">No subcontractors yet.</div>`}
   <form method="post" action="/team/subs" class="form-card" novalidate id="add-sub">
     <h3>Add a subcontractor</h3>
@@ -1443,7 +1454,7 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
     <a class="btn secondary" href="/clients/new">${icon('plus')}New Client</a>
     <a class="btn" href="/estimates/new">${icon('plus')}New Estimate</a>
     <a class="btn secondary" href="/clients" id="view-clients">${icon('users')}View clients</a>
-    <a class="btn secondary" href="/estimates" id="view-estimates">${icon('file')}View estimates</a>
+    <a class="btn" href="/estimates" id="view-estimates">${icon('file')}View estimates</a>
   </div>
   ${revenueByMonth?.length ? revenueChart(revenueByMonth) : ''}
   <h2>Active jobs</h2>${jobList(activeJobs, 'No active jobs.')}

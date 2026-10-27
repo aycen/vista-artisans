@@ -1264,7 +1264,7 @@ test('text message follow-ups: optional, only with consent and a registered send
 
     // Until the company's sender is registered, the text switches are off and can't be turned on
     let page = (await getPage('/settings')).body;
-    assert.match(page, /name="sms_estimate_followups"  disabled/); assert.match(page, /not set up yet/);
+    assert.doesNotMatch(page, /name="sms_estimate_followups"/); assert.match(page, /id="setup-texting"/);
     await post('/settings/emails', settings);
     assert.deepEqual((await q('SELECT sms_estimate_followups, sms_appointment_reminders FROM company_profiles WHERE org_id = $1', [org]))[0],
       { sms_estimate_followups: false, sms_appointment_reminders: false });
@@ -1429,6 +1429,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     const [svc] = twilio.services.values(); assert.equal(svc.inbound, `${BASE}/twilio/inbound`); assert.equal(svc.numbers.length, 1);
     const [tv] = twilio.verifications.values();
     assert.equal(tv.fields.get('BusinessRegistrationNumber'), '12-3456789');
+    assert.equal(tv.fields.get('PrivacyPolicyUrl'), `${BASE}/privacy#text-messages`); assert.equal(tv.fields.get('TermsAndConditionsUrl'), `${BASE}/terms#text-messages`);
     assert.equal(tv.fields.has('CustomerProfileSid'), false, "filed under the company's own details, not Keystone's profile"); assert.equal(tv.fields.get('BusinessCity'), 'Lancaster'); assert.equal(tv.fields.get('BusinessStateProvinceRegion'), 'PA');
     assert.equal(tv.fields.get('BusinessWebsite'), 'https://louflooring.com'); assert.equal(tv.fields.get('BusinessContactPhone'), '+17175550100');
     assert.deepEqual(tv.fields.getAll('UseCaseCategories'), ['ACCOUNT_NOTIFICATIONS', 'CUSTOMER_CARE']);
@@ -1441,6 +1442,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     // The public consent page the carriers look at
     const res = await fetch(`${BASE}/texting?company=Lou%20Flooring%20LLC`); assert.equal(res.status, 200);
     assert.match(await res.text(), /Lou Flooring LLC text only their own clients/);
+    for (const pg of ['/privacy', '/terms']) assert.match(await (await fetch(BASE + pg)).text(), /id="text-messages"[\s\S]*Reply STOP/);
 
     // Rejected: the reason shows, and fixing the details edits the same verification
     Object.assign(tv, { status: 'TWILIO_REJECTED', reasons: [{ reason: 'Business website does not match business name' }], editAllowed: true });
@@ -1459,7 +1461,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     // Texts tab: text a client who agreed, see their reply, and replies from unknown numbers
     r = await post('/clients', { name: 'Pat Lee', phone: '(717) 555-0123', sms_consent: 'on' }); const pat = idFrom(r.location);
     r = await post('/clients', { name: 'Quinn Diaz', phone: '717-555-0456' }); const quinn = idFrom(r.location);
-    page = (await getPage('/texts')).body; assert.match(page, /Your number: <strong>\+1833555/); assert.match(page, /No texts yet/);
+    page = (await getPage('/texts')).body; assert.match(page, /Your number: <strong>\+1833555/); assert.match(page, /No messages yet/);
     assert.match(page, new RegExp(`<option value="${pat}">Pat Lee`)); assert.doesNotMatch(page, /Quinn Diaz/);
     assert.match((await getPage(`/texts/${quinn}`)).body, /id="cant-text">Quinn Diaz hasn&#39;t agreed|id="cant-text">Quinn Diaz hasn't agreed/);
     assert.equal((await post(`/texts/${quinn}`, { body: 'Hi' })).status, 409);
