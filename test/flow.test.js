@@ -1396,7 +1396,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
   const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
   const recheck = (org) => q("UPDATE sms_registrations SET checked_at = now() - interval '2 minutes' WHERE org_id = $1", [org]);
   await stop();
-  await start({ TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url, APP_URL: BASE, TWILIO_CUSTOMER_PROFILE_SID: 'BU123' });
+  await start({ TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url, APP_URL: BASE, TWILIO_CUSTOMER_PROFILE_SID: 'BU123', TWILIO_RETRY_MS: '50' });
   try {
     as('lou'); await post('/signup', { email: 'lou@keystone.test', password: 'lou-password' });
     await post('/org/new', { name: 'Lou Flooring' });
@@ -1438,6 +1438,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     page = (await getPage('/settings/texting')).body; assert.match(page, /Waiting for carrier approval/); assert.match(page, /\+1833555/);
     // While in review: edit and resubmit replaces the request (same number)
     assert.match(page, /id="edit-texting"/); assert.match((await getPage('/settings/texting?edit=1')).body, /id="texting-form"/);
+    twilio.state.deleting = 2; // Twilio is still removing the old request for a moment
     r = await post('/settings/texting', { ...details, website: 'https://lou.example.com' }); assert.equal(r.status, 303);
     assert.equal(twilio.verifications.size, 1, 'the old request is replaced'); assert.equal(twilio.numbers.size, 1);
     tv = [...twilio.verifications.values()][0]; assert.equal(tv.fields.get('BusinessWebsite'), 'https://lou.example.com');

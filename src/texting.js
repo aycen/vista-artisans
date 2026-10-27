@@ -12,6 +12,7 @@ const FIELDS = { business_name: 200, business_type: 20, ein: 12, street: 200, ci
   contact_first_name: 100, contact_last_name: 100, contact_email: 200, contact_phone: 30 };
 // Re-checks with Twilio at most this often (the page also checks when an admin opens it, at most once a minute).
 const CHECK_EVERY_MIN = 30;
+const RETRY_MS = Number(process.env.TWILIO_RETRY_MS || 3000);
 
 const str = (v, max) => String(v ?? '').trim().slice(0, max);
 
@@ -84,7 +85,14 @@ async function submit(orgId, values, base) {
         await sms.updateVerification(r.verification_sid, { ...fields, EditReason: 'Updated business details' });
       } else {
         if (r.verification_sid) await sms.deleteVerification(r.verification_sid).catch(() => {});
-        const tv = await sms.submitVerification(fields);
+        // Twilio removes the old request in the background and refuses a new one until it's gone (a few seconds).
+        let tv;
+        for (let i = 0; ; i++) {
+          try { tv = await sms.submitVerification(fields); break; } catch (e) {
+            if (i >= 5 || !/delete is in progress/i.test(e.message)) throw e;
+            await new Promise((ok) => setTimeout(ok, RETRY_MS));
+          }
+        }
         r.verification_sid = tv.sid;
       }
       await save("verification_sid = ?, status = 'pending', edit_allowed = false, problem = '', submitted_at = now(), checked_at = now()", r.verification_sid);

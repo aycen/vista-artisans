@@ -28,6 +28,7 @@ function startFakeTwilio(sid, token) {
     if (req.method === 'DELETE' && (m = /^\/v1\/Services\/(MG\w+)$/.exec(path))) { services.delete(m[1]); res.writeHead(204); return res.end(); }
     if (req.method === 'POST' && path === '/v1/Tollfree/Verifications') {
       if (state.failVerification) return send(400, { code: 21600, message: state.failVerification });
+      if (state.deleting > 0) { state.deleting--; return send(409, { code: 20409, message: 'A verification delete is in progress and must complete before a new verification can be created. Try again in a few seconds.' }); }
       const v = { sid: `HH${String(verifications.size + 1).padStart(32, '0')}`, status: 'PENDING_REVIEW', fields: params, edits: 0 };
       verifications.set(v.sid, v); return send(201, { sid: v.sid, status: v.status });
     }
