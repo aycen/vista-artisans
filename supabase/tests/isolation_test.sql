@@ -327,6 +327,27 @@ select pg_temp.expect((select count(*) from change_orders) = 0, 'other companies
 select pg_temp.expect(pg_temp.denied(format($q$insert into change_orders (org_id, job_id, title, amount_cents) values (%L, %s, 'x', 1)$q$,
   current_setting('t.vista'), current_setting('t.job'))), 'other companies cannot add change orders');
 
+-- Crew portal: offers go only to the person offered; crew can't see each other's referrals or set statuses
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+insert into job_offers (org_id, job_id, user_id, payout_cents) values (current_setting('t.vista')::uuid, current_setting('t.job')::bigint, '00000000-0000-0000-0000-00000000000d', 5000);
+select pg_temp.expect(pg_temp.fails(format($q$insert into job_offers (org_id, job_id, user_id, payout_cents) values (%L, %s, '00000000-0000-0000-0000-00000000000b', 1)$q$,
+  current_setting('t.vista'), current_setting('t.job'))), 'offers go only to people on the team');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.expect((select count(*) from my_offers(current_setting('t.vista')::uuid)) = 1, 'crew see their offer');
+select pg_temp.expect(pg_temp.denied($q$update job_offers set payout_cents = 999999$q$), 'crew cannot change the offered pay');
+insert into crew_referrals (org_id, name, phone) values (current_setting('t.vista')::uuid, 'Sam', '555-0100');
+select pg_temp.expect((select bonus_cents from crew_referrals where name = 'Sam') = 0, 'the bonus comes from the company setting');
+update crew_referrals set status = 'paid';
+select pg_temp.expect((select status from crew_referrals where name = 'Sam') = 'new', 'crew cannot mark their referral paid');
+insert into crew_requests (org_id, kind, details) values (current_setting('t.vista')::uuid, 'shirts', 'L x 2');
+select respond_to_offer((select offer_id from my_offers(current_setting('t.vista')::uuid)), true);
+reset role;
+select pg_temp.expect((select count(*) from job_assignments where user_id = '00000000-0000-0000-0000-00000000000d' and job_id = current_setting('t.job')::bigint and payout_cents = 5000) = 1, 'accepting assigns the job at the offered pay');
+set role authenticated;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from job_offers) + (select count(*) from crew_referrals) + (select count(*) from crew_requests) = 0, 'other companies see none of it');
+select pg_temp.expect((select count(*) from crew_perks(current_setting('t.vista')::uuid)) = 0, 'other companies cannot read the perks');
+
 -- Deleting: only an admin can delete their own company; deleting your account never touches a company others are in
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'other companies cannot delete a company');

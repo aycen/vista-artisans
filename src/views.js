@@ -8,6 +8,8 @@ const ROLES = { admin: 'Admin', worker: 'Crew' };
 // People show by name when they've given one, otherwise by email.
 const who = (p) => (p && (p.full_name || p.name)) || (p && p.email) || '';
 const initialOf = (p) => (who(p) || '?')[0].toUpperCase();
+// A person's round picture: their profile photo when they've added one, else their initial.
+const avatar = (p) => (p.has_photo ? html`<span class="avatar"><img src="/people/${p.user_id}/photo" alt=""></span>` : html`<span class="avatar">${initialOf(p)}</span>`);
 
 // ---------- Design system ----------
 const CSS = `
@@ -51,7 +53,9 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .appbar-spacer{flex:1}
 .page-title{font-size:30px;line-height:1.15;font-weight:750;letter-spacing:-.02em;margin:6px 2px 4px;overflow-wrap:anywhere}
 .page-sub{color:var(--text-2);margin:0 2px 14px;font-size:15px}
-.avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:15px}
+.portal-crew{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.avatar.big{width:56px;height:56px;font-size:20px}.sizes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.size{display:flex;align-items:center;gap:8px;margin:0}.size span{font-weight:700;min-width:34px}.offer{border:2px solid var(--accent-soft)}
+.avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.avatar{width:36px;height:36px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:15px}
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;
   padding:6px 6px calc(6px + env(safe-area-inset-bottom));min-height:var(--tabbar-h);
   background:color-mix(in srgb,var(--surface) 86%,transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-top:1px solid var(--line)}
@@ -709,12 +713,15 @@ function welcomePage({ errors = {}, values = {}, hasOrgs }) {
   </form>`, { sub: hasOrgs ? null : 'One last step before you start.', back: hasOrgs ? { href: '/account', label: 'Account' } : null });
 }
 
-function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = {}, flash }) {
+function accountPage({ user, org, orgs, plan, hasPhoto = false, theme = '', values = {}, errors = {}, flash }) {
   return layout('Account', html`
   <div class="list">
-    <div class="li"><span class="avatar">${initialOf(user)}</span><div class="main-t"><div class="t">${who(user)}</div>
-      <div class="s">${user.name ? `${user.email} · ` : ''}${org ? `${ROLES[org.role]} at ${org.name}` : 'Not in a company yet'}</div></div></div>
+    <div class="li"><span class="avatar big">${hasPhoto ? html`<img src="/people/${user.id}/photo" alt="">` : initialOf(user)}</span><div class="main-t"><div class="t">${who(user)}</div>
+      <div class="s">${user.name ? `${user.email} · ` : ''}${org ? `${ROLES[org.role]} at ${org.name}` : 'Not in a company yet'}</div>
+      <div class="row" style="gap:14px;margin-top:4px;font-size:14px"><label class="link" style="cursor:pointer;color:var(--accent);font-weight:600" id="photo-btn">${hasPhoto ? 'Change photo' : 'Add photo'}<input type="file" accept="image/*" hidden data-avatar-upload></label>
+        ${hasPhoto ? html`<form method="post" action="/account/photo/delete"><button type="submit" class="link" style="font-size:14px">Remove</button></form>` : ''}</div></div></div>
   </div>
+  <script>${raw(AVATAR_JS)}</script>
   ${errorBox(errors)}
   <form method="post" action="/account/profile" class="form-card" novalidate id="profile-form">
     <h3>Your details</h3>
@@ -856,7 +863,7 @@ function deleteCompanyPage({ org, error }) {
 }
 
 // ---------- Company profile ----------
-function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false, texting = {} }) {
+function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = null, emailValues = null, emailErrors = {}, emailEnabled = false, texting = {}, crew = null }) {
   return layout('Company profile', html`
   ${errorBox(errors)}
   <form method="post" action="/settings" id="settings-form" novalidate>
@@ -892,6 +899,14 @@ function settingsPage({ org, values, hasLogo, errors = {}, flash, payments = nul
   </form>
   ${payments ? html`<h2>Online payments</h2><div class="card" id="online-payments">${paymentsCard(payments)}</div>` : ''}
   ${emailValues ? emailSettings(emailValues, emailErrors, emailEnabled, texting) : ''}
+  ${crew ? html`<h2 id="crew-perks">Crew perks</h2>
+  <form method="post" action="/settings/crew" class="form-card" novalidate>
+    <div class="hint" style="margin-top:0">Shown on your crew's Overview.</div>
+    ${input('referral_bonus', 'Referral bonus ($)', { referral_bonus: plainCents(crew.referral_bonus_cents) }, {}, { inputmode: 'decimal',
+      hint: 'Paid when someone your crew refers completes a job. Leave at 0 to hide referrals.' })}
+    <label class="check"><input type="checkbox" name="offer_shirts" ${crew.offer_shirts ? raw('checked') : ''}> <span>Crew can request company shirts</span></label>
+    <div class="form-actions"><button type="submit" class="secondary">Save crew perks</button></div>
+  </form>` : ''}
   <h2>Danger zone</h2>
   <div class="list"><a class="li" href="/settings/delete-company" id="delete-company"><div class="main-t"><div class="t" style="color:var(--red)">Delete company</div>
     <div class="s">Permanently delete ${org.name} and all of its records</div></div>${chev()}</a></div>
@@ -1161,7 +1176,7 @@ function billingPage({ org, sub, plan, counts, enabled, testMode, interval = 'mo
 }
 
 // ---------- Team ----------
-function teamPage({ org, members, me, joinCode, plan, subs = [], subForm = { values: {}, errors: {} }, errors = {}, values = {}, flash }) {
+function teamPage({ org, members, me, joinCode, plan, requests = [], referrals = [], subs = [], subForm = { values: {}, errors: {} }, errors = {}, values = {}, flash }) {
   const admin = org.role === 'admin';
   const room = admin ? seatsLeft(plan, members) : null;
   return layout('Team', html`
@@ -1176,14 +1191,15 @@ function teamPage({ org, members, me, joinCode, plan, subs = [], subForm = { val
     <div class="code" id="join-code">${joinCode.slice(0, 4)}-${joinCode.slice(4)}</div>
     <div class="hint">Share this with your crew. After creating an account, they enter it to join ${org.name} as crew.</div>
   </div>` : ''}
+  ${admin ? requestsSection(requests, referrals) : ''}
   <h2>People</h2>
   <div class="list">${members.map((m) => (admin ? html`<a class="li" href="/team/${m.user_id}">
-    <span class="avatar">${initialOf(m)}</span>
+    ${avatar(m)}
     <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
       <div class="s">${ROLES[m.role]} · ${payLabel(m)} · ${m.job_count} job${m.job_count === 1 ? '' : 's'}</div></div>
     <div class="r"><span class="amt">${fmt(m.earned_cents)}</span><span class="muted" style="font-size:12px">earned</span></div>${chev()}
   </a>` : html`<a class="li" href="mailto:${m.email}">
-    <span class="avatar">${initialOf(m)}</span>
+    ${avatar(m)}
     <div class="main-t"><div class="t">${who(m)}${m.user_id === me ? html` <span class="muted">(you)</span>` : ''}</div>
       <div class="s">${ROLES[m.role]}${m.full_name ? ` · ${m.email}` : ''}</div></div>
     <span class="icon-bubble">${icon('mail')}</span>
@@ -1322,7 +1338,112 @@ const crewRow = (j) => html`<a class="li" href="/schedule/${j.job_id}">
 const crewList = (list, empty) => (list.length ? html`<div class="list">${list.map(crewRow)}</div>` : html`<div class="empty">${empty}</div>`);
 const onDay = (j, d) => j.start_date && j.start_date <= d && (j.end_date || j.start_date) >= d;
 
-function crewHomePage({ jobs, today, year, flash }) {
+// ---------- Crew portal pieces ----------
+const REFERRAL_STATUS = { new: 'New', contacted: 'Contacted', joined: 'Joined the team', earned: 'Completed a job: bonus owed', paid: 'Bonus paid', not_a_fit: 'Not a fit' };
+const SHIRT_SIZES = ['S', 'M', 'L', 'XL', '2XL', '3XL'];
+const offerCard = (o) => html`<div class="card offer" data-offer="${o.offer_id}">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+    <a href="/offers/${o.offer_id}" style="color:inherit;min-width:0"><div class="t" style="font-weight:700">${o.project_name}</div>
+      <div class="muted" style="font-size:14px">${dateRange(o.start_date, o.end_date) || 'Dates to be set'}${o.address ? ` · ${o.address}` : ''}</div></a>
+    <div class="amt" style="font-size:18px;font-weight:750">${fmt(o.payout_cents)}</div></div>
+  ${o.note ? html`<div class="hint" style="margin-top:6px">${o.note}</div>` : ''}
+  <div class="row" style="gap:8px;margin-top:12px">
+    <form method="post" action="/offers/${o.offer_id}/accept" style="flex:1"><button type="submit" class="block">${icon('check')}Accept</button></form>
+    <form method="post" action="/offers/${o.offer_id}/decline" style="flex:1" data-confirm="Decline this job?"><button type="submit" class="secondary block">Decline</button></form></div>
+  <div style="margin-top:8px;font-size:14px"><a href="/offers/${o.offer_id}">See scope of work</a></div></div>`;
+
+function offerPage({ offer, flash }) {
+  return layout(offer.project_name, html`
+  <div class="hero"><div class="k">Pay for this job</div><div class="v">${fmt(offer.payout_cents)}</div>
+    <div class="s">${dateRange(offer.start_date, offer.end_date) || 'Dates to be set'}</div></div>
+  <div class="list"><div class="kv"><span class="k">Address</span><span class="v">${offer.address || '—'}</span></div></div>
+  ${offer.note ? html`<h2>Note</h2><div class="card pre">${offer.note}</div>` : ''}
+  <h2>Scope of work</h2><div class="card pre">${offer.scope || '—'}</div>
+  <div class="row" style="gap:8px">
+    <form method="post" action="/offers/${offer.offer_id}/accept" style="flex:1"><button type="submit" class="block" id="accept-offer">${icon('check')}Accept job</button></form>
+    <form method="post" action="/offers/${offer.offer_id}/decline" style="flex:1" data-confirm="Decline this job?"><button type="submit" class="secondary block">Decline</button></form></div>`,
+  { flash, back: { href: '/', label: 'Overview' } });
+}
+
+// Referral, shirts, call and photo cards at the bottom of the crew Overview.
+function crewExtras({ perks, referrals, requests, hasPhoto, profile, forms }) {
+  const rf = forms.referral || { values: {}, errors: {} };
+  const sf = forms.shirts || { values: {}, errors: {} };
+  const cf = forms.call || { values: { phone: profile.phone || '' }, errors: {} };
+  const bonus = perks.referral_bonus_cents || 0;
+  return html`
+  ${hasPhoto ? '' : html`<div class="card row" id="add-photo-card" style="gap:12px;align-items:center">
+    <span class="icon-bubble">${icon('camera')}</span>
+    <div style="flex:1;min-width:0"><strong>Add your photo</strong><div class="muted" style="font-size:14px">So homeowners know who's coming.</div></div>
+    <label class="btn sm secondary">Add<input type="file" accept="image/*" hidden data-avatar-upload></label></div>
+  <script>${raw(AVATAR_JS)}</script>`}
+  ${bonus ? html`<h2 id="refer">Refer a contractor</h2>
+  <details class="card" ${hasErrs(rf.errors) ? raw('open') : ''}><summary style="cursor:pointer"><strong>Earn ${fmt(bonus)}</strong>
+    <span class="muted">for every contractor you refer who completes a job with us.</span></summary>
+    <form method="post" action="/referrals" novalidate id="referral-form" style="margin-top:6px">
+      ${errorBox(rf.errors)}
+      ${input('ref_name', 'Their name', rf.values, rf.errors, { required: true })}
+      <div class="two stack"><div>${input('ref_email', 'Email', rf.values, rf.errors, { type: 'email', inputmode: 'email' })}</div>
+        <div>${input('ref_phone', 'Phone', rf.values, rf.errors, { type: 'tel', inputmode: 'tel' })}</div></div>
+      ${textarea('ref_about', 'Tell us about them (optional)', rf.values, rf.errors, { placeholder: 'Their trade, how long you’ve known them, the kind of work they do…' })}
+      <div class="form-actions"><button type="submit">Send referral</button></div>
+    </form></details>
+  ${referrals.length ? html`<div class="list" id="my-referrals">${referrals.map((r) => html`<div class="li"><div class="main-t"><div class="t">${r.name}</div>
+    <div class="s">${fmtDate(r.created_at.slice(0, 10))}</div></div>${pill(r.status === 'paid' || r.status === 'earned' ? 'approved' : r.status === 'not_a_fit' ? 'declined' : 'sent', { approved: REFERRAL_STATUS[r.status], declined: REFERRAL_STATUS[r.status], sent: REFERRAL_STATUS[r.status] })}</div>`)}</div>` : ''}` : ''}
+  <h2 id="requests">Need something?</h2>
+  ${requests.length ? html`<div class="list">${requests.map((r) => html`<div class="li"><div class="main-t"><div class="t">${r.kind === 'shirts' ? `Shirts: ${r.details}` : 'Call requested'}</div>
+    <div class="s">Sent ${fmtWhen(r.created_at)}</div></div>${pill('sent', { sent: 'Sent' })}</div>`)}</div>` : ''}
+  <div class="actions">
+    ${perks.offer_shirts ? html`<button type="button" class="secondary" onclick="document.getElementById('shirt-form').hidden=false;document.getElementById('call-form').hidden=true">Request shirts</button>` : ''}
+    <button type="button" class="secondary" onclick="document.getElementById('call-form').hidden=false;var s=document.getElementById('shirt-form');if(s)s.hidden=true">${icon('phone')}Request a call</button></div>
+  ${perks.offer_shirts ? html`<form method="post" action="/requests" class="form-card" id="shirt-form" novalidate${hasErrs(sf.errors) ? '' : ' hidden'}>
+    <input type="hidden" name="kind" value="shirts"><h3>Shirts</h3><div class="hint">How many of each size?</div>
+    <div class="sizes">${SHIRT_SIZES.map((sz) => html`<label class="size"><span>${sz}</span><input type="number" name="shirt_${sz}" min="0" max="50" inputmode="numeric" value="${sf.values[`shirt_${sz}`] || ''}" placeholder="0"></label>`)}</div>
+    ${fieldErr(sf.errors, 'shirts')}
+    <div class="form-actions"><button type="submit">Send request</button></div></form>` : ''}
+  <form method="post" action="/requests" class="form-card" id="call-form" novalidate${hasErrs(cf.errors) ? '' : ' hidden'}>
+    <input type="hidden" name="kind" value="call"><h3>Request a call</h3>
+    <label for="call_phone">Number to call</label><input id="call_phone" name="phone" type="tel" inputmode="tel" value="${cf.values.phone ?? ''}" class="${inv(cf.errors, 'call_phone')}">${fieldErr(cf.errors, 'call_phone')}
+    ${textarea('details', 'What about? (optional)', cf.values, cf.errors, { placeholder: 'Best time to call, or what it’s about' })}
+    <div class="form-actions"><button type="submit">Send request</button></div></form>`;
+}
+// Crops the chosen picture to a centered square (400px JPEG), uploads it as the profile photo, then reloads.
+const AVATAR_JS = `
+(function () {
+  document.querySelectorAll('[data-avatar-upload]').forEach(function (inp) {
+    if (inp.dataset.ready) return; inp.dataset.ready = '1';
+    inp.addEventListener('change', function () {
+      var f = inp.files[0]; if (!f) return;
+      var img = new Image();
+      img.onload = function () {
+        var s = Math.min(img.width, img.height), c = document.createElement('canvas'); c.width = c.height = 400;
+        c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 400, 400);
+        URL.revokeObjectURL(img.src);
+        fetch('/account/photo', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'photo_data=' + encodeURIComponent(c.toDataURL('image/jpeg', 0.85)) })
+          .then(function (r) { if (!r.ok) throw new Error(); location.reload(); })
+          .catch(function () { alert('That photo could not be saved. Please try another one.'); });
+      };
+      img.onerror = function () { alert('That file is not a photo we can read.'); };
+      img.src = URL.createObjectURL(f);
+    });
+  });
+})();`;
+
+// Admin view of what the crew sent: open requests and referrals (on the Team page).
+function requestsSection(requests, referrals) {
+  if (!requests.length && !referrals.length) return '';
+  return html`<h2 id="requests">Requests from your crew</h2>
+  <div class="list">${requests.map((r) => html`<div class="li"><div class="main-t"><div class="t">${r.name}: ${r.kind === 'shirts' ? 'shirts' : 'call me'}</div>
+    <div class="s">${r.kind === 'shirts' ? r.details : `${r.phone}${r.details ? ` · ${r.details}` : ''}`} · ${fmtWhen(r.created_at)}</div></div>
+    <form method="post" action="/requests/${r.id}/done"><button type="submit" class="sm secondary">Done</button></form></div>`)}
+  ${referrals.map((r) => html`<div class="li" style="align-items:flex-start"><div class="main-t"><div class="t">Referral: ${r.name}</div>
+    <div class="s">From ${r.by_name} · ${[r.email, r.phone].filter(Boolean).join(' · ')}${r.bonus_cents ? ` · ${fmt(r.bonus_cents)} bonus` : ''}</div>
+    ${r.about ? html`<div class="s" style="margin-top:4px;white-space:pre-line">${r.about}</div>` : ''}</div>
+    <form method="post" action="/referrals/${r.id}" class="row" style="gap:6px"><select name="status" aria-label="Referral status" style="width:auto;min-height:36px;font-size:14px" onchange="this.form.submit()">${options(REFERRAL_STATUS, r.status)}</select></form></div>`)}</div>`;
+}
+
+function crewHomePage({ jobs, today, year, flash, offers = [], perks = {}, referrals = [], requests = [], hasPhoto = true, profile = {}, forms = {} }) {
   const open = jobs.filter((j) => j.status !== 'completed');
   const doneThisYear = jobs.filter((j) => j.status === 'completed' && j.completed_year === year);
   const todays = open.filter((j) => onDay(j, today));
@@ -1331,6 +1452,7 @@ function crewHomePage({ jobs, today, year, flash }) {
   const sum = (list) => list.reduce((t, j) => t + Number(j.my_payout_cents || 0), 0);
   const clocked = jobs.find((j) => j.clocked_in_at);
   return layout('Overview', html`
+  ${offers.length ? html`<h2 id="offers" style="margin-top:0">Job offers</h2>${offers.map(offerCard)}` : ''}
   ${clocked ? html`<a class="card clock" id="clocked-in" href="/schedule/${clocked.job_id}" style="color:inherit">
     <div><div class="t">You're clocked in</div><div class="s">${clocked.project_name}</div></div><span class="btn danger sm">Clock out</span></a>` : ''}
   <div class="hero" id="next-job">
@@ -1347,7 +1469,8 @@ function crewHomePage({ jobs, today, year, flash }) {
     <div class="stat"><div class="k">Pay in ${year}</div><div class="v" data-k="pay-year">${fmt(sum(doneThisYear))}</div><div class="s">From completed jobs</div></div>
   </div>
   ${todays.length ? html`<h2>Today</h2>${crewList(todays, '')}` : ''}
-  <h2>Coming up</h2>${crewList(later, 'No other open jobs assigned to you.')}`, { flash, pageTitle: 'Overview' });
+  <h2>Coming up</h2>${crewList(later, 'No other open jobs assigned to you.')}
+  ${crewExtras({ perks, referrals, requests, hasPhoto, profile, forms })}`, { flash, pageTitle: 'Overview' });
 }
 
 function crewJobsPage({ jobs, cal, flash }) {
@@ -2014,7 +2137,7 @@ function changeOrderPublicPage({ client, co, job, company, hasLogo, token, value
   </div>${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${co.title} · ${company.name}` });
 }
 
-function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, token, flash }) {
+function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, crew = [], token, flash }) {
   const base = `/c/${token}`;
   const toSign = changeOrders.filter((c) => c.status === 'pending');
   const toPay = invoices.filter((i) => i.status === 'open' && i.hosted_url);
@@ -2037,8 +2160,12 @@ function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, i
     const cos = changeOrders.filter((c) => c.job_id === j.id && c.status === 'approved');
     const pics = photos.filter((p) => p.job_id === j.id);
     const paid = invoices.filter((i) => i.job_id === j.id && i.status === 'paid');
+    const team = crew.filter((c) => c.job_id === j.id);
     return html`<h2>${j.project_name}</h2><div class="card portal-job">
       <div class="row" style="justify-content:space-between">${pill(j.status, JOB_STATUS)}<span class="muted" style="font-size:14px">${dateRange(j.start_date, j.end_date)}</span></div>
+      ${team.length && j.status !== 'completed' ? html`<div class="portal-crew"><div class="muted" style="font-size:13px">Your crew</div>
+        <div class="row" style="gap:12px;flex-wrap:wrap;margin-top:6px">${team.map((c) => html`<div class="row" style="gap:8px">
+          <span class="avatar">${c.has_photo ? html`<img src="${base}/crew/${c.user_id}/photo" alt="${c.name}">` : (c.name[0] || '?').toUpperCase()}</span><strong style="font-size:15px">${c.name}</strong></div>`)}</div></div>` : ''}
       <table class="lines" style="margin-top:10px"><tbody>
         <tr><td>Contract${cos.length ? ` (includes ${cos.length} change order${cos.length > 1 ? 's' : ''})` : ''}</td><td class="num">${fmt(j.contract_cents)}</td></tr>
         <tr><td>Paid</td><td class="num">${fmt(j.payments_cents)}</td></tr></tbody>
@@ -2155,7 +2282,7 @@ function jobsPage({ jobs, status, cal, flash }) {
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
 }
 
-function jobPage({ job, client, changeOrders = [], expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
+function jobPage({ job, client, changeOrders = [], offers = [], expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes, address: job.address }, errors: {} };
   const editDetails = Boolean(forms.job);
   const cf = forms.change || { values: {}, errors: {} }; // open the form again when a save had errors
@@ -2168,7 +2295,7 @@ function jobPage({ job, client, changeOrders = [], expenses, payments, crew = []
   const final = job.status === 'completed';
   return layout(job.project_name, html`
   <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)} ${dateRange(job.start_date, job.end_date) ? html`<span class="muted" style="margin-left:6px">${dateRange(job.start_date, job.end_date)}</span>` : ''}</p>
-  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors, ...tf.errors, ...cf.errors })}
+  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors, ...tf.errors, ...cf.errors, ...(forms.offer?.errors || {}) })}
   <div class="stats" id="job-summary">
     <div class="stat"><div class="k">Contract total</div><div class="v" data-k="contract">${fmt(job.contract_cents)}</div>${changeOrders.some((c) => c.status === 'approved') ? html`<div class="s"><a href="#change-orders">Includes ${signed(changeOrders.filter((c) => c.status === 'approved').reduce((a, c) => a + c.amount_cents, 0))} in change orders</a></div>` : ''}</div>
     <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
@@ -2207,7 +2334,7 @@ function jobPage({ job, client, changeOrders = [], expenses, payments, crew = []
     <div class="form-actions"><button type="submit">Save job details</button> <a class="btn secondary" href="/jobs/${job.id}">Cancel</a></div>
   </form>
 
-  <h2>Crew & payouts</h2>
+  <h2 id="crew">Crew & payouts</h2>
   ${crew.length || subCrew.length ? html`<div class="list">${crew.map((c) => html`<div class="li">
     <span class="avatar">${initialOf(c)}</span>
     <div class="main-t"><div class="t">${who(c)}</div><div class="s">${c.role === 'removed' ? 'No longer on team' : `${ROLES[c.role]} · ${payLabel(c)}`}${c.pay_type === 'w2' || c.minutes ? ` · ${fmtHours(c.minutes)} worked` : ''}</div></div>
@@ -2227,6 +2354,7 @@ function jobPage({ job, client, changeOrders = [], expenses, payments, crew = []
     <div class="hint">Add subs without an account on the <a href="/team#subs">Team page</a>. Subcontractors: the fixed amount for this job. W-2 employees: leave blank; they clock in and their hours × hourly rate count automatically. Each person sees only their own pay. Records only; nothing is paid through the app.</div>
     <div class="form-actions"><button type="submit" class="secondary">Assign / update payout</button></div>
   </form>` : ''}
+  ${offerSection(job, offers, members, crew, forms.offer || { values: {}, errors: {} })}
 
   ${time.length || w2.length ? html`<h2 id="time">Time clock</h2>
   ${time.length ? html`<div class="list" id="time-entries">${time.map((t) => {
@@ -2315,6 +2443,35 @@ function changeOrderSection(job, client, changeOrders, cf, canEmail) {
     f.querySelectorAll('.seg label').forEach(function(l){l.classList.toggle('on',l.querySelector('input').checked)})})})})();`)}</script>`;
 }
 const hasErrs = (e) => !!e && Object.keys(e).length > 0;
+// ---------- Job offers (on the job page): offer the job to crew members, who accept or decline in the app ----------
+const OFFER_STATUS = { open: 'Waiting', declined: 'Declined', taken: 'Someone else took it' };
+function offerSection(job, offers, members, crew, of) {
+  const assigned = new Set(crew.map((c) => c.user_id));
+  const eligible = members.filter((m) => m.role === 'worker' && !assigned.has(m.user_id));
+  const open = hasErrs(of.errors);
+  const picked = new Set(of.values.user_ids || []);
+  if (!eligible.length && !offers.length) return '';
+  return html`<div id="offers" style="margin-top:6px">
+  ${offers.length ? html`<div class="list">${offers.map((o) => html`<div class="li"${o.status === 'open' ? '' : raw(' style="opacity:.7"')}>
+    <div class="main-t"><div class="t">Offered to ${o.name}</div><div class="s">${fmt(o.payout_cents)} · ${fmtWhen(o.created_at)}${o.note ? ` · ${o.note}` : ''}</div></div>
+    <div class="r">${pill(o.status === 'open' ? 'sent' : o.status === 'declined' ? 'declined' : 'draft', { sent: OFFER_STATUS.open, declined: OFFER_STATUS.declined, draft: OFFER_STATUS.taken })}
+      ${o.status === 'open' ? html`<form method="post" action="/offers/${o.id}/withdraw" data-confirm="Withdraw this offer?"><button type="submit" class="link" style="font-size:14px">Withdraw</button></form>` : ''}</div></div>`)}</div>` : ''}
+  ${eligible.length ? html`${open ? '' : html`<button type="button" class="secondary block" id="offer-btn" style="margin-top:10px"
+      onclick="document.getElementById('offer-form').hidden=false;this.hidden=true">${icon('team')}Offer this job to crew</button>`}
+  <form method="post" action="/jobs/${job.id}/offers" class="form-card" id="offer-form" novalidate${open ? '' : ' hidden'}>
+    <h3>Offer this job</h3>
+    <div class="hint">They see the address, dates, scope and pay on their Overview and accept or decline it. Accepting assigns them at this pay.</div>
+    <label>Offer to</label>
+    ${eligible.map((m) => html`<label class="check"><input type="checkbox" name="user_id" value="${m.user_id}" ${picked.has(m.user_id) ? raw('checked') : ''}> <span>${who(m)}</span></label>`)}
+    ${fieldErr(of.errors, 'offer_to')}
+    <label for="offer_payout">Pay for this job ($)</label>
+    <input id="offer_payout" name="payout" inputmode="decimal" value="${of.values.payout ?? ''}" class="${inv(of.errors, 'offer_payout')}">${fieldErr(of.errors, 'offer_payout')}
+    <label for="offer_note">Note (optional)</label>
+    <input id="offer_note" name="note" value="${of.values.note ?? ''}" placeholder="Needs to be done by Friday">
+    <label class="check"><input type="checkbox" name="first_come" ${of.values.first_come === false ? '' : raw('checked')}> <span>First to accept gets the job</span></label>
+    <div class="form-actions"><button type="submit">Send offer</button> <a class="btn secondary" href="/jobs/${job.id}#crew">Cancel</a></div>
+  </form>` : ''}</div>`;
+}
 const sendWo = (jobId, key, val) => html`<form method="post" action="/jobs/${jobId}/work-order/send" style="display:inline" data-confirm="Email this work order now?">
   <input type="hidden" name="${key}" value="${val}"><button type="submit" class="link" style="font-size:14px">Email it</button></form>`;
 
@@ -2508,7 +2665,7 @@ function messagePage(title, message) {
 }
 
 module.exports = {
-  ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, changeOrderPublicPage, portalPage, reportsPage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
+  ESTIMATE_STATUS, JOB_STATUS, REFERRAL_STATUS, offerPage, nav, publicEstimatePage, changeOrderPublicPage, portalPage, reportsPage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, textsPage, textThreadPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
 };

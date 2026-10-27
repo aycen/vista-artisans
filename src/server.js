@@ -206,6 +206,8 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
     job, ...extra,
     client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id),
     changeOrders: await db.all('SELECT * FROM change_orders WHERE job_id = ? ORDER BY id', id),
+    offers: await db.all(`SELECT o.*, coalesce(nullif(m.full_name, ''), m.email, 'Former crew') AS name FROM job_offers o
+      LEFT JOIN org_members(?) m ON m.user_id = o.user_id WHERE o.job_id = ? AND o.status IN ('open', 'declined', 'taken') ORDER BY o.id`, org, id),
     expenses: await db.all(`SELECT expenses.*, EXISTS (SELECT 1 FROM expense_receipts r WHERE r.expense_id = expenses.id) AS has_receipt
       FROM expenses WHERE job_id = ? ORDER BY id`, id),
     payments: await db.all(`SELECT payments.*, invoices.number AS invoice_number FROM payments
@@ -804,6 +806,180 @@ route('POST', '/change-orders/:id/delete', ({ db, org, id }) => changeOrderActio
   return 'Change order deleted';
 }));
 
+// ---------- Crew portal: job offers, referrals, requests, profile photos (migration 0020) ----------
+// Offers: admins offer a job to crew members at a set pay; the first to accept is assigned (unless first_come is off).
+route('POST', '/jobs/:id/offers', async ({ db, org, id, form, req }) => {
+  const job = await db.get('SELECT * FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!job) return notFound();
+  const values = { user_ids: form.getAll('user_id').map((u) => str(u, 40)), payout: str(form.get('payout'), 30), note: str(form.get('note'), 2000),
+    first_come: form.get('first_come') === 'on' };
+  const errors = {};
+  if (!values.user_ids.length) errors.offer_to = 'Choose who to offer it to.';
+  const m = parseMoney(values.payout, 'Pay');
+  if (m.error) errors.offer_payout = m.error;
+  const again = (errs, status) => renderJob(db, org.org_id, id, { forms: { offer: { values, errors: errs } } }, status);
+  if (hasErrors(errors)) return again(errors, 422);
+  const r = await attempt(db, async () => {
+    const out = [];
+    for (const uid of values.user_ids) {
+      if (!/^[0-9a-f-]{36}$/.test(uid)) throw Object.assign(new Error('That person is not on your team.'), { code: 'VA001' });
+      if (await db.get("SELECT 1 FROM job_offers WHERE job_id = ? AND user_id = ? AND status = 'open'", id, uid)) continue;
+      out.push(await db.get(`INSERT INTO job_offers (org_id, job_id, user_id, payout_cents, note, first_come) VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+        org.org_id, id, uid, m.value, values.note, values.first_come));
+    }
+    return out;
+  });
+  if (r.error) { const msg = dbMessage(r.error); if (!msg) throw r.error; return again({ offer_to: msg }, 422); }
+  let emailed = 0;
+  if (email.configured() && r.value.length) {
+    const people = await db.all('SELECT * FROM org_members(?)', org.org_id);
+    await asServer(async (sdb) => {
+      const company = await mailer.companyOf(sdb, org.org_id);
+      for (const o of r.value) {
+        const p = people.find((x) => x.user_id === o.user_id);
+        if (!p || !email.validEmail(p.email)) continue;
+        const t = mailer.templates.job_offer({ company, job, offer: o, name: p.full_name || '', url: `${baseUrl(req)}/offers/${o.id}` });
+        if ((await mailer.deliver(sdb, { orgId: org.org_id, kind: 'job_offer', to: p.email, ...t, company, jobId: job.id })).ok) emailed += 1;
+      }
+    });
+  }
+  const n = r.value.length;
+  return redirect(`/jobs/${id}?msg=${encodeURIComponent(`Job offered to ${n} ${n === 1 ? 'person' : 'people'}${emailed ? ' and emailed' : ''}. They'll see it on their Overview.`)}#crew`);
+});
+route('POST', '/offers/:id/withdraw', async ({ db, org, id }) => {
+  const o = await db.get('SELECT * FROM job_offers WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!o) return notFound();
+  await db.run("UPDATE job_offers SET status = 'withdrawn', responded_at = now() WHERE id = ? AND status = 'open'", id);
+  return redirect(`/jobs/${o.job_id}?msg=Offer+withdrawn#crew`);
+});
+route('GET', '/offers/:id', async ({ db, org, id, url }) => {
+  if (org.role === 'admin') {
+    const o = await db.get('SELECT job_id FROM job_offers WHERE id = ? AND org_id = ?', id, org.org_id);
+    return o ? redirect(`/jobs/${o.job_id}#crew`) : notFound();
+  }
+  const offer = await db.get('SELECT *, start_date::text AS start_date, end_date::text AS end_date FROM my_offers(?) WHERE offer_id = ?', org.org_id, id);
+  if (!offer) {
+    const mine = await db.get('SELECT status, job_id FROM job_offers WHERE id = ?', id);
+    if (mine?.status === 'accepted') return redirect(`/schedule/${mine.job_id}`);
+    return page(404, v.messagePage('Offer closed', mine?.status === 'taken' ? 'Sorry, someone else already took this job.' : 'This offer is no longer open.'));
+  }
+  return ok(v.offerPage({ offer, flash: url.searchParams.get('msg') }));
+}, { worker: true });
+for (const [action, accept] of [['accept', true], ['decline', false]]) {
+  route('POST', `/offers/:id/${action}`, async ({ db, org, id, user }) => {
+    const r = await attempt(db, () => db.get('SELECT respond_to_offer(?, ?) AS r', id, accept));
+    if (r.error) { const msg = dbMessage(r.error); if (!msg) throw r.error; return redirect(`/?msg=${encodeURIComponent(msg)}`); }
+    const o = await db.get('SELECT * FROM job_offers WHERE id = ?', id);
+    await notifyAdmins(org.org_id, accept ? 'Job offer accepted' : 'Job offer declined', async (sdb) => {
+      const job = await sdb.get('SELECT project_name FROM jobs WHERE id = ?', o.job_id);
+      return { heading: `${await personName(sdb, user.id)} ${accept ? 'accepted' : 'declined'} ${job.project_name}`,
+        paragraphs: [accept ? `They're now assigned at ${fmt(o.payout_cents)}.` : 'The job is still open for others you offered it to.'], path: `/jobs/${o.job_id}` };
+    });
+    return accept ? redirect(`/schedule/${o.job_id}?msg=${encodeURIComponent("You've got the job! It's on your schedule.")}`) : redirect('/?msg=Offer+declined');
+  }, { worker: true });
+}
+
+// Tells the company (its email, or its admins) that someone on the crew did something.
+const personName = async (db, uid) => {
+  const p = await db.get(`SELECT coalesce(nullif(p.full_name, ''), u.email) AS n FROM auth.users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`, uid);
+  return p?.n || 'Someone on your crew';
+};
+async function notifyAdmins(orgId, subject, build) {
+  if (!email.configured()) return;
+  try {
+    await asServer(async (sdb) => {
+      const company = await mailer.companyOf(sdb, orgId);
+      const { heading, paragraphs, path } = await build(sdb);
+      const base = mailer.appUrl();
+      for (const to of await companyRecipients(sdb, orgId, company)) {
+        await mailer.deliver(sdb, { orgId, kind: 'crew_request', to, subject, company: { ...company, name: 'Keystone' },
+          content: { heading, paragraphs, button: base ? { label: 'Open Keystone', url: `${base}${path}` } : undefined } });
+      }
+    });
+  } catch (e) { console.error(`Could not notify the company (${subject}):`, e.message); }
+}
+
+// Referrals: a crew member suggests another contractor; the company pays its bonus once that person completes a job.
+route('POST', '/referrals', async (ctx) => {
+  const { db, org, form, user } = ctx;
+  const f = formObj(form);
+  const values = { name: str(f.ref_name, 200), email: str(f.ref_email, 200), phone: str(f.ref_phone, 50), about: str(f.ref_about, 2000) };
+  const errors = {};
+  if (!values.name) errors.ref_name = 'Enter their name.';
+  if (!values.email && !values.phone) errors.ref_email = 'Enter an email or a phone number so we can reach them.';
+  if (values.email && !email.validEmail(values.email)) errors.ref_email = 'Email address does not look valid.';
+  if (values.phone && !/^[0-9+().\-\s x]{7,}$/i.test(values.phone)) errors.ref_phone = 'Phone number does not look valid.';
+  if (hasErrors(errors)) return crewHome(ctx, { forms: { referral: { values, errors } } }, 422);
+  await db.run('INSERT INTO crew_referrals (org_id, name, email, phone, about) VALUES (?, ?, ?, ?, ?)', org.org_id, values.name, values.email, values.phone, values.about);
+  await notifyAdmins(org.org_id, `New referral: ${values.name}`, async (sdb) => ({
+    heading: `${await personName(sdb, user.id)} referred ${values.name}`,
+    paragraphs: [[values.email, values.phone].filter(Boolean).join(' · '), values.about].filter(Boolean), path: '/team#requests' }));
+  return redirect(`/?msg=${encodeURIComponent(`Thanks! We'll reach out to ${values.name}.`)}#refer`);
+}, { worker: true });
+
+// Requests from the crew: shirts (sizes and quantities) or a call.
+const SHIRT_SIZES = ['S', 'M', 'L', 'XL', '2XL', '3XL'];
+route('POST', '/requests', async (ctx) => {
+  const { db, org, form, user } = ctx;
+  const f = formObj(form);
+  const kind = f.kind === 'shirts' ? 'shirts' : 'call';
+  const errors = {}; let details = ''; const phone = str(f.phone, 50);
+  if (kind === 'shirts') {
+    const perks = await db.get('SELECT * FROM crew_perks(?)', org.org_id);
+    if (!perks?.offer_shirts) return redirect('/');
+    const picks = SHIRT_SIZES.map((s) => [s, Math.max(0, Math.min(50, parseInt(f[`shirt_${s}`], 10) || 0))]).filter(([, n]) => n);
+    if (!picks.length) errors.shirts = 'Choose how many shirts you need in at least one size.';
+    details = picks.map(([s, n]) => `${s} × ${n}`).join(', ');
+  } else {
+    details = str(f.details, 2000);
+    if (!phone || !/^[0-9+().\-\s x]{7,}$/i.test(phone)) errors.call_phone = 'Enter the number to call.';
+  }
+  if (hasErrors(errors)) return crewHome(ctx, { forms: { [kind]: { values: f, errors } } }, 422);
+  await db.run('INSERT INTO crew_requests (org_id, kind, details, phone) VALUES (?, ?, ?, ?)', org.org_id, kind, details, phone);
+  await notifyAdmins(org.org_id, kind === 'shirts' ? 'Shirt request' : 'Call request', async (sdb) => {
+    const n = await personName(sdb, user.id);
+    return kind === 'shirts' ? { heading: `${n} asked for shirts`, paragraphs: [details], path: '/team#requests' }
+      : { heading: `${n} asked for a call`, paragraphs: [`Call ${phone}`, details].filter(Boolean), path: '/team#requests' };
+  });
+  return redirect(`/?msg=${encodeURIComponent(kind === 'shirts' ? 'Shirt request sent' : "Call request sent. We'll call you soon.")}#requests`);
+}, { worker: true });
+route('POST', '/requests/:id/done', async ({ db, org, id }) => {
+  await db.run("UPDATE crew_requests SET status = 'done' WHERE id = ? AND org_id = ?", id, org.org_id);
+  return redirect('/team?msg=Marked+done#requests');
+});
+route('POST', '/referrals/:id', async ({ db, org, id, form }) => {
+  const status = form.get('status');
+  if (!v.REFERRAL_STATUS[status]) return redirect('/team#requests');
+  await db.run('UPDATE crew_referrals SET status = ?, updated_at = now() WHERE id = ? AND org_id = ?', status, id, org.org_id);
+  return redirect('/team?msg=Referral+updated#requests');
+});
+route('POST', '/settings/crew', async ({ db, org, form }) => {
+  const m = parseMoney(str(form.get('referral_bonus'), 30) || '0', 'Referral bonus', { max: 10000000 });
+  if (m.error) return redirect(`/settings?msg=${encodeURIComponent(m.error)}#crew-perks`);
+  await db.run(`INSERT INTO company_profiles (org_id, referral_bonus_cents, offer_shirts) VALUES (?, ?, ?)
+    ON CONFLICT (org_id) DO UPDATE SET referral_bonus_cents = excluded.referral_bonus_cents, offer_shirts = excluded.offer_shirts, updated_at = now()`,
+  org.org_id, m.value, form.get('offer_shirts') === 'on');
+  return redirect('/settings?msg=Crew+settings+saved#crew-perks');
+});
+
+// Profile photos: your own; seen by your teammates and by clients on whose jobs you're working.
+route('POST', '/account/photo', async ({ db, user, form }) => {
+  const ph = parsePhoto(form.get('photo_data'));
+  if (ph.error || ph.photo.data.length > 1_048_576) return page(422, ph.error || 'That photo is too large.', { 'Content-Type': 'text/plain; charset=utf-8' });
+  await db.run(`INSERT INTO profile_photos (user_id, data, content_type) VALUES (?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET data = excluded.data, content_type = excluded.content_type, updated_at = now()`, user.id, ph.photo.data, ph.photo.type);
+  return redirect('/account?msg=Photo+saved');
+}, { worker: true, maxBody: RECEIPT_BODY });
+route('POST', '/account/photo/delete', async ({ db, user }) => {
+  await db.run('DELETE FROM profile_photos WHERE user_id = ?', user.id);
+  return redirect('/account?msg=Photo+removed');
+}, { worker: true });
+route('GET', '/people/:uid/photo', async ({ db, uid }) => {
+  const ph = await db.get('SELECT data, content_type FROM profile_photos WHERE user_id = ?', uid);
+  if (!ph) return page(404, 'Not found');
+  return { status: 200, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=300' }, body: ph.data };
+}, { worker: true });
+
 // ---------- Client portal link ----------
 route('POST', '/clients/:id/portal/send', async ({ db, org, id, req }) => {
   const client = await db.get('SELECT * FROM clients WHERE id = ? AND org_id = ?', id, org.org_id);
@@ -995,9 +1171,15 @@ for (const kind of ['expenses', 'payments']) {
 const crewJobs = (db, org) => db.all(`SELECT *, start_date::text AS start_date, end_date::text AS end_date,
     to_char(completed_at AT TIME ZONE ?, 'YYYY') AS completed_year FROM crew_jobs(?)`, APP_TIMEZONE, org.org_id);
 const todayIn = async (db) => (await db.get('SELECT (now() AT TIME ZONE ?)::date::text AS d', APP_TIMEZONE)).d;
-async function crewHome({ db, org, url }) {
+async function crewHome({ db, org, url, user }, extra = {}, status = 200) {
   const today = await todayIn(db);
-  return ok(v.crewHomePage({ jobs: await crewJobs(db, org), today, year: today.slice(0, 4), flash: url.searchParams.get('msg') }));
+  return page(status, v.crewHomePage({ jobs: await crewJobs(db, org), today, year: today.slice(0, 4), flash: url.searchParams.get('msg'),
+    offers: await db.all('SELECT *, start_date::text AS start_date, end_date::text AS end_date FROM my_offers(?)', org.org_id),
+    perks: (await db.get('SELECT * FROM crew_perks(?)', org.org_id)) || {},
+    referrals: await db.all('SELECT * FROM crew_referrals WHERE org_id = ? AND referred_by = ? ORDER BY id DESC LIMIT 10', org.org_id, user.id),
+    requests: await db.all("SELECT * FROM crew_requests WHERE org_id = ? AND user_id = ? AND status = 'open' ORDER BY id DESC", org.org_id, user.id),
+    hasPhoto: !!(await db.get('SELECT 1 FROM profile_photos WHERE user_id = ?', user.id)),
+    profile: (await db.get('SELECT phone FROM profiles WHERE user_id = ?', user.id)) || {}, ...extra }));
 }
 // Admins can open /schedule too: every open job (worker_schedule()).
 route('GET', '/schedule', async ({ db, org, url }) => {
@@ -1073,7 +1255,11 @@ route('POST', '/clients/:id/delete', async ({ db, org, id }) => {
 // Team
 async function renderTeam(db, org, user, extra = {}, status = 200) {
   // Crew see who's on the team (names, roles, email), nothing about pay or the join code.
-  if (org.role !== 'admin') return page(status, v.teamPage({ org, members: await db.all('SELECT * FROM org_members(?)', org.org_id), me: user.id, ...extra }));
+  const withPhotos = async (rows) => {
+    const ids = new Set((await db.all('SELECT user_id::text FROM profile_photos WHERE user_id = ANY(?::uuid[])', rows.map((m) => m.user_id))).map((x) => x.user_id));
+    return rows.map((m) => ({ ...m, has_photo: ids.has(m.user_id) }));
+  };
+  if (org.role !== 'admin') return page(status, v.teamPage({ org, members: await withPhotos(await db.all('SELECT * FROM org_members(?)', org.org_id)), me: user.id, ...extra }));
   const members = await db.all(`SELECT m.*,
       (SELECT count(*)::int FROM job_assignments a WHERE a.org_id = ? AND a.user_id = m.user_id) AS job_count,
       (SELECT coalesce(sum(a.payout_cents), 0) FROM job_assignments a JOIN jobs j ON j.id = a.job_id
@@ -1081,13 +1267,18 @@ async function renderTeam(db, org, user, extra = {}, status = 200) {
       + (SELECT coalesce(sum(labor_cents(t.clock_in, t.clock_out, t.rate_cents)), 0) FROM time_entries t JOIN jobs j ON j.id = t.job_id
         WHERE t.org_id = ? AND t.user_id = m.user_id AND j.status = 'completed') AS earned_cents,
       coalesce(p.pay_type, 'sub') AS pay_type, p.hourly_rate_cents
-    FROM org_members(?) m LEFT JOIN member_pay p ON p.org_id = ? AND p.user_id = m.user_id`, org.org_id, org.org_id, org.org_id, org.org_id, org.org_id);
+    FROM org_members(?) m LEFT JOIN member_pay p ON p.org_id = ? AND p.user_id = m.user_id`, org.org_id, org.org_id, org.org_id, org.org_id, org.org_id).then(withPhotos);
   const joinCode = org.role === 'admin' ? (await db.get('SELECT org_join_code(?) AS code', org.org_id)).code : null;
   const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
   const subs = await db.all(`SELECT s.*, (SELECT count(*)::int FROM sub_assignments a WHERE a.sub_id = s.id) AS job_count,
       (SELECT coalesce(sum(a.payout_cents), 0) FROM sub_assignments a JOIN jobs j ON j.id = a.job_id WHERE a.sub_id = s.id AND j.status = 'completed') AS earned_cents
     FROM subcontractors s WHERE s.org_id = ? ORDER BY lower(s.name)`, org.org_id);
-  return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, subs, ...extra }));
+  const requests = await db.all(`SELECT r.*, coalesce(nullif(m.full_name, ''), m.email, 'Former crew') AS name FROM crew_requests r
+    LEFT JOIN org_members(?) m ON m.user_id = r.user_id WHERE r.org_id = ? AND r.status = 'open' ORDER BY r.id DESC`, org.org_id, org.org_id);
+  const referrals = await db.all(`SELECT r.*, coalesce(nullif(m.full_name, ''), m.email, 'Former crew') AS by_name FROM crew_referrals r
+    LEFT JOIN org_members(?) m ON m.user_id = r.referred_by WHERE r.org_id = ? AND (r.status NOT IN ('paid', 'not_a_fit') OR r.updated_at > now() - interval '30 days')
+    ORDER BY r.id DESC`, org.org_id, org.org_id);
+  return page(status, v.teamPage({ org, members, me: user.id, joinCode, plan, subs, requests, referrals, ...extra }));
 }
 route('GET', '/team', ({ db, org, user, url }) => renderTeam(db, org, user, { flash: url.searchParams.get('msg') }), { worker: true });
 route('POST', '/team/add', async ({ db, org, user, form }) => {
@@ -1409,7 +1600,7 @@ route('GET', '/settings', async ({ db, org, url }) => {
     sms_estimate_followups: !!ep.sms_estimate_followups, sms_appointment_reminders: !!ep.sms_appointment_reminders, sms_review_requests: !!ep.sms_review_requests,
     review_requests: ep.review_requests ?? false, review_url: ep.review_url || '', default_deposit_percent: String(ep.default_deposit_percent ?? 0) };
   return ok(v.settingsPage({ org, values: c, hasLogo: !!c.logo, flash: url.searchParams.get('msg'), emailValues, emailEnabled: email.configured(),
-    texting: await textingFor(db, org.org_id),
+    texting: await textingFor(db, org.org_id), crew: { referral_bonus_cents: ep.referral_bonus_cents ?? 0, offer_shirts: !!ep.offer_shirts },
     payments: { configured: stripe.configured(), testMode: stripe.testMode(), account: acct || null } }));
 });
 
@@ -1572,7 +1763,7 @@ route('POST', '/jobs/:id/work-order/send', async ({ db, org, id, form }) => {
 });
 
 // Joining or creating a company, and the account page (these work before the user belongs to one)
-const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile', '/account/theme', '/account/delete']);
+const ORG_ROUTES = new Set(['/welcome', '/org/new', '/org/join', '/org/switch', '/account', '/account/profile', '/account/theme', '/account/delete', '/account/photo', '/account/photo/delete']);
 const orgCookie = (id) => cookie('org', id, 60 * 60 * 24 * 365);
 route('GET', '/welcome', ({ orgs }) => ok(v.welcomePage({ hasOrgs: orgs.length > 0 })), { worker: true });
 route('GET', '/org/new', () => redirect('/welcome'), { worker: true });
@@ -1604,7 +1795,8 @@ route('POST', '/org/switch', async ({ orgs, form }) => {
 async function renderAccount({ req, db, user, org, orgs }, extra = {}, status = 200) {
   const profile = (await db.get('SELECT * FROM profiles WHERE user_id = ?', user.id)) || { full_name: '', phone: '', zip: '' };
   const plan = org && org.role === 'admin' ? (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p : null;
-  return page(status, v.accountPage({ user, org, orgs, plan, theme: themeOf(req), values: extra.values || profile, ...extra }));
+  const hasPhoto = !!(await db.get('SELECT 1 FROM profile_photos WHERE user_id = ?', user.id));
+  return page(status, v.accountPage({ user, org, orgs, plan, hasPhoto, theme: themeOf(req), values: extra.values || profile, ...extra }));
 }
 // Light or dark look, saved per device in a cookie; "system" follows the device setting.
 route('POST', '/account/theme', ({ form }) => {
@@ -1878,7 +2070,8 @@ async function health() {
         to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion,
         to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs,
         to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup,
-        to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox, to_regclass('public.change_orders') IS NOT NULL AS change_orders`);
+        to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox, to_regclass('public.change_orders') IS NOT NULL AS change_orders,
+        to_regclass('public.job_offers') IS NOT NULL AS crew_portal`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1894,6 +2087,7 @@ async function health() {
       if (!r.rows[0].sms_signup) throw new Error('Run supabase/migrations/0017_texting_signup.sql in the Supabase SQL Editor.');
       if (!r.rows[0].sms_inbox) throw new Error('Run supabase/migrations/0018_text_inbox.sql in the Supabase SQL Editor.');
       if (!r.rows[0].change_orders) throw new Error('Run supabase/migrations/0019_change_orders_and_portal.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].crew_portal) throw new Error('Run supabase/migrations/0020_crew_portal.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -2056,7 +2250,7 @@ async function publicEstimate(req, url) {
 
 // ---------- The client portal (no login: the link's secret token is the key) ----------
 // One page per client with their estimates, jobs, change orders to sign, invoices to pay and job photos.
-const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|photos\/(\d+)|co\/(\d+)(?:\/(approve|decline))?))?$/;
+const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|photos\/(\d+)|crew\/([0-9a-f-]{36})\/photo|co\/(\d+)(?:\/(approve|decline))?))?$/;
 
 async function portalCompany(db, orgId) {
   const company = await mailer.companyOf(db, orgId);
@@ -2073,6 +2267,10 @@ async function portalData(db, client) {
     changeOrders: await db.all("SELECT * FROM change_orders WHERE job_id = ANY(?::bigint[]) AND status <> 'canceled' ORDER BY id", ids),
     invoices: await db.all("SELECT * FROM invoices WHERE job_id = ANY(?::bigint[]) AND status IN ('open', 'paid') ORDER BY id DESC", ids),
     photos: await db.all('SELECT id, job_id FROM job_photos WHERE job_id = ANY(?::bigint[]) ORDER BY created_at DESC, id DESC', ids),
+    // Who's coming: crew with a name on their profile (and their photo, if they added one), and subcontractors.
+    crew: await db.all(`SELECT a.job_id, a.user_id::text AS user_id, p.full_name AS name, EXISTS (SELECT 1 FROM profile_photos ph WHERE ph.user_id = a.user_id) AS has_photo
+        FROM job_assignments a JOIN profiles p ON p.user_id = a.user_id WHERE a.job_id = ANY(?::bigint[]) AND p.full_name <> ''
+      UNION ALL SELECT a.job_id, NULL, s.name, false FROM sub_assignments a JOIN subcontractors s ON s.id = a.sub_id WHERE a.job_id = ANY(?::bigint[])`, ids, ids),
   };
 }
 async function changeOrderData(db, client, coId) {
@@ -2102,7 +2300,7 @@ async function clientPortal(req, url) {
   const m = url.pathname.match(PORTAL_RE);
   const notFoundLink = () => page(404, v.messagePage('Link not found', 'This link is not valid. Please contact the company that sent it.'));
   if (!m) return notFoundLink();
-  const [, token, action, photoId, coId, coAction] = m;
+  const [, token, action, photoId, crewId, coId, coAction] = m;
   const findClient = (db) => db.get('SELECT * FROM clients WHERE portal_token = ?', token);
 
   if (req.method === 'GET' && !coAction) {
@@ -2118,6 +2316,12 @@ async function clientPortal(req, url) {
         const ph = await db.get(`SELECT p.data, p.content_type FROM job_photos p JOIN jobs j ON j.id = p.job_id WHERE p.id = ? AND j.client_id = ?`, photoId, client.id);
         if (!ph) return page(404, 'Not found');
         return { status: 200, body: ph.data, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=604800' } };
+      }
+      if (crewId) {
+        const ph = await db.get(`SELECT ph.data, ph.content_type FROM profile_photos ph WHERE ph.user_id = ? AND EXISTS (
+          SELECT 1 FROM job_assignments a JOIN jobs j ON j.id = a.job_id WHERE a.user_id = ph.user_id AND j.client_id = ?)`, crewId, client.id);
+        if (!ph) return page(404, 'Not found');
+        return { status: 200, body: ph.data, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=3600' } };
       }
       if (coId) {
         const d = await changeOrderData(db, client, coId);

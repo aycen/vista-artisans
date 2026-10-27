@@ -157,6 +157,15 @@ const templates = {
       note: 'You can review the change and approve it online with your signature.',
     },
   }),
+  job_offer: ({ company, job, offer, name, url }) => ({
+    subject: `Job offer from ${company.name}: ${job.project_name}`,
+    content: {
+      heading: `New job offer: ${job.project_name}`,
+      paragraphs: [`Hi ${firstName(name)},`, `${company.name} is offering you ${job.project_name}${job.start_date ? `, starting ${longDate(job.start_date)}` : ''}. Pay: ${fmt(offer.payout_cents)}.`,
+        offer.note, offer.first_come ? 'It goes to the first person who accepts.' : ''].filter(Boolean),
+      button: { label: 'See the offer', url },
+    },
+  }),
   portal: ({ company, client, url }) => ({
     subject: `Your projects with ${company.name}`,
     content: {
