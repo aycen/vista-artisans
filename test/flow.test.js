@@ -1427,7 +1427,7 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     r = await post('/settings/texting', details); assert.match(decodeURIComponent(r.location), /Submitted\. Your number is \+1833555/);
     assert.equal(twilio.numbers.size, 1, 'one number bought'); assert.equal(twilio.services.size, 1);
     const [svc] = twilio.services.values(); assert.equal(svc.inbound, `${BASE}/twilio/inbound`); assert.equal(svc.numbers.length, 1);
-    const [tv] = twilio.verifications.values();
+    let [tv] = twilio.verifications.values();
     assert.equal(tv.fields.get('BusinessRegistrationNumber'), '12-3456789');
     assert.equal(tv.fields.get('PrivacyPolicyUrl'), `${BASE}/privacy#text-messages`); assert.equal(tv.fields.get('TermsAndConditionsUrl'), `${BASE}/terms#text-messages`);
     assert.equal(tv.fields.has('CustomerProfileSid'), false, "filed under the company's own details, not Keystone's profile"); assert.equal(tv.fields.get('BusinessCity'), 'Lancaster'); assert.equal(tv.fields.get('BusinessStateProvinceRegion'), 'PA');
@@ -1436,7 +1436,11 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     assert.equal(tv.fields.get('OptInImageUrls'), `${BASE}/texting?company=Lou%20Flooring%20LLC`);
     assert.match(tv.fields.get('ProductionMessageSample'), /^Lou Flooring LLC: .*Reply STOP to opt out\.$/);
     page = (await getPage('/settings/texting')).body; assert.match(page, /Waiting for carrier approval/); assert.match(page, /\+1833555/);
-    r = await post('/settings/texting', details); assert.equal(twilio.verifications.size, 1, 'no second submission while in review');
+    // While in review: edit and resubmit replaces the request (same number)
+    assert.match(page, /id="edit-texting"/); assert.match((await getPage('/settings/texting?edit=1')).body, /id="texting-form"/);
+    r = await post('/settings/texting', { ...details, website: 'https://lou.example.com' }); assert.equal(r.status, 303);
+    assert.equal(twilio.verifications.size, 1, 'the old request is replaced'); assert.equal(twilio.numbers.size, 1);
+    tv = [...twilio.verifications.values()][0]; assert.equal(tv.fields.get('BusinessWebsite'), 'https://lou.example.com');
     assert.match((await getPage('/settings')).body, /waiting for carrier approval/);
 
     // The public consent page the carriers look at

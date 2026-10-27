@@ -925,7 +925,7 @@ function emailSettings(ev, errors, enabled, texting = {}) {
 // Self-serve texting setup (Company profile → Texting).
 const BUSINESS_TYPES = { PRIVATE_PROFIT: 'Company (LLC, corporation, partnership)', SOLE_PROPRIETOR: 'Sole proprietor (no EIN)', NON_PROFIT: 'Nonprofit' };
 const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
-function textingPage({ reg, values = {}, errors = {}, plan, configured, flash }) {
+function textingPage({ reg, values = {}, errors = {}, plan, configured, editing = false, flash }) {
   const back = { href: '/settings#emails', label: 'Company profile' };
   const wrap = (body) => layout('Texting', body, { flash, back });
   if (!configured) return wrap(html`<div class="card" id="texting-status"><strong>Texting isn't available yet.</strong><div class="hint">It hasn't been switched on for this app.</div></div>`);
@@ -933,10 +933,11 @@ function textingPage({ reg, values = {}, errors = {}, plan, configured, flash })
     return wrap(html`<div class="card" id="texting-status"><div class="row" style="justify-content:space-between"><strong>Texting is on</strong><span class="pill completed">Approved</span></div>
       <div class="hint">Your texts come from ${reg.phone}. Choose which follow-ups go out by text in <a href="/settings#emails">Automatic follow-ups</a>, and mark clients "OK to text" when they agree.</div></div>`);
   }
-  if (reg?.status === 'pending') {
+  if (reg?.status === 'pending' && !editing) {
     return wrap(html`<div class="card" id="texting-status"><div class="row" style="justify-content:space-between"><strong>Waiting for carrier approval</strong><span class="pill in_progress">In review</span></div>
       <div class="hint">Your number is ${reg.phone}. The phone carriers are reviewing ${reg.business_name}, which usually takes a few business days.
-      Texting switches on by itself when they approve, and this page will say so. Nothing else for you to do.</div></div>`);
+      Texting switches on by itself when they approve, and this page will say so. Nothing else for you to do.</div>
+      <div class="actions" style="margin:12px 0 0"><a class="btn secondary" href="/settings/texting?edit=1" id="edit-texting">Edit details and resubmit</a></div></div>`);
   }
   if (plan === 'free') {
     return wrap(html`<div class="card" id="texting-status"><strong>Texting comes with Team and Unlimited</strong>
@@ -946,6 +947,7 @@ function textingPage({ reg, values = {}, errors = {}, plan, configured, flash })
   const sel = (name, label, opts) => html`<label for="${name}">${label} *</label><select id="${name}" name="${name}" class="${errors[name] ? 'invalid' : ''}">
     <option value="">Choose…</option>${Object.entries(opts).map(([k, l]) => html`<option value="${k}" ${values[name] === k ? raw('selected') : ''}>${l}</option>`)}</select>${fieldErr(errors, name)}`;
   return wrap(html`
+  ${editing && reg?.status === 'pending' ? html`<div class="notice">Submitting again replaces the request the carriers are reviewing, with the same number.</div>` : ''}
   ${reg?.status === 'rejected' ? html`<div class="notice" id="texting-problem"><strong>The carriers didn't approve it yet.</strong> They said: ${reg.problem}. Fix the details below and submit again.</div>` : ''}
   ${reg?.status === 'failed' ? html`<div class="notice" id="texting-problem"><strong>Setup didn't finish.</strong> ${reg.problem} Submit again to pick up where it stopped.</div>` : ''}
   ${errorBox(errors)}

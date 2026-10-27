@@ -1253,14 +1253,14 @@ route('POST', '/texts/:id', async ({ db, org, id, form }) => {
 
 route('GET', '/settings/texting', async ({ db, org, url }) => {
   await texting.check(org.org_id);
-  return renderTexting(db, org, { flash: url.searchParams.get('msg') });
+  return renderTexting(db, org, { flash: url.searchParams.get('msg'), editing: url.searchParams.get('edit') === '1' });
 });
 route('POST', '/settings/texting', async ({ db, org, form, req }) => {
   const reg = await db.get('SELECT status FROM sms_registrations WHERE org_id = ?', org.org_id);
   const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
-  if (!sms.configured() || plan === 'free' || ['pending', 'approved'].includes(reg?.status)) return redirect('/settings/texting');
+  if (!sms.configured() || plan === 'free' || reg?.status === 'approved') return redirect('/settings/texting');
   const { values, errors } = texting.validate(form);
-  if (hasErrors(errors)) return renderTexting(db, org, { values: { ...values, agree: form.get('agree') === 'on' }, errors }, 422);
+  if (hasErrors(errors)) return renderTexting(db, org, { values: { ...values, agree: form.get('agree') === 'on' }, errors, editing: true }, 422);
   const r = await texting.submit(org.org_id, values, baseUrl(req));
   return redirect(`/settings/texting?msg=${encodeURIComponent(r.status === 'pending' ? `Submitted. Your number is ${r.phone}.` : 'Setup did not finish. See below.')}`);
 });
