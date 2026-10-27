@@ -273,7 +273,7 @@ test('full workflow', async () => {
   // its gross profit counts toward this month's gross profit (completed today).
   page = (await getPage('/')).body;
   assert.match(page, /id="month-profit">\$2,552\.50</); assert.match(page, /From 1 job completed this month/);
-  assert.match(page, /No active jobs/); assert.match(page, /id="total-outstanding">\$2,052\.25</);
+  assert.match(page, /No jobs in progress/); assert.match(page, /id="total-outstanding">\$2,052\.25</);
 
   // Client page shows estimates and jobs
   page = (await getPage(`/clients/${clientId}`)).body;

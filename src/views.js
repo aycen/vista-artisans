@@ -92,6 +92,9 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .hero .k{font-size:14px;opacity:.85;font-weight:500}
 .hero .v{font-size:38px;font-weight:780;letter-spacing:-.03em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
 .hero .s{font-size:13px;opacity:.8}
+.hero-chart{margin-top:14px}.hero-chart .bars{height:78px;background:none;gap:6px}
+.hero-chart .bar-col{color:rgba(255,255,255,.75)}.hero-chart .bar-col .bar{background:#fff;opacity:.35;max-width:34px}
+.hero-chart .bar-col.on .bar{opacity:1}.hero-chart .bar-l{border-top:1px solid rgba(255,255,255,.25);font-size:11px}.hero-chart .bar-col.on .bar-l{color:#fff}
 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
 @media (min-width:640px){.stats.three{grid-template-columns:repeat(3,minmax(0,1fr))}.stats.four{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .stat{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
@@ -191,13 +194,6 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .totalbar .btn.ghost{color:var(--text-2);padding:0 8px}
 
 /* Growth badge */
-.chart{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 14px 10px;margin:14px 0}
-.chart-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px}
-.chart-head h2{margin:0;font-size:16px}
-.chart-read{text-align:right;line-height:1.2}.chart-read strong{display:block;font-size:17px;font-variant-numeric:tabular-nums}.chart-read span{font-size:12px;color:var(--text-3)}
-.chart-plot{position:relative;padding-left:40px}
-.chart-max,.chart-mid{position:absolute;left:0;font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums;transform:translateY(-50%)}
-.chart-max{top:0}.chart-mid{top:70px}
 .bars{display:flex;align-items:stretch;gap:2px;height:161px;background:linear-gradient(var(--line),var(--line)) 0 0/100% 1px no-repeat,linear-gradient(var(--line),var(--line)) 0 70px/100% 1px no-repeat}
 .bar-col{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:0;padding:0;border:0;background:transparent;box-shadow:none;min-height:0;cursor:pointer;color:var(--text-3)}
 .bar-col .bar{display:block;width:100%;max-width:28px;border-radius:4px 4px 0 0;background:var(--accent);opacity:.45;transition:opacity .15s}
@@ -345,6 +341,9 @@ document.addEventListener('submit', function (e) {
   if (f.dataset.confirm && !confirm(f.dataset.confirm)) { e.preventDefault(); return; }
   if (f.dataset.submitted) { e.preventDefault(); return; }
   f.dataset.submitted = '1';
+  // A disabled button's name=value isn't sent, so carry the clicked one's over before disabling them (double-tap guard).
+  var s = e.submitter;
+  if (s && s.name) { var h = document.createElement('input'); h.type = 'hidden'; h.name = s.name; h.value = s.value; f.appendChild(h); }
   f.querySelectorAll('button[type=submit],button:not([type])').forEach(function (b) { b.disabled = true; });
 });
 window.addEventListener('pageshow', function () {
@@ -721,13 +720,6 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
     ${input('zip', 'ZIP code', values, errors, { autocomplete: 'postal-code', inputmode: 'numeric' })}
     <div class="form-actions"><button type="submit" class="secondary">Save details</button></div>
   </form>
-  <form method="post" action="/account/theme" class="form-card" id="appearance">
-    <h3>Appearance</h3>
-    <div class="hint">Saved on this device.</div>
-    <div class="seg" role="radiogroup" aria-label="Appearance">${[['', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) =>
-      html`<button type="submit" name="theme" value="${k || 'system'}" class="${theme === k ? 'on' : ''}" aria-pressed="${theme === k ? 'true' : 'false'}">${l}</button>`)}</div>
-    <div class="hint">Automatic follows your phone or computer's setting.</div>
-  </form>
   ${orgs.length > 1 ? html`<h2>Switch company</h2><div class="list">${orgs.map((o) => html`
     <form method="post" action="/org/switch" class="li" style="margin:0">
       <input type="hidden" name="org_id" value="${o.org_id}">
@@ -741,6 +733,13 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
     <div class="main-t"><div class="t">Import</div><div class="s">Clients and jobs from Jobber, Housecall Pro, QuickBooks or a spreadsheet</div></div>${chev()}</a>
     <a class="li" href="/billing"><span class="icon-bubble">${icon('card')}</span>
     <div class="main-t"><div class="t">Plan & billing</div><div class="s">${PLAN_NAMES[plan] || 'Free'} plan</div></div>${chev()}</a></div>` : ''}
+  <form method="post" action="/account/theme" class="form-card" id="appearance">
+    <h3>Appearance</h3>
+    <div class="hint">Saved on this device.</div>
+    <div class="seg" role="radiogroup" aria-label="Appearance">${[['', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) =>
+      html`<button type="submit" name="theme" value="${k || 'system'}" class="${theme === k ? 'on' : ''}" aria-pressed="${theme === k ? 'true' : 'false'}">${l}</button>`)}</div>
+    <div class="hint">Automatic follows your phone or computer's setting.</div>
+  </form>
   <div class="actions">
     <a class="btn secondary" href="/welcome">${icon('key')}Join or create a company</a>
   </div>
@@ -1405,25 +1404,19 @@ function growthBadge(m) {
   return html`<span class="delta" id="revenue-growth" title="Compared with the ${m.prevLabel}">${pct >= 0 ? "▲" : "▼"} ${shown} vs last month</span>`;
 }
 
-// Bar chart of revenue per month (one series, so no legend). Tap or hover a bar to read its value.
-function revenueChart(rows) {
+// Revenue by month inside the revenue box: tap a month to see it in the big number.
+function heroChart(rows, month) {
   const max = Math.max(...rows.map((r) => r.cents));
   const top = max > 0 ? niceCeil(max) : 100000;
-  const last = rows[rows.length - 1];
-  return html`<section class="chart" id="revenue-chart">
-    <div class="chart-head"><h2>Revenue by month</h2>
-      <div class="chart-read" aria-live="polite"><strong>${fmt(last.cents)}</strong><span>${last.long_label}</span></div></div>
-    <div class="chart-plot">
-      <span class="chart-max">${fmtShort(top)}</span><span class="chart-mid">${fmtShort(top / 2)}</span>
-      <div class="bars">${rows.map((r, i) => html`<button type="button" class="bar-col${i === rows.length - 1 ? ' on' : ''}" data-v="${fmt(r.cents)}" data-l="${r.long_label}" aria-label="${r.long_label}: ${fmt(r.cents)}">
-        <span class="bar-area"><span class="bar" style="height:${r.cents ? Math.max(2, (r.cents / top) * 100).toFixed(1) : 0}%"></span></span><span class="bar-l">${r.label}</span></button>`)}</div>
-    </div>
+  return html`<div class="hero-chart" id="revenue-chart">
+    <div class="bars">${rows.map((r, i) => html`<button type="button" class="bar-col${i === rows.length - 1 ? ' on' : ''}" data-v="${fmt(r.cents)}" data-l="${r.long_label}" aria-label="${r.long_label}: ${fmt(r.cents)}">
+      <span class="bar-area"><span class="bar" style="height:${r.cents ? Math.max(3, (r.cents / top) * 100).toFixed(1) : 0}%"></span></span><span class="bar-l">${r.label}</span></button>`)}</div>
     <table class="sr-only"><caption>Revenue by month</caption><tbody>${rows.map((r) => html`<tr><th scope="row">${r.long_label}</th><td>${fmt(r.cents)}</td></tr>`)}</tbody></table>
-    <script>${raw(`(function(){var c=document.getElementById('revenue-chart');var s=c.querySelector('.chart-read');
-      function show(b){c.querySelectorAll('.bar-col.on').forEach(function(x){x.classList.remove('on')});b.classList.add('on');
-        s.querySelector('strong').textContent=b.dataset.v;s.querySelector('span').textContent=b.dataset.l;}
-      c.querySelectorAll('.bar-col').forEach(function(b){b.addEventListener('click',function(){show(b)});b.addEventListener('mouseenter',function(){show(b)});b.addEventListener('focus',function(){show(b)});});})();`)}</script>
-  </section>`;
+    <script>${raw(`(function(){var c=document.getElementById('revenue-chart'),h=c.closest('.hero'),v=h.querySelector('#month-revenue'),k=h.querySelector('.hero-k'),s=h.querySelector('.hero-s'),d=h.querySelector('.delta'),cols=c.querySelectorAll('.bar-col'),last=cols[cols.length-1];
+      function show(b){cols.forEach(function(x){x.classList.remove('on')});b.classList.add('on');var cur=b===last;
+        v.textContent=b.dataset.v;k.textContent='Revenue · '+b.dataset.l;s.textContent=cur?${JSON.stringify('Value of jobs completed this month')}:'Value of jobs completed that month';if(d)d.style.visibility=cur?'':'hidden';}
+      cols.forEach(function(b){b.addEventListener('click',function(){show(b)});b.addEventListener('focus',function(){show(b)});});})();`)}</script>
+  </div>`;
 }
 // Rounds up to 1, 2, 2.5 or 5 times a power of ten, so the gridlines land on round dollars.
 function niceCeil(cents) {
@@ -1437,19 +1430,21 @@ function fmtShort(cents) {
   return `$${Math.round(d)}`;
 }
 
+const HOME_LIMIT = 5; // rows per list on Home; View all opens the full list
 function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueByMonth, flash }) {
   const profitClass = month.profitCents > 0 ? 'good' : month.profitCents < 0 ? 'bad' : '';
   return layout('Home', html`
   <div class="hero">
-    <div class="hero-top"><div class="k">Revenue · ${month.label}</div>${growthBadge(month)}</div>
+    <div class="hero-top"><div class="k hero-k">Revenue · ${month.label}</div>${growthBadge(month)}</div>
     <div class="v" id="month-revenue">${fmt(month.revenueCents)}</div>
-    <div class="s">Value of jobs completed this month</div>
+    <div class="s hero-s">Value of jobs completed this month</div>
+    ${revenueByMonth?.length > 1 ? heroChart(revenueByMonth, month) : ''}
   </div>
   <div class="stats four">
     <div class="stat wide-sm ${profitClass}"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
       <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div></div>
     <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Completed jobs, minus payments received</div></div>
-    <div class="stat"><div class="k">Active jobs</div><div class="v">${activeJobs.length}</div></div>
+    <div class="stat"><div class="k">In progress</div><div class="v">${activeJobs.length}</div></div>
     <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
   </div>
   <div class="actions">
@@ -1458,9 +1453,9 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
     <a class="btn secondary" href="/clients" id="view-clients">${icon('users')}View clients</a>
     <a class="btn" href="/estimates" id="view-estimates">${icon('file')}View estimates</a>
   </div>
-  ${revenueByMonth?.length ? revenueChart(revenueByMonth) : ''}
-  <h2>Active jobs</h2>${jobList(activeJobs, 'No active jobs.')}
-  <h2 class="row" style="justify-content:space-between">Open estimates <a href="/estimates" style="font-size:15px;font-weight:600">View all</a></h2>${estimateList(openEstimates, 'No open estimates.')}`, { flash, pageTitle: 'Overview' });
+  <h2 class="row" style="justify-content:space-between">In progress ${activeJobs.length > HOME_LIMIT ? html`<a href="/jobs?status=in_progress" style="font-size:15px;font-weight:600" id="view-all-jobs">View all</a>` : ''}</h2>
+  ${jobList(activeJobs.slice(0, HOME_LIMIT), 'No jobs in progress.')}
+  <h2 class="row" style="justify-content:space-between">Open estimates <a href="/estimates" style="font-size:15px;font-weight:600">View all</a></h2>${estimateList(openEstimates.slice(0, HOME_LIMIT), 'No open estimates.')}`, { flash, pageTitle: 'Overview' });
 }
 
 function estimateList(rows, empty, { showClient = true } = {}) {
@@ -2009,6 +2004,7 @@ function jobsPage({ jobs, status, cal, flash }) {
 
 function jobPage({ job, client, expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes, address: job.address }, errors: {} };
+  const editDetails = Boolean(forms.job); // open the form again when a save had errors
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
   const af = forms.assign || { values: {}, errors: {} };
@@ -2038,8 +2034,13 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], sub
   <div class="card pre">${job.scope || html`<span class="muted">—</span>`}</div>
   <div class="actions"><a class="btn secondary" href="/jobs/${job.id}/work-order" id="work-order">${icon('download')}Work order PDF</a></div>
 
-  <h2>Job details</h2>
-  <form method="post" action="/jobs/${job.id}" class="form-card" novalidate>
+  <h2 class="row" style="justify-content:space-between">Job details ${editDetails ? '' : html`<a href="#job-details" id="edit-details" style="text-transform:none;letter-spacing:0;font-size:14px" onclick="document.getElementById('details-view').hidden=true;document.getElementById('job-details').hidden=false;this.hidden=true;return false">Edit</a>`}</h2>
+  <div class="list" id="details-view"${editDetails ? ' hidden' : ''}>
+    <div class="li"><div class="main-t"><div class="s">Status</div><div class="t">${JOB_STATUS[job.status]}</div></div></div>
+    <div class="li"><div class="main-t"><div class="s">Dates</div><div class="t">${job.start_date ? fmtDate(job.start_date) : 'No start date'}${job.end_date ? html` – ${fmtDate(job.end_date)}` : ''}</div></div></div>
+    <div class="li"><div class="main-t"><div class="s">Notes</div><div class="t pre" style="display:block;font-weight:400">${job.notes || html`<span class="muted">None</span>`}</div></div></div>
+  </div>
+  <form method="post" action="/jobs/${job.id}" class="form-card" id="job-details" novalidate${editDetails ? '' : ' hidden'}>
     <label for="status">Status</label><select id="status" name="status">${options(JOB_STATUS, jf.values.status)}</select>
     ${input('address', 'Job address', jf.values, jf.errors, { autocomplete: 'street-address' })}
     <div class="two">
@@ -2047,7 +2048,7 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], sub
       <div>${input('end_date', 'End date', jf.values, jf.errors, { type: 'date' })}</div>
     </div>
     ${textarea('notes', 'Notes', jf.values, jf.errors, { placeholder: 'Gate codes, materials, reminders…' })}
-    <div class="form-actions"><button type="submit">Save job details</button></div>
+    <div class="form-actions"><button type="submit">Save job details</button> <a class="btn secondary" href="/jobs/${job.id}">Cancel</a></div>
   </form>
 
   <h2>Crew & payouts</h2>

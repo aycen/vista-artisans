@@ -294,7 +294,7 @@ route('GET', '/', async (ctx) => {
   const openEstimates = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND (estimates.status IN ('draft', 'sent')
     OR (estimates.status = 'approved' AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.estimate_id = estimates.id)))
     ORDER BY estimates.updated_at DESC`, o);
-  const activeJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.status IN ('not_started', 'in_progress')
+  const activeJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.status = 'in_progress'
     ORDER BY jobs.start_date NULLS LAST, jobs.id`, o)).map(withJobMath);
   const allJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ?`, o)).map(withJobMath);
   // Revenue = the contract value of completed jobs, counted in the month each was completed (APP_TIMEZONE).
