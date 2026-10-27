@@ -1442,6 +1442,7 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
   <div class="actions">
     <a class="btn secondary" href="/clients/new">${icon('plus')}New Client</a>
     <a class="btn" href="/estimates/new">${icon('plus')}New Estimate</a>
+    <a class="btn secondary" href="/clients" id="view-clients">${icon('users')}View clients</a>
     <a class="btn secondary" href="/estimates" id="view-estimates">${icon('file')}View estimates</a>
   </div>
   ${revenueByMonth?.length ? revenueChart(revenueByMonth) : ''}
