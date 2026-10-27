@@ -827,6 +827,8 @@ route('POST', '/jobs/:id/offers', async ({ db, org, id, form, req }) => {
     const out = [];
     for (const uid of values.user_ids) {
       if (!/^[0-9a-f-]{36}$/.test(uid)) throw Object.assign(new Error('That person is not on your team.'), { code: 'VA001' });
+      // An expired offer is closed out so the person can be offered the job again.
+      await db.run("UPDATE job_offers SET status = 'withdrawn', responded_at = now() WHERE job_id = ? AND user_id = ? AND status = 'open' AND respond_by <= now()", id, uid);
       if (await db.get("SELECT 1 FROM job_offers WHERE job_id = ? AND user_id = ? AND status = 'open'", id, uid)) continue;
       out.push(await db.get(`INSERT INTO job_offers (org_id, job_id, user_id, payout_cents, note, first_come, respond_by)
         VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? = '' THEN NULL ELSE ?::timestamp AT TIME ZONE ? END) RETURNING *`,

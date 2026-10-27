@@ -150,6 +150,7 @@ a.li:active{background:var(--surface-2)}
 .btn.danger,button.danger{background:var(--red-soft);color:var(--red)}
 .btn.danger.solid,button.danger.solid{background:var(--red);color:#fff}
 .btn.sm,button.sm{min-height:36px;padding:0 14px;border-radius:10px;font-size:14px}
+[hidden]{display:none !important}
 .btn.block,button.block{width:100%}
 button:disabled{opacity:.55;cursor:default}
 button.link{background:none;min-height:0;padding:0;color:var(--accent);font-weight:600}
@@ -310,7 +311,7 @@ table.lines tbody.not-chosen{opacity:.45}
 .sigpad canvas{display:block;width:100%;height:auto;aspect-ratio:10/3;touch-action:none;cursor:crosshair}
 .sigpad .link{position:absolute;right:10px;bottom:6px;font-size:14px}
 label.check{display:flex;gap:10px;align-items:flex-start;font-weight:500;margin-top:14px}
-label.check input{width:20px;height:20px;flex:none;margin-top:2px;accent-color:var(--accent)}
+label.check input{width:20px;height:20px;min-height:0;padding:0;flex:none;margin-top:2px;accent-color:var(--accent)}
 details.decline{margin:16px 2px}details.decline summary{color:var(--text-2);cursor:pointer;font-size:15px}
 .opt-input{margin-top:8px;font-size:15px !important;padding:9px 12px !important}
 .plan-strip{display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none;padding:14px 16px}
@@ -2448,17 +2449,21 @@ const hasErrs = (e) => !!e && Object.keys(e).length > 0;
 // Tomorrow at 5 PM in the company's time zone, as a datetime-local value.
 const defaultDeadline = () => `${addDays(new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()), 1)}T17:00`;
 const offerExpired = (o) => o.status === 'open' && o.respond_by && new Date(o.respond_by) <= new Date();
-const OFFER_STATUS = { open: 'Waiting', declined: 'Declined', taken: 'Someone else took it' };
+const OFFER_STATUS = { open: ['sent', 'Waiting'], accepted: ['approved', 'Accepted'], declined: ['declined', 'Declined'],
+  taken: ['draft', 'Someone else took it'], withdrawn: ['draft', 'Withdrawn'] };
+const offerPill = (o) => { const [cls, label] = offerExpired(o) ? ['draft', 'Expired'] : OFFER_STATUS[o.status] || ['draft', o.status];
+  return pill(cls, { [cls]: label }); };
 function offerSection(job, offers, members, crew, of) {
   const assigned = new Set(crew.map((c) => c.user_id));
+  offers.filter((o) => o.status === 'open' && !offerExpired(o)).forEach((o) => assigned.add(o.user_id));  // already waiting on an offer
   const eligible = members.filter((m) => m.role === 'worker' && !assigned.has(m.user_id));
   const open = hasErrs(of.errors);
   const picked = new Set(of.values.user_ids || []);
   if (!eligible.length && !offers.length) return '';
   return html`<div id="offers" style="margin-top:6px">
-  ${offers.length ? html`<div class="list">${offers.map((o) => html`<div class="li"${o.status === 'open' ? '' : raw(' style="opacity:.7"')}>
-    <div class="main-t"><div class="t">Offered to ${o.name}</div><div class="s">${fmt(o.payout_cents)} · ${o.respond_by ? `accept by ${fmtWhen(o.respond_by)}` : fmtWhen(o.created_at)}${o.note ? ` · ${o.note}` : ''}</div></div>
-    <div class="r">${offerExpired(o) ? pill('draft', { draft: 'Expired' }) : pill(o.status === 'open' ? 'sent' : o.status === 'declined' ? 'declined' : 'draft', { sent: OFFER_STATUS.open, declined: OFFER_STATUS.declined, draft: OFFER_STATUS.taken })}
+  ${offers.length ? html`<div style="font-size:13px;font-weight:600;color:var(--text-2);margin:16px 2px 6px">Job offers</div><div class="list">${offers.map((o) => html`<div class="li"${o.status === 'open' ? '' : raw(' style="opacity:.7"')}>
+    <div class="main-t"><div class="t">Offered to ${o.name}</div><div class="s">${fmt(o.payout_cents)}${o.respond_by ? ` · accept by ${fmtWhen(o.respond_by)}` : ''}</div>${o.note ? html`<div class="s" style="white-space:normal">${o.note}</div>` : ''}</div>
+    <div class="r">${offerPill(o)}
       ${o.status === 'open' ? html`<form method="post" action="/offers/${o.id}/withdraw" data-confirm="Withdraw this offer?"><button type="submit" class="link" style="font-size:14px">Withdraw</button></form>` : ''}</div></div>`)}</div>` : ''}
   ${eligible.length ? html`${open ? '' : html`<button type="button" class="secondary block" id="offer-btn" style="margin-top:10px"
       onclick="document.getElementById('offer-form').hidden=false;this.hidden=true">${icon('team')}Offer this job to crew</button>`}

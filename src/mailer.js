@@ -21,7 +21,8 @@ const whenLabel = (ts) => new Intl.DateTimeFormat('en-US', { timeZone: APP_TIMEZ
 const firstName = (name) => String(name || '').trim().split(/\s+/)[0] || 'there';
 
 // A plain, phone-friendly email: heading, paragraphs, one button, and the company's contact details.
-function render(company, { heading, paragraphs = [], button, note }) {
+// `details` is a list of [label, value] rows shown as a small table (one per line in the plain-text version).
+function render(company, { heading, paragraphs = [], details = [], button, note }) {
   const contact = [company.phone, company.email].filter(Boolean).join(' · ');
   const html = `<!doctype html><html><body style="margin:0;background:#f3f4f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f8;padding:24px 12px"><tr><td align="center">
@@ -29,11 +30,14 @@ function render(company, { heading, paragraphs = [], button, note }) {
 <tr><td style="font-size:15px;font-weight:700;color:#4f46e5;padding-bottom:16px">${esc(company.name)}</td></tr>
 <tr><td style="font-size:22px;font-weight:700;line-height:1.25;padding-bottom:12px">${esc(heading)}</td></tr>
 ${paragraphs.map((p) => `<tr><td style="font-size:16px;line-height:1.5;padding-bottom:12px;white-space:pre-line">${esc(p)}</td></tr>`).join('')}
+${details.length ? `<tr><td style="padding:4px 0 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f8;border-radius:12px">
+${details.map(([k, v]) => `<tr><td style="padding:10px 14px;font-size:14px;color:#64748b;white-space:nowrap;vertical-align:top">${esc(k)}</td><td style="padding:10px 14px;font-size:16px;font-weight:600;text-align:right">${esc(v)}</td></tr>`).join('')}
+</table></td></tr>` : ''}
 ${button ? `<tr><td style="padding:8px 0 16px"><a href="${esc(button.url)}" style="display:inline-block;background:#4f46e5;color:#ffffff;text-decoration:none;font-weight:600;font-size:16px;padding:13px 22px;border-radius:12px">${esc(button.label)}</a></td></tr>` : ''}
 ${note ? `<tr><td style="font-size:13px;color:#64748b;line-height:1.5;padding-bottom:8px">${esc(note)}</td></tr>` : ''}
 <tr><td style="border-top:1px solid #e6e8ef;padding-top:14px;font-size:13px;color:#64748b;line-height:1.5">${esc(company.name)}${contact ? `<br>${esc(contact)}` : ''}${company.address ? `<br>${esc(company.address)}` : ''}</td></tr>
 </table></td></tr></table></body></html>`;
-  const text = [heading, '', ...paragraphs.flatMap((p) => [p, '']), button ? `${button.label}: ${button.url}\n` : '', note || '',
+  const text = [heading, '', ...paragraphs.flatMap((p) => [p, '']), ...(details.length ? [...details.map(([k, v]) => `${k}: ${v}`), ''] : []), button ? `${button.label}: ${button.url}\n` : '', note || '',
     '--', company.name, contact, company.address].filter((l) => l !== null && l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n');
   return { html, text };
 }
@@ -166,8 +170,9 @@ const templates = {
     content: {
       heading: `New job offer: ${job.project_name}`,
       paragraphs: [`Hi ${firstName(name)},`, `${company.name} is offering you this job. The work order is attached.`,
-        `Pay: ${fmt(offer.payout_cents)}\nStarts: ${job.start_date ? longDate(job.start_date) : 'To be scheduled'}${job.end_date && job.end_date !== job.start_date ? `\nEnds: ${longDate(job.end_date)}` : ''}${deadline ? `\nAccept by: ${deadline}` : ''}`,
         offer.note, offer.first_come ? 'It goes to the first person who accepts.' : ''].filter(Boolean),
+      details: [['Pay', fmt(offer.payout_cents)], ['Starts', job.start_date ? longDate(job.start_date) : 'To be scheduled'],
+        ...(job.end_date && job.end_date !== job.start_date ? [['Ends', longDate(job.end_date)]] : []), ...(deadline ? [['Accept by', deadline]] : [])],
       button: { label: 'Accept or decline', url },
     },
   }),
