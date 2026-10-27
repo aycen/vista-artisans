@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, lou: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, lou: {}, mo: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -1506,5 +1506,96 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     assert.equal(twilio.numbers.size, 0); assert.equal(twilio.services.size, 0);
   } finally {
     await stop(); await start(); await twilio.close();
+  }
+});
+
+test('change orders signed by the client, the client portal, and reports with CSV downloads', async () => {
+  const mail = await startFakeEmail('re_test_key');
+  const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
+  const anon = (p, form) => fetch(BASE + p, { method: form ? 'POST' : 'GET', redirect: 'manual', body: form ? new URLSearchParams(form) : undefined,
+    headers: form ? { 'content-type': 'application/x-www-form-urlencoded' } : {} });
+  await stop();
+  await start({ RESEND_API_KEY: 're_test_key', EMAIL_FROM: 'estimates@vista.test', EMAIL_API_BASE: mail.url, APP_URL: BASE });
+  try {
+    as('mo'); await post('/signup', { email: 'mo@keystone.test', password: 'mo-password' });
+    await post('/org/new', { name: 'Mo Painting' });
+    let r = await post('/clients', { name: 'Ann Cole', email: 'ann@client.test' }); const ann = idFrom(r.location);
+    r = await post('/estimates', new URLSearchParams([['client_id', String(ann)], ['status', 'approved'], ['deposit_percent', '0'], ['address', '9 Oak St'],
+      ['item_desc', 'Paint living room'], ['item_qty', '1'], ['item_price', '4000']]));
+    r = await post(`/estimates/${idFrom(r.location)}/convert`, {}); const job = idFrom(r.location);
+    const token = (await q('SELECT portal_token FROM clients WHERE id = $1', [ann]))[0].portal_token;
+    assert.match(token, /^[0-9a-f]{64}$/);
+
+    // The job page offers change orders; a bad one is refused
+    let page = (await getPage(`/jobs/${job}`)).body;
+    assert.match(page, /id="change-orders"/); assert.match(page, /id="change-form"[^>]*hidden/);
+    r = await post(`/jobs/${job}/change-orders`, { title: '', amount: '0', approval: 'send' });
+    assert.equal(r.status, 422); assert.match(r.body, /Describe the change/); assert.doesNotMatch(r.body, /id="change-form"[^>]*hidden/);
+
+    // Sent to the client to sign: emailed with a link to their page; the contract doesn't change yet
+    r = await post(`/jobs/${job}/change-orders`, { title: 'Paint hallway ceiling', details: 'Two coats, flat white', amount: '600', kind: 'add', approval: 'send' });
+    assert.match(decodeURIComponent(r.location), /emailed to ann@client\.test/);
+    const co = (await q('SELECT id FROM change_orders WHERE job_id = $1', [job]))[0].id;
+    let m = mail.sent.at(-1); assert.deepEqual(m.to, ['ann@client.test']); assert.match(m.text, new RegExp(`/c/${token}/co/${co}`));
+    page = (await getPage(`/jobs/${job}`)).body;
+    assert.equal(stat(page, 'contract'), '$4,000.00'); assert.match(page, /Paint hallway ceiling/); assert.match(page, /Waiting to sign/);
+
+    // The client signs it from their phone (no login): the contract goes up and the company is told
+    let res = await anon(`/c/${token}/co/${co}`); let body = await res.text();
+    assert.equal(res.status, 200); assert.match(body, /data-k="new-total">\$4,600\.00/); assert.match(body, /Two coats/);
+    res = await anon(`/c/${token}/co/${co}/approve`, { signer_name: 'Ann Cole' }); assert.equal(res.status, 422);
+    assert.match(await res.text(), /Check the box/);
+    res = await anon(`/c/${token}/co/${co}/approve`, { signer_name: 'Ann Cole', agree: 'on' }); assert.equal(res.status, 303);
+    m = mail.sent.at(-1); assert.match(m.subject, /Ann Cole approved a change order/); assert.match(m.text, /contract, which is now \$4,600\.00/);
+    res = await anon(`/c/${token}/co/${co}/approve`, { signer_name: 'Ann Cole', agree: 'on' });
+    assert.match(decodeURIComponent(res.headers.get('location')), /already answered/);
+    page = (await getPage(`/jobs/${job}`)).body;
+    assert.equal(stat(page, 'contract'), '$4,600.00'); assert.match(page, /Includes \+\$600\.00 in change orders/); assert.match(page, /Signed by Ann Cole/);
+    r = await post(`/change-orders/${co}/delete`, {}); assert.match(decodeURIComponent(r.location), /can't be deleted/);
+
+    // A credit agreed in person goes straight in; one larger than the contract is refused
+    r = await post(`/jobs/${job}/change-orders`, { title: 'Skip closet', amount: '100', kind: 'credit', approval: 'approved' });
+    assert.match(decodeURIComponent(r.location), /\$100\.00 taken off the contract/);
+    r = await post(`/jobs/${job}/change-orders`, { title: 'Huge credit', amount: '99999', kind: 'credit', approval: 'approved' });
+    assert.equal(r.status, 422); assert.match(r.body, /more than the job/);
+    assert.equal((await q('SELECT contract_cents::int FROM jobs WHERE id = $1', [job]))[0].contract_cents, 450000);
+
+    // Another one the client declines
+    r = await post(`/jobs/${job}/change-orders`, { title: 'Paint garage', amount: '900', approval: 'send' });
+    const garage = (await q("SELECT id FROM change_orders WHERE title = 'Paint garage'"))[0].id;
+
+    // The portal: what needs attention, jobs with balances, photos; other links don't work
+    res = await anon(`/c/${token}`); body = await res.text();
+    assert.equal(res.status, 200); assert.match(body, /Hi Ann Cole/); assert.match(body, /Sign change order: Paint garage/); assert.match(body, /\$4,500\.00/);
+    res = await anon(`/c/${token}/co/${garage}/decline`, { reason: 'Not this year' }); assert.equal(res.status, 303);
+    assert.match(mail.sent.at(-1).subject, /declined a change order/);
+    assert.doesNotMatch(await (await anon(`/c/${token}`)).text(), /Sign change order/);
+    assert.equal((await anon(`/c/${'0'.repeat(64)}`)).status, 404);
+    assert.equal((await anon(`/c/${token}/photos/999999`)).status, 404);
+    page = (await getPage(`/clients/${ann}`)).body; assert.match(page, new RegExp(`/c/${token}`));
+    r = await post(`/clients/${ann}/portal/send`, {}); assert.match(decodeURIComponent(r.location), /Portal link emailed to ann@client\.test/);
+    assert.match(mail.sent.at(-1).text, new RegExp(`/c/${token}`));
+
+    // Reports: the completed job's numbers, linked from Home, with CSV downloads
+    r = await post('/clients', { name: '=HYPERLINK("x")' }); const evil = idFrom(r.location);
+    r = await post('/estimates', new URLSearchParams([['client_id', String(evil)], ['status', 'approved'], ['deposit_percent', '0'], ['address', '1 Elm St'],
+      ['item_desc', 'Trim'], ['item_qty', '1'], ['item_price', '1000']]));
+    r = await post(`/estimates/${idFrom(r.location)}/convert`, {}); const job2 = idFrom(r.location);
+    await post(`/jobs/${job2}/expenses`, { description: 'Paint', amount: '1200' });
+    for (const j of [job, job2]) await post(`/jobs/${j}`, { status: 'completed', start_date: '', end_date: '', notes: '' });
+    assert.match((await getPage('/')).body, /href="\/reports" id="reports-link"/);
+    page = (await getPage('/reports')).body;
+    assert.equal(stat(page, 'revenue'), '$5,500.00'); assert.equal(stat(page, 'expenses'), '$1,200.00'); assert.equal(stat(page, 'profit'), '$4,300.00');
+    assert.match(page, /Top clients/); assert.match(page, /9 Oak St/);
+    assert.equal(stat((await getPage('/reports?period=last_year')).body, 'revenue'), '$0.00');
+    r = await getPage('/reports/jobs.csv?period=this_year');
+    assert.match(r.type, /text\/csv/); assert.match(r.body, /^Job,Client,Address,Completed,Contract/);
+    assert.match(r.body, /9 Oak St,Ann Cole,9 Oak St,\d{4}-\d\d-\d\d,4500\.00,0\.00,0\.00,0\.00,4500\.00,100\.0/);
+    assert.match(r.body, /"'=HYPERLINK\(""x""\)"/); assert.match(r.body, /,-200\.00,/);
+    assert.match((await getPage('/reports/expenses.csv')).body, /Paint,1200\.00,1 Elm St/);
+    assert.match((await getPage('/reports/crew.csv')).body, /^Name,Type,Job,Hours,Pay/);
+    as('anon'); assert.equal((await getPage('/reports')).location, '/login');
+  } finally {
+    await stop(); await start(); await mail.close();
   }
 });

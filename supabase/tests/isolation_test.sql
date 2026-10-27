@@ -303,6 +303,26 @@ select pg_temp.expect(pg_temp.denied($q$select record_sms_inbound('+18335550000'
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect((select count(*) from sms_messages) = 0, 'other companies cannot see texts');
 
+-- Change orders: approving adds to the contract once and locks it; the signature is the server's to write; others see nothing
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+reset role;
+select set_config('t.job', (select id::text from jobs where org_id = current_setting('t.vista')::uuid limit 1), false);
+select set_config('t.contract', (select contract_cents::text from jobs where id = current_setting('t.job')::bigint), false);
+set role authenticated;
+insert into change_orders (org_id, job_id, title, amount_cents) values (current_setting('t.vista')::uuid, current_setting('t.job')::bigint, 'Extra', 10000);
+select pg_temp.expect((select contract_cents from jobs where id = current_setting('t.job')::bigint) = current_setting('t.contract')::bigint, 'a pending change order leaves the contract alone');
+update change_orders set status = 'approved' where title = 'Extra';
+select pg_temp.expect((select contract_cents from jobs where id = current_setting('t.job')::bigint) = current_setting('t.contract')::bigint + 10000, 'approving adds it to the contract');
+select pg_temp.expect(pg_temp.fails($q$update change_orders set amount_cents = 1 where title = 'Extra'$q$), 'an approved change order is locked');
+select pg_temp.expect(pg_temp.fails($q$delete from change_orders where title = 'Extra'$q$), 'an approved change order cannot be deleted');
+select pg_temp.expect(pg_temp.denied($q$update change_orders set signer_name = 'Forged'$q$), 'companies cannot forge the client''s signature');
+select pg_temp.expect(pg_temp.fails(format($q$insert into change_orders (org_id, job_id, title, amount_cents, status) values (%L, %s, 'Too big', -999999999, 'approved')$q$,
+  current_setting('t.vista'), current_setting('t.job'))), 'a credit cannot take the contract below zero');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from change_orders) = 0, 'other companies cannot see change orders');
+select pg_temp.expect(pg_temp.denied(format($q$insert into change_orders (org_id, job_id, title, amount_cents) values (%L, %s, 'x', 1)$q$,
+  current_setting('t.vista'), current_setting('t.job'))), 'other companies cannot add change orders');
+
 -- Deleting: only an admin can delete their own company; deleting your account never touches a company others are in
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'other companies cannot delete a company');

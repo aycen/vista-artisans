@@ -101,6 +101,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .stat .k{font-size:13px;color:var(--text-2);font-weight:500}
 .stat .v{font-size:22px;font-weight:720;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .stat .s{font-size:12px;color:var(--text-3);margin-top:2px}
+a.stat-link{display:block;color:inherit;text-decoration:none;position:relative}.stat-more{display:flex;align-items:center;gap:2px;margin-top:8px;font-size:13px;font-weight:600;color:var(--accent)}.stat-more svg{width:14px;height:14px}
 .stat.wide{grid-column:1/-1}
 @media (max-width:639px){.stat.wide-sm{grid-column:1/-1}}
 .stat.good .v{color:var(--green)} .stat.bad .v{color:var(--red)}
@@ -130,7 +131,7 @@ a.li:active{background:var(--surface-2)}
 .pill.approved,.pill.completed{background:var(--green-soft);color:var(--green)}
 .pill.sent,.pill.in_progress{background:var(--blue-soft);color:var(--blue)}
 .pill.declined{background:var(--red-soft);color:var(--red)}
-.pill.draft,.pill.not_started{background:var(--amber-soft);color:var(--amber)}
+.pill.draft,.pill.not_started,.pill.pending{background:var(--amber-soft);color:var(--amber)}
 .chips{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 12px;margin:0 -16px;padding-left:16px;padding-right:16px;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:none;padding:8px 14px;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);color:var(--text-2);font-weight:600;font-size:14px}
@@ -265,6 +266,7 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .wk-none{color:var(--text-3);font-size:14px;padding:8px 0}
 table.lines{width:100%;border-collapse:collapse}
 table.lines td,table.lines th{padding:12px 16px;text-align:left;font-size:15px}
+table.lines.report td,table.lines.report th{padding:10px 14px}.amt.neg{color:var(--red)}
 table.lines th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:600}
 table.lines tr+tr td{border-top:1px solid var(--line)}
 table.lines .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -313,7 +315,7 @@ details.decline{margin:16px 2px}details.decline summary{color:var(--text-2);curs
 .seg a{flex:1;text-align:center;padding:9px 10px;border-radius:9px;color:var(--text-2);font-weight:600;text-decoration:none;font-size:15px}
 .seg a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 .pay-type label{flex:1;text-align:center;padding:9px 6px;border-radius:9px;color:var(--text-2);font-weight:600;font-size:15px;margin:0;cursor:pointer}
-.pay-type label.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}.pay-type input{position:absolute;opacity:0;pointer-events:none}
+.pay-type label.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}.pay-type input,.seg label input[type=radio]{position:absolute;opacity:0;pointer-events:none}
 .seg .save{color:var(--green);font-size:12px;margin-left:4px}
 .plans{display:grid;gap:14px;grid-template-columns:1fr;margin-bottom:14px}
 @media(min-width:900px){.plans{grid-template-columns:repeat(3,1fr)}}
@@ -379,6 +381,8 @@ const ICONS = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
   chat: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6.5 15h4"/>',
   building: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"/>',
 };
@@ -727,7 +731,9 @@ function accountPage({ user, org, orgs, plan, theme = '', values = {}, errors = 
       <div class="main-t"><div class="t">${o.name}</div><div class="s">${ROLES[o.role]}</div></div>
       ${org && o.org_id === org.org_id ? html`<span class="pill completed">Current</span>` : html`<button type="submit" class="sm secondary">Switch</button>`}
     </form>`)}</div>` : ''}
-  ${org && org.role === 'admin' ? html`<div class="list"><a class="li" href="/settings"><span class="icon-bubble">${icon('settings')}</span>
+  ${org && org.role === 'admin' ? html`<div class="list"><a class="li" href="/reports"><span class="icon-bubble">${icon('chart')}</span>
+    <div class="main-t"><div class="t">Reports</div><div class="s">Profit by month, job, client and crew; CSV downloads</div></div>${chev()}</a>
+    <a class="li" href="/settings"><span class="icon-bubble">${icon('settings')}</span>
     <div class="main-t"><div class="t">Company profile</div><div class="s">Logo and details on estimates and work orders</div></div>${chev()}</a>
     <a class="li" href="/import"><span class="icon-bubble">${icon('download')}</span>
     <div class="main-t"><div class="t">Import</div><div class="s">Clients and jobs from Jobber, Housecall Pro, QuickBooks or a spreadsheet</div></div>${chev()}</a>
@@ -1441,8 +1447,9 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
     ${revenueByMonth?.length > 1 ? heroChart(revenueByMonth, month) : ''}
   </div>
   <div class="stats four">
-    <div class="stat wide-sm ${profitClass}"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
-      <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div></div>
+    <a class="stat wide-sm stat-link ${profitClass}" href="/reports" id="reports-link"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
+      <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div>
+      <div class="stat-more">Reports ${chev()}</div></a>
     <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Completed jobs, minus payments received</div></div>
     <div class="stat"><div class="k">In progress</div><div class="v">${activeJobs.length}</div></div>
     <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
@@ -1514,7 +1521,7 @@ function clientFormPage({ client, values, errors = {} }) {
   </form>`, { back: { href: cancel, label: client ? client.name : 'Clients' } });
 }
 
-function clientPage({ client, estimates, jobs, flash }) {
+function clientPage({ client, estimates, jobs, canEmail = false, flash }) {
   const value = jobs.reduce((a, j) => a + j.contract_cents, 0);
   const paid = jobs.reduce((a, j) => a + j.payments_cents, 0);
   const pipeline = estimates.filter((e) => !e.job_id && ['draft', 'sent'].includes(e.status)).reduce((a, e) => a + e.total_cents, 0);
@@ -1532,13 +1539,23 @@ function clientPage({ client, estimates, jobs, flash }) {
     ${client.address ? html`<a class="li" href="https://maps.google.com/?q=${encodeURIComponent(client.address)}"><span class="icon-bubble">${icon('pin')}</span><div class="main-t"><div class="s">Property address</div><div class="t">${client.address}</div></div></a>` : ''}
     ${!client.phone && !client.email && !client.address ? html`<div class="li muted">No contact details yet.</div>` : ''}
   </div>
+  <h2>Client portal</h2>
+  <div class="form-card" id="portal">
+    <div class="hint" style="margin-top:0">One private link where ${client.name} sees their estimates, jobs and photos, signs change orders and pays invoices.</div>
+    <div class="row" style="gap:8px;margin-top:10px"><input id="client-link" readonly value="${APP_BASE()}/c/${client.portal_token}" data-path="/c/${client.portal_token}" data-base="${APP_BASE()}" aria-label="Portal link" style="flex:1;min-width:0">
+      <button type="button" class="sm secondary" id="copy-link">Copy</button></div>
+    <div class="row" style="gap:16px;margin-top:10px">
+      ${canEmail && client.email ? html`<form method="post" action="/clients/${client.id}/portal/send" data-confirm="Email the portal link to ${client.email}?"><button type="submit" class="link" style="font-size:14px">Email it to ${client.email}</button></form>` : ''}
+      <a href="/c/${client.portal_token}" target="_blank" rel="noopener" style="font-size:14px;font-weight:600">Open</a></div>
+  </div>
   <div class="actions">
     <a class="btn" href="/estimates/new?client_id=${client.id}">${icon('plus')}New Estimate</a>
     <a class="btn secondary" href="/clients/${client.id}/edit">Edit client</a>
     <a class="btn danger" href="/clients/${client.id}/delete">Delete</a>
   </div>
   <h2>Estimates</h2>${estimateList(estimates, 'No estimates for this client.', { showClient: false })}
-  <h2>Jobs</h2>${jobList(jobs, 'No jobs for this client.', { showClient: false })}`,
+  <h2>Jobs</h2>${jobList(jobs, 'No jobs for this client.', { showClient: false })}
+  <script>${raw(COPY_LINK_JS)}</script>`,
   { flash, back: { href: '/clients', label: 'Clients' } });
 }
 
@@ -1875,7 +1892,8 @@ function publicEstimatePage({ estimate, company, hasLogo, client, items, totals,
       ${textarea('reason', 'Anything we should know? (optional)', {}, {}, { placeholder: 'Timing, budget, went another way…' })}
       <div class="form-actions"><button type="submit" class="secondary" ${preview ? raw('disabled') : ''}>Decline estimate</button></div>
     </form></details>` : ''}
-  <div class="actions" style="justify-content:center"><a class="btn ghost" href="${base}/pdf">${icon('download')}Download PDF</a></div>
+  <div class="actions" style="justify-content:center"><a class="btn ghost" href="${base}/pdf">${icon('download')}Download PDF</a>
+    ${client.portal_token ? html`<a class="btn ghost" href="/c/${client.portal_token}" id="portal-link">All your projects</a>` : ''}</div>
   <p class="pub-foot">Sent with Keystone</p>
   </div>
   ${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${estimate.project_name} · ${company.name}` });
@@ -1902,6 +1920,141 @@ const SIGNATURE_JS = `
     });
   });
 })();`;
+
+// ---------- Reports ----------
+function reportsPage({ period, periods, from, to, jobs, crew, received }) {
+  const sum = (rows, k) => rows.reduce((a, r) => a + r[k], 0);
+  const revenue = sum(jobs, 'contract_cents'); const profit = sum(jobs, 'gross_profit_cents');
+  const margin = (p, r) => (r ? `${Math.round((p / r) * 100)}%` : '—');
+  const group = (key, label) => {
+    const m = new Map();
+    for (const j of jobs) {
+      const k = key(j); const g = m.get(k) || { label: label(j), jobs: 0, revenue: 0, profit: 0 };
+      g.jobs += 1; g.revenue += j.contract_cents; g.profit += j.gross_profit_cents; m.set(k, g);
+    }
+    return [...m.values()];
+  };
+  const months = group((j) => j.completed_on.slice(0, 7), (j) => `${MONTHS[Number(j.completed_on.slice(5, 7)) - 1]} ${j.completed_on.slice(0, 4)}`);
+  const clients = group((j) => j.client_id, (j) => j.client_name).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+  const people = [...crew.reduce((m, c) => { const g = m.get(c.key) || { name: c.name, kind: c.kind, jobs: 0, cents: 0 }; g.jobs += 1; g.cents += c.cents; return m.set(c.key, g); }, new Map()).values()]
+    .filter((p) => p.cents).sort((a, b) => b.cents - a.cents);
+  const table = (head, rows) => html`<div class="card flush"><table class="lines report"><thead><tr>${head.map((h, i) => html`<th class="${i ? 'num' : ''}">${h}</th>`)}</tr></thead>
+    <tbody>${rows.map((r) => html`<tr>${r.map((c, i) => html`<td class="${i ? 'num' : ''}">${c}</td>`)}</tr>`)}</tbody></table></div>`;
+  const q = `?period=${period}`;
+  return layout('Reports', html`
+  <div class="chips">${Object.entries(periods).map(([k, l]) => html`<a class="chip ${k === period ? 'on' : ''}" href="/reports?period=${k}">${l}</a>`)}</div>
+  <div class="stats three" id="report-totals">
+    <div class="stat wide"><div class="k">Revenue</div><div class="v" data-k="revenue">${fmt(revenue)}</div><div class="s">${jobs.length} job${jobs.length === 1 ? '' : 's'} completed</div></div>
+    <div class="stat ${profit >= 0 ? 'good' : 'bad'}"><div class="k">Gross profit</div><div class="v" data-k="profit">${fmt(profit)}</div><div class="s">${margin(profit, revenue)} margin</div></div>
+    <div class="stat"><div class="k">Payments received</div><div class="v" data-k="received">${fmt(received)}</div></div>
+    <div class="stat"><div class="k">Expenses</div><div class="v" data-k="expenses">${fmt(sum(jobs, 'expenses_cents'))}</div></div>
+    <div class="stat"><div class="k">Crew pay</div><div class="v" data-k="crew">${fmt(sum(jobs, 'payouts_cents'))}</div></div>
+  </div>
+  ${months.length > 1 ? html`<h2>By month</h2>${table(['Month', 'Revenue', 'Profit'], months.map((g) => [g.label, fmt(g.revenue), fmt(g.profit)]))}` : ''}
+  ${clients.length ? html`<h2>Top clients</h2>${table(['Client', 'Revenue', 'Profit'], clients.map((g) => [g.label, fmt(g.revenue), fmt(g.profit)]))}` : ''}
+  ${people.length ? html`<h2>Crew pay</h2>${table(['Name', 'Jobs', 'Pay'], people.map((p) => [html`${p.name}<div class="muted" style="font-size:12px">${p.kind}</div>`, String(p.jobs), fmt(p.cents)]))}` : ''}
+  <h2>Jobs</h2>
+  ${jobs.length ? html`<div class="list">${jobs.map((j) => html`<a class="li" href="/jobs/${j.id}"><div class="main-t"><div class="t">${j.project_name}</div>
+    <div class="s">${j.client_name} · ${fmtDate(j.completed_on)}</div></div>
+    <div class="r"><span class="amt ${j.gross_profit_cents < 0 ? 'neg' : ''}">${fmt(j.gross_profit_cents)}</span><span class="muted" style="font-size:13px">${margin(j.gross_profit_cents, j.contract_cents)} of ${fmt(j.contract_cents)}</span></div>${chev()}</a>`)}</div>`
+    : html`<div class="empty">No jobs completed ${periods[period].toLowerCase()}.</div>`}
+  <h2>Download for your accountant</h2>
+  <div class="actions" id="downloads">
+    <a class="btn secondary" href="/reports/jobs.csv${q}">${icon('download')}Jobs (CSV)</a>
+    <a class="btn secondary" href="/reports/expenses.csv${q}">${icon('download')}Expenses (CSV)</a>
+    <a class="btn secondary" href="/reports/crew.csv${q}">${icon('download')}Crew pay (CSV)</a>
+  </div>
+  <p class="hint">Revenue counts each job's contract total when the job is marked completed, the same as Home. ${from === '1900-01-01' ? '' : html`${fmtDate(from)} to ${fmtDate(to)}.`} CSV files open in Excel, Google Sheets or Numbers.</p>`,
+  { back: { href: '/', label: 'Home' } });
+}
+
+// ---------- The client portal and change orders (opened from a link, no login) ----------
+const pubHead = (company, hasLogo, logo) => html`<header class="pub-head">
+    ${hasLogo ? html`<img src="${logo}" alt="${company.name}" class="pub-logo">` : html`<div class="mark">${company.name.slice(0, 2).toUpperCase()}</div>`}
+    <div><div class="pub-co">${company.name}</div><div class="muted" style="font-size:14px">${[company.phone, company.email].filter(Boolean).join(' · ')}${company.license_number ? ` · License #${company.license_number}` : ''}</div></div>
+  </header>`;
+
+function changeOrderPublicPage({ client, co, job, company, hasLogo, token, values = {}, errors = {}, flash, preview }) {
+  const base = `/c/${token}`;
+  const open = co.status === 'pending';
+  const before = co.status === 'approved' ? job.contract_cents - co.amount_cents : job.contract_cents;
+  return layout(co.title, html`<div class="pub">
+  ${preview ? html`<div class="notice">Preview: this is what your client sees. Approving is turned off here.</div>` : ''}
+  ${pubHead(company, hasLogo, `${base}/logo`)}
+  <div class="card">
+    <div class="muted" style="font-size:13px;letter-spacing:.04em;text-transform:uppercase">Change order · ${job.project_name}</div>
+    <h1 class="pub-title">${co.title}</h1>
+    ${co.details ? html`<div class="pre" style="margin-top:6px">${co.details}</div>` : ''}
+  </div>
+  <div class="card flush"><table class="lines"><tbody>
+    <tr><td>Contract before this change</td><td class="num">${fmt(before)}</td></tr>
+    <tr><td>${co.amount_cents > 0 ? 'This change adds' : 'This change takes off'}</td><td class="num">${fmt(Math.abs(co.amount_cents))}</td></tr></tbody>
+    <tfoot><tr><td>New contract total</td><td class="num" data-k="new-total">${fmt(before + co.amount_cents)}</td></tr></tfoot></table></div>
+  ${co.status === 'approved' ? html`<div class="card pub-ok" id="approved"><div class="row" style="gap:10px"><span class="icon-bubble" style="background:var(--green-soft);color:var(--green)">${icon('check')}</span>
+    <div><strong>Approved${co.signer_name ? ` by ${co.signer_name}` : ''}</strong><div class="muted" style="font-size:14px">${fmtWhen(co.approved_at)}</div></div></div></div>` : ''}
+  ${co.status === 'declined' ? html`<div class="notice">You declined this change. ${company.name} has been told.</div>` : ''}
+  ${open ? html`<h2>Approve</h2>
+  <form method="post" action="${base}/co/${co.id}/approve" id="approve-form" class="form-card" novalidate>
+    ${errorBox(errors)}
+    ${input('signer_name', 'Your full name', values, errors, { autocomplete: 'name', required: true })}
+    <label>Signature <span class="muted" style="font-weight:400">(draw with your finger or mouse)</span></label>
+    <div class="sigpad"><canvas id="sig" width="600" height="180" aria-label="Signature pad"></canvas><button type="button" class="link" id="sig-clear">Clear</button></div>
+    <input type="hidden" name="signature" id="signature">
+    <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''}> <span>I approve this change to my contract.</span></label>
+    ${fieldErr(errors, 'agree')}
+    <div class="form-actions"><button type="submit" class="block" id="approve" ${preview ? raw('disabled') : ''}>${icon('check')}Approve change</button></div>
+  </form>
+  <details class="decline"><summary>Don't want this change?</summary>
+    <form method="post" action="${base}/co/${co.id}/decline" class="form-card" style="margin-top:10px">
+      ${textarea('reason', 'Anything we should know? (optional)', {}, {})}
+      <div class="form-actions"><button type="submit" class="secondary" ${preview ? raw('disabled') : ''}>Decline change</button></div>
+    </form></details>` : ''}
+  <div class="actions" style="justify-content:center"><a class="btn ghost" href="${base}">All your projects with ${company.name}</a></div>
+  <p class="pub-foot">Sent with Keystone</p>
+  </div>${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${co.title} · ${company.name}` });
+}
+
+function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, token, flash }) {
+  const base = `/c/${token}`;
+  const toSign = changeOrders.filter((c) => c.status === 'pending');
+  const toPay = invoices.filter((i) => i.status === 'open' && i.hosted_url);
+  const toApprove = estimates.filter((e) => e.status === 'sent');
+  const jobName = (id) => (jobs.find((j) => j.id === id) || {}).project_name || '';
+  const todo = toSign.length + toPay.length + toApprove.length;
+  return layout(client.name, html`<div class="pub">
+  ${pubHead(company, hasLogo, `${base}/logo`)}
+  <div class="card"><h1 class="pub-title" style="margin:0">Hi ${client.name}</h1>
+    <div class="muted">${todo ? `${todo} thing${todo > 1 ? 's' : ''} need${todo > 1 ? '' : 's'} your attention.` : `Here's everything for your projects with ${company.name}.`}</div></div>
+  ${todo ? html`<h2>Needs your attention</h2><div class="list" id="todo">
+    ${toApprove.map((e) => html`<a class="li" href="/e/${e.public_token}"><span class="icon-bubble">${icon('file')}</span>
+      <div class="main-t"><div class="t">Review estimate: ${e.project_name}</div><div class="s">${fmt(e.total_cents)}</div></div>${chev()}</a>`)}
+    ${toSign.map((c) => html`<a class="li" href="${base}/co/${c.id}"><span class="icon-bubble">${icon('check')}</span>
+      <div class="main-t"><div class="t">Sign change order: ${c.title}</div><div class="s">${jobName(c.job_id)} · ${signed(c.amount_cents)}</div></div>${chev()}</a>`)}
+    ${toPay.map((i) => html`<a class="li" href="${i.hosted_url}"><span class="icon-bubble">${icon('card')}</span>
+      <div class="main-t"><div class="t">Pay ${fmt(i.amount_cents)}</div><div class="s">${i.description || jobName(i.job_id)}${i.due_date ? ` · due ${fmtDate(i.due_date)}` : ''}</div></div>${chev()}</a>`)}
+  </div>` : ''}
+  ${jobs.map((j) => {
+    const cos = changeOrders.filter((c) => c.job_id === j.id && c.status === 'approved');
+    const pics = photos.filter((p) => p.job_id === j.id);
+    const paid = invoices.filter((i) => i.job_id === j.id && i.status === 'paid');
+    return html`<h2>${j.project_name}</h2><div class="card portal-job">
+      <div class="row" style="justify-content:space-between">${pill(j.status, JOB_STATUS)}<span class="muted" style="font-size:14px">${dateRange(j.start_date, j.end_date)}</span></div>
+      <table class="lines" style="margin-top:10px"><tbody>
+        <tr><td>Contract${cos.length ? ` (includes ${cos.length} change order${cos.length > 1 ? 's' : ''})` : ''}</td><td class="num">${fmt(j.contract_cents)}</td></tr>
+        <tr><td>Paid</td><td class="num">${fmt(j.payments_cents)}</td></tr></tbody>
+        <tfoot><tr><td>Balance</td><td class="num">${fmt(j.balance_cents)}</td></tr></tfoot></table>
+      ${cos.length ? html`<div class="hint" style="margin-top:8px">${cos.map((c) => html`<div>${icon('check')} <a href="${base}/co/${c.id}">${c.title}</a> ${signed(c.amount_cents)}</div>`)}</div>` : ''}
+      ${paid.length ? html`<div class="hint" style="margin-top:8px">${paid.map((i) => html`<div>${icon('check')} ${fmt(i.amount_cents)} paid${i.pdf_url ? html` · <a href="${i.pdf_url}">Receipt</a>` : ''}</div>`)}</div>` : ''}
+      ${pics.length ? html`<div class="photos" style="margin-top:12px">${pics.map((p) => html`<a class="photo" href="${base}/photos/${p.id}"><img src="${base}/photos/${p.id}" alt="Job photo" loading="lazy"></a>`)}</div>` : ''}
+    </div>`;
+  })}
+  ${estimates.filter((e) => e.status !== 'sent').length ? html`<h2>Other estimates</h2><div class="list">${estimates.filter((e) => e.status !== 'sent').map((e) => html`<a class="li" href="/e/${e.public_token}">
+    <div class="main-t"><div class="t">${e.project_name}</div><div class="s">${fmt(e.total_cents)}</div></div>${pill(e.status, ESTIMATE_STATUS)}${chev()}</a>`)}</div>` : ''}
+  ${!jobs.length && !estimates.length ? html`<div class="empty">Nothing here yet.</div>` : ''}
+  ${company.phone || company.email ? html`<p class="hint" style="text-align:center;margin-top:18px">Questions? ${company.phone ? html`Call <a href="tel:${company.phone}">${company.phone}</a>` : ''}${company.phone && company.email ? ' or ' : ''}${company.email ? html`email <a href="mailto:${company.email}">${company.email}</a>` : ''}</p>` : ''}
+  <p class="pub-foot">Sent with Keystone</p>
+  </div>`, { bare: true, flash, docTitle: `Your projects · ${company.name}` });
+}
 
 // ---------- Jobs ----------
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -2002,9 +2155,10 @@ function jobsPage({ jobs, status, cal, flash }) {
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
 }
 
-function jobPage({ job, client, expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
+function jobPage({ job, client, changeOrders = [], expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
   const jf = forms.job || { values: { status: job.status, start_date: job.start_date || '', end_date: job.end_date || '', notes: job.notes, address: job.address }, errors: {} };
-  const editDetails = Boolean(forms.job); // open the form again when a save had errors
+  const editDetails = Boolean(forms.job);
+  const cf = forms.change || { values: {}, errors: {} }; // open the form again when a save had errors
   const ef = forms.expense || { values: {}, errors: {} };
   const pf = forms.payment || { values: { paid_on: new Intl.DateTimeFormat('en-CA', { timeZone: process.env.APP_TIMEZONE || 'America/Los_Angeles' }).format(new Date()) }, errors: {} };
   const af = forms.assign || { values: {}, errors: {} };
@@ -2014,9 +2168,9 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], sub
   const final = job.status === 'completed';
   return layout(job.project_name, html`
   <p style="margin:0 2px 14px">${pill(job.status, JOB_STATUS)} ${dateRange(job.start_date, job.end_date) ? html`<span class="muted" style="margin-left:6px">${dateRange(job.start_date, job.end_date)}</span>` : ''}</p>
-  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors, ...tf.errors })}
+  ${errorBox({ ...jf.errors, ...ef.errors, ...pf.errors, ...af.errors, ...vf.errors, ...tf.errors, ...cf.errors })}
   <div class="stats" id="job-summary">
-    <div class="stat"><div class="k">Contract total</div><div class="v" data-k="contract">${fmt(job.contract_cents)}</div></div>
+    <div class="stat"><div class="k">Contract total</div><div class="v" data-k="contract">${fmt(job.contract_cents)}</div>${changeOrders.some((c) => c.status === 'approved') ? html`<div class="s"><a href="#change-orders">Includes ${signed(changeOrders.filter((c) => c.status === 'approved').reduce((a, c) => a + c.amount_cents, 0))} in change orders</a></div>` : ''}</div>
     <div class="stat"><div class="k">Outstanding</div><div class="v" data-k="balance">${fmt(job.balance_cents)}</div></div>
     <div class="stat"><div class="k">Payments received</div><div class="v" data-k="payments">${fmt(job.payments_cents)}</div></div>
     <div class="stat"><div class="k">Expenses</div><div class="v" data-k="expenses">${fmt(job.expenses_cents)}</div></div>
@@ -2033,6 +2187,8 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], sub
   <h2 class="row" style="justify-content:space-between">Scope of work <a href="/estimates/${job.estimate_id}/descriptions" id="edit-scope" style="text-transform:none;letter-spacing:0;font-size:14px">Edit</a></h2>
   <div class="card pre">${job.scope || html`<span class="muted">—</span>`}</div>
   <div class="actions"><a class="btn secondary" href="/jobs/${job.id}/work-order" id="work-order">${icon('download')}Work order PDF</a></div>
+
+  ${changeOrderSection(job, client, changeOrders, cf, canEmail)}
 
   <h2 class="row" style="justify-content:space-between">Job details ${editDetails ? '' : html`<a href="#job-details" id="edit-details" style="text-transform:none;letter-spacing:0;font-size:14px" onclick="document.getElementById('details-view').hidden=true;document.getElementById('job-details').hidden=false;this.hidden=true;return false">Edit</a>`}</h2>
   <div class="list" id="details-view"${editDetails ? ' hidden' : ''}>
@@ -2121,6 +2277,44 @@ function jobPage({ job, client, expenses, payments, crew = [], members = [], sub
   ${emailHistory(emails)}`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
 
+// ---------- Change orders (on the job page) ----------
+const CO_STATUS = { pending: 'Waiting to sign', approved: 'Approved', declined: 'Declined' };
+const signed = (c) => `${c > 0 ? '+' : '−'}${fmt(Math.abs(c))}`;
+const coAction = (path, label, confirm) => html`<form method="post" action="${path}" style="display:inline"${confirm ? raw(` data-confirm="${confirm}"`) : ''}>
+  <button type="submit" class="link" style="font-size:14px">${label}</button></form>`;
+function changeOrderSection(job, client, changeOrders, cf, canEmail) {
+  const open = hasErrs(cf.errors);
+  const kind = cf.values.kind || 'add'; const approval = cf.values.approval || 'send';
+  return html`<h2 class="row" id="change-orders" style="justify-content:space-between">Change orders ${open ? '' : html`<a href="#change-orders" id="add-change" style="text-transform:none;letter-spacing:0;font-size:14px"
+    onclick="document.getElementById('change-form').hidden=false;this.hidden=true;document.getElementById('co-title').focus();return false">+ Add</a>`}</h2>
+  ${changeOrders.length ? html`<div class="list" id="change-list">${changeOrders.map((co) => html`<div class="li" style="align-items:flex-start">
+    <div class="main-t"><div class="t">${co.title}</div>
+      <div class="s">${co.status === 'approved' ? (co.signer_name ? `Signed by ${co.signer_name} · ${fmtWhen(co.approved_at)}` : `Approved · ${fmtWhen(co.approved_at)}`)
+        : co.status === 'declined' ? `Declined${co.decline_reason ? `: “${co.decline_reason}”` : ''}`
+          : co.sent_at ? `Sent to ${co.sent_to} · ${fmtWhen(co.sent_at)}` : 'Not sent yet'}</div>
+      ${co.status !== 'approved' ? html`<div class="row" style="gap:12px;margin-top:6px;flex-wrap:wrap">
+        ${coAction(`/change-orders/${co.id}/approve`, 'Mark approved', `Mark this approved? ${signed(co.amount_cents)} will be added to the contract.`)}
+        ${canEmail ? coAction(`/change-orders/${co.id}/send`, co.sent_at ? 'Email again' : 'Email to client') : ''}
+        <a href="/c/${client.portal_token}/co/${co.id}?preview=1" style="font-size:14px;font-weight:600" target="_blank" rel="noopener">Client's page</a>
+        ${coAction(`/change-orders/${co.id}/delete`, 'Delete', 'Delete this change order?')}</div>` : ''}</div>
+    <div class="r"><span class="amt">${signed(co.amount_cents)}</span>${pill(co.status, CO_STATUS)}</div></div>`)}</div>`
+    : open ? '' : html`<p class="hint" style="margin:0 4px 12px">Extra work came up? Add a change order and your client signs it from their phone. Once approved, it's added to the contract.</p>`}
+  <form method="post" action="/jobs/${job.id}/change-orders" class="form-card" id="change-form" novalidate${open ? '' : ' hidden'}>
+    <label for="co-title">What's changing</label>
+    <input id="co-title" name="title" value="${cf.values.title ?? ''}" class="${inv(cf.errors, 'title')}" placeholder="Paint the hallway ceiling">${fieldErr(cf.errors, 'title')}
+    ${textarea('details', 'Details (optional)', cf.values, cf.errors, { placeholder: 'What exactly is included' })}
+    <div class="seg" role="radiogroup" aria-label="Add or credit" style="margin-top:12px">
+      ${[['add', 'Adds to contract'], ['credit', 'Credit']].map(([k, l]) => html`<label class="${kind === k ? 'on' : ''}" style="flex:1;text-align:center"><input type="radio" name="kind" value="${k}" ${kind === k ? raw('checked') : ''}>${l}</label>`)}
+    </div>
+    ${input('amount', 'Amount ($)', cf.values, cf.errors, { inputmode: 'decimal' })}
+    <label class="check"><input type="radio" name="approval" value="send" ${approval === 'send' ? raw('checked') : ''}> <span>Send to ${client.name} to sign${client.email && canEmail ? ` (${client.email})` : ''}</span></label>
+    <label class="check"><input type="radio" name="approval" value="approved" ${approval === 'approved' ? raw('checked') : ''}> <span>Already approved in person, add it now</span></label>
+    <div class="form-actions"><button type="submit">Save change order</button> <a class="btn secondary" href="/jobs/${job.id}#change-orders">Cancel</a></div>
+  </form>
+  <script>${raw(`(function(){var f=document.getElementById('change-form');f.querySelectorAll('input[name=kind]').forEach(function(r){r.addEventListener('change',function(){
+    f.querySelectorAll('.seg label').forEach(function(l){l.classList.toggle('on',l.querySelector('input').checked)})})})})();`)}</script>`;
+}
+const hasErrs = (e) => !!e && Object.keys(e).length > 0;
 const sendWo = (jobId, key, val) => html`<form method="post" action="/jobs/${jobId}/work-order/send" style="display:inline" data-confirm="Email this work order now?">
   <input type="hidden" name="${key}" value="${val}"><button type="submit" class="link" style="font-size:14px">Email it</button></form>`;
 
@@ -2314,7 +2508,7 @@ function messagePage(title, message) {
 }
 
 module.exports = {
-  ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
+  ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, changeOrderPublicPage, portalPage, reportsPage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, textsPage, textThreadPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
 };

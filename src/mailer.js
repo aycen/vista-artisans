@@ -147,6 +147,40 @@ const templates = {
       button: { label: 'Open the job', url: `${base}/jobs/${job}` },
     },
   }),
+  change_order: ({ company, client, job, co, url }) => ({
+    subject: `Change order from ${company.name}: ${job.project_name}`,
+    content: {
+      heading: `Change order for ${job.project_name}`,
+      paragraphs: [`Hi ${firstName(client.name)},`, `${co.title}${co.details ? `\n${co.details}` : ''}`,
+        co.amount_cents > 0 ? `This adds ${fmt(co.amount_cents)} to your contract.` : `This takes ${fmt(-co.amount_cents)} off your contract.`],
+      button: { label: 'Review and sign', url },
+      note: 'You can review the change and approve it online with your signature.',
+    },
+  }),
+  portal: ({ company, client, url }) => ({
+    subject: `Your projects with ${company.name}`,
+    content: {
+      heading: 'Everything in one place',
+      paragraphs: [`Hi ${firstName(client.name)},`, `Here's your page with ${company.name}. You can see your estimates, jobs and photos, sign change orders and pay invoices there. Bookmark it to come back anytime.`],
+      button: { label: 'Open your page', url },
+    },
+  }),
+  change_order_approved: ({ client, job, co, base }) => ({
+    subject: `${client.name} approved a change order`,
+    content: {
+      heading: `${client.name} approved a change order`,
+      paragraphs: [`${co.signer_name} signed "${co.title}" on ${job.project_name}. ${co.amount_cents > 0 ? `${fmt(co.amount_cents)} was added to` : `${fmt(-co.amount_cents)} was taken off`} the contract, which is now ${fmt(job.contract_cents)}.`],
+      button: { label: 'Open the job', url: `${base}/jobs/${job.id}` },
+    },
+  }),
+  change_order_declined: ({ client, job, co, base }) => ({
+    subject: `${client.name} declined a change order`,
+    content: {
+      heading: `${client.name} declined a change order`,
+      paragraphs: [`"${co.title}" on ${job.project_name} was declined.`, co.decline_reason ? `Their note: "${co.decline_reason}"` : 'They didn\'t leave a note.'],
+      button: { label: 'Open the job', url: `${base}/jobs/${job.id}` },
+    },
+  }),
   estimate_declined: ({ company, estimate, client, base }) => ({
     subject: `${client.name} declined ${estimate.project_name}`,
     content: {

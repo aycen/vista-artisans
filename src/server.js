@@ -205,6 +205,7 @@ async function renderJob(db, org, id, extra = {}, status = 200) {
   return page(status, v.jobPage({
     job, ...extra,
     client: await db.get('SELECT * FROM clients WHERE id = ?', job.client_id),
+    changeOrders: await db.all('SELECT * FROM change_orders WHERE job_id = ? ORDER BY id', id),
     expenses: await db.all(`SELECT expenses.*, EXISTS (SELECT 1 FROM expense_receipts r WHERE r.expense_id = expenses.id) AS has_receipt
       FROM expenses WHERE job_id = ? ORDER BY id`, id),
     payments: await db.all(`SELECT payments.*, invoices.number AS invoice_number FROM payments
@@ -350,7 +351,7 @@ route('GET', '/clients/:id', async ({ db, org, id, url }) => {
   const client = await db.get('SELECT * FROM clients WHERE id = ? AND org_id = ?', id, org.org_id);
   if (!client) return notFound();
   return ok(v.clientPage({
-    client, flash: url.searchParams.get('msg'),
+    client, flash: url.searchParams.get('msg'), canEmail: email.configured(),
     estimates: await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.client_id = ? ORDER BY estimates.updated_at DESC`, id),
     jobs: (await db.all(`${JOB_LIST_SQL} WHERE jobs.client_id = ? ORDER BY jobs.id DESC`, id)).map(withJobMath),
   }));
@@ -741,6 +742,142 @@ route('POST', '/invoices/:id/void', ({ db, org, id }) => invoiceAction(db, org, 
   await stripe.voidInvoice(account, inv.stripe_invoice_id);
   await db.run("UPDATE invoices SET status = 'void' WHERE id = ?", inv.id);
 }, 'Invoice+voided'));
+
+// ---------- Change orders ----------
+// Work added to (or taken off) a job after the estimate was approved. The client signs it from their portal link,
+// or the company marks it approved (agreed in person); approving adds its amount to the job's contract total (migration 0019).
+function validateChangeOrder(f) {
+  const values = { title: str(f.title, 200), details: str(f.details, 5000), amount: str(f.amount, 30),
+    kind: f.kind === 'credit' ? 'credit' : 'add', approval: f.approval === 'approved' ? 'approved' : 'send' };
+  const errors = {};
+  if (!values.title) errors.title = 'Describe the change in a few words.';
+  const m = parseMoney(values.amount, 'Amount', { allowZero: false });
+  if (m.error) errors.amount = m.error;
+  return { values, errors, cents: m.value ? (values.kind === 'credit' ? -m.value : m.value) : 0 };
+}
+const contractChange = (c) => (c > 0 ? `${fmt(c)} added to the contract.` : `${fmt(-c)} taken off the contract.`);
+const changeOrderLink = (base, client, coId) => `${base}/c/${client.portal_token}/co/${coId}`;
+// Emails the client a link to sign. Returns a message for the job page.
+async function sendChangeOrder(db, org, co, req) {
+  const job = await db.get('SELECT * FROM jobs WHERE id = ?', co.job_id);
+  const client = await db.get('SELECT * FROM clients WHERE id = ?', job.client_id);
+  if (!email.configured()) return 'Change order saved. Copy its link below and send it to your client.';
+  if (!email.validEmail(client.email)) return `Change order saved. Add an email address for ${client.name} to email it, or copy its link below.`;
+  const base = baseUrl(req);
+  const result = await asServer(async (sdb) => {
+    const company = await mailer.companyOf(sdb, org.org_id);
+    const t = mailer.templates.change_order({ company, client, job, co, url: changeOrderLink(base, client, co.id) });
+    return mailer.deliver(sdb, { orgId: org.org_id, kind: 'change_order', to: client.email, ...t, company, jobId: job.id });
+  });
+  if (!result.ok) return `The change order could not be emailed: ${result.error}`;
+  await db.run("UPDATE change_orders SET status = 'pending', sent_to = ?, sent_at = now(), updated_at = now() WHERE id = ?", client.email, co.id);
+  return `Change order emailed to ${client.email} to sign`;
+}
+route('POST', '/jobs/:id/change-orders', async ({ db, org, id, form, req }) => {
+  if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
+  const { values, errors, cents } = validateChangeOrder(formObj(form));
+  const again = (errs, status) => renderJob(db, org.org_id, id, { forms: { change: { values, errors: errs } } }, status);
+  if (hasErrors(errors)) return again(errors, 422);
+  const r = await attempt(db, () => db.get(`INSERT INTO change_orders (org_id, job_id, title, details, amount_cents, status)
+    VALUES (?, ?, ?, ?, ?, ?) RETURNING *`, org.org_id, id, values.title, values.details, cents, values.approval === 'approved' ? 'approved' : 'pending'));
+  if (r.error) { const msg = dbMessage(r.error); if (!msg) throw r.error; return again({ amount: msg }, 422); }
+  const msg = values.approval === 'approved' ? `Change order approved. ${contractChange(cents)}` : await sendChangeOrder(db, org, r.value, req);
+  return redirect(`/jobs/${id}?msg=${encodeURIComponent(msg)}#change-orders`);
+});
+async function changeOrderAction(db, org, id, fn) {
+  const co = await db.get('SELECT * FROM change_orders WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!co) return notFound();
+  const r = await attempt(db, () => fn(co));
+  if (r.error && !dbMessage(r.error)) throw r.error;
+  return redirect(`/jobs/${co.job_id}?msg=${encodeURIComponent(r.error ? dbMessage(r.error) : r.value)}#change-orders`);
+}
+route('POST', '/change-orders/:id/approve', ({ db, org, id }) => changeOrderAction(db, org, id, async (co) => {
+  await db.run("UPDATE change_orders SET status = 'approved', updated_at = now() WHERE id = ?", co.id);
+  return `Change order approved. ${contractChange(co.amount_cents)}`;
+}));
+route('POST', '/change-orders/:id/send', ({ db, org, id, req }) => changeOrderAction(db, org, id, async (co) => {
+  if (co.status === 'approved') return 'This change order is already approved.';
+  return sendChangeOrder(db, org, co, req);
+}));
+route('POST', '/change-orders/:id/delete', ({ db, org, id }) => changeOrderAction(db, org, id, async (co) => {
+  await db.run('DELETE FROM change_orders WHERE id = ?', co.id);
+  return 'Change order deleted';
+}));
+
+// ---------- Client portal link ----------
+route('POST', '/clients/:id/portal/send', async ({ db, org, id, req }) => {
+  const client = await db.get('SELECT * FROM clients WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!client) return notFound();
+  const back = (msg) => redirect(`/clients/${id}?msg=${encodeURIComponent(msg)}`);
+  if (!email.configured()) return back('Email sending is not set up for this app yet. Copy the link and send it yourself.');
+  if (!email.validEmail(client.email)) return back(`Add an email address for ${client.name} first, or copy the link and text it.`);
+  const result = await asServer(async (sdb) => {
+    const company = await mailer.companyOf(sdb, org.org_id);
+    const t = mailer.templates.portal({ company, client, url: `${baseUrl(req)}/c/${client.portal_token}` });
+    return mailer.deliver(sdb, { orgId: org.org_id, kind: 'portal', to: client.email, ...t, company });
+  });
+  return back(result.ok ? `Portal link emailed to ${client.email}` : `The link could not be sent: ${result.error}`);
+});
+
+// ---------- Reports ----------
+// Revenue counts a job's contract total in the period it was completed (same as Home). Payments count by the day received.
+const REPORT_PERIODS = { this_month: 'This month', last_month: 'Last month', this_year: 'This year', last_year: 'Last year', all: 'All time' };
+function reportRange(period) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TIMEZONE }).format(new Date());
+  const [y, m] = today.split('-').map(Number);
+  const pad = (n) => String(n).padStart(2, '0');
+  const monthEnd = (yy, mm) => `${yy}-${pad(mm)}-${pad(new Date(Date.UTC(yy, mm, 0)).getUTCDate())}`;
+  const pm = m === 1 ? 12 : m - 1; const py = m === 1 ? y - 1 : y;
+  return {
+    this_month: [`${y}-${pad(m)}-01`, today],
+    last_month: [`${py}-${pad(pm)}-01`, monthEnd(py, pm)],
+    this_year: [`${y}-01-01`, today],
+    last_year: [`${y - 1}-01-01`, `${y - 1}-12-31`],
+    all: ['1900-01-01', today],
+  }[period];
+}
+async function reportData(db, org, period) {
+  const [from, to] = reportRange(period);
+  const jobs = (await db.all(`SELECT jobs.*, clients.name AS client_name, (jobs.completed_at AT TIME ZONE ?)::date AS completed_on, ${JOB_TOTALS_SQL}
+    FROM jobs JOIN clients ON clients.id = jobs.client_id
+    WHERE jobs.org_id = ? AND jobs.status = 'completed' AND (jobs.completed_at AT TIME ZONE ?)::date BETWEEN ? AND ?
+    ORDER BY jobs.completed_at DESC, jobs.id DESC`, APP_TIMEZONE, org, APP_TIMEZONE, from, to)).map(withJobMath);
+  const ids = jobs.map((j) => j.id);
+  const crew = ids.length ? await db.all(`SELECT j.id AS job_id, j.project_name, t.user_id::text AS key, coalesce(nullif(t.full_name, ''), t.email) AS name,
+      CASE WHEN t.pay_type = 'w2' THEN 'W-2' ELSE 'Subcontractor' END AS kind, t.payout_cents + t.labor_cents AS cents, t.minutes
+      FROM jobs j CROSS JOIN LATERAL job_team(j.id) t WHERE j.id = ANY(?::bigint[])
+    UNION ALL
+    SELECT j.id, j.project_name, 'sub' || s.id, s.name, 'Subcontractor', a.payout_cents, 0
+      FROM sub_assignments a JOIN subcontractors s ON s.id = a.sub_id JOIN jobs j ON j.id = a.job_id WHERE a.job_id = ANY(?::bigint[])`, ids, ids) : [];
+  const received = (await db.get(`SELECT coalesce(sum(amount_cents), 0) AS c FROM payments WHERE org_id = ? AND paid_on BETWEEN ? AND ?`, org, from, to)).c;
+  return { period, from, to, jobs, crew, received };
+}
+// Text that a spreadsheet would run as a formula gets a leading apostrophe (negative numbers stay numbers).
+const csvCell = (x) => { let s = String(x ?? ''); if (/^[=+@\t\r]|^-(?![\d.])/.test(s)) s = `'${s}`; return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const csv = (rows) => rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+const csvResponse = (name, rows) => ({ status: 200, body: csv(rows),
+  headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"` } });
+const reportPeriod = (url) => (REPORT_PERIODS[url.searchParams.get('period')] ? url.searchParams.get('period') : 'this_year');
+route('GET', '/reports', async ({ db, org, url }) => ok(v.reportsPage({ ...(await reportData(db, org.org_id, reportPeriod(url))), periods: REPORT_PERIODS })));
+route('GET', '/reports/jobs.csv', async ({ db, org, url }) => {
+  const d = await reportData(db, org.org_id, reportPeriod(url));
+  return csvResponse(`Jobs ${d.from} to ${d.to}.csv`, [['Job', 'Client', 'Address', 'Completed', 'Contract', 'Payments received', 'Expenses', 'Crew pay', 'Gross profit', 'Margin %'],
+    ...d.jobs.map((j) => [j.project_name, j.client_name, j.address, j.completed_on, plain(j.contract_cents), plain(j.payments_cents), plain(j.expenses_cents),
+      plain(j.payouts_cents), plain(j.gross_profit_cents), j.contract_cents ? ((j.gross_profit_cents / j.contract_cents) * 100).toFixed(1) : ''])]);
+});
+route('GET', '/reports/expenses.csv', async ({ db, org, url }) => {
+  const [from, to] = reportRange(reportPeriod(url));
+  const rows = await db.all(`SELECT (e.created_at AT TIME ZONE ?)::date AS day, e.description, e.amount_cents, j.project_name, c.name AS client_name
+    FROM expenses e JOIN jobs j ON j.id = e.job_id JOIN clients c ON c.id = j.client_id
+    WHERE e.org_id = ? AND (e.created_at AT TIME ZONE ?)::date BETWEEN ? AND ? ORDER BY e.created_at, e.id`, APP_TIMEZONE, org.org_id, APP_TIMEZONE, from, to);
+  return csvResponse(`Expenses ${from} to ${to}.csv`, [['Date', 'Description', 'Amount', 'Job', 'Client'],
+    ...rows.map((r) => [r.day, r.description, plain(r.amount_cents), r.project_name, r.client_name])]);
+});
+route('GET', '/reports/crew.csv', async ({ db, org, url }) => {
+  const d = await reportData(db, org.org_id, reportPeriod(url));
+  return csvResponse(`Crew pay ${d.from} to ${d.to}.csv`, [['Name', 'Type', 'Job', 'Hours', 'Pay'],
+    ...d.crew.filter((c) => c.cents).map((c) => [c.name, c.kind, c.project_name, c.minutes ? (c.minutes / 60).toFixed(2) : '', plain(c.cents)])]);
+});
 
 route('POST', '/jobs/:id/assignments', async ({ db, org, id, form }) => {
   if (!(await db.get('SELECT id FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id))) return notFound();
@@ -1741,7 +1878,7 @@ async function health() {
         to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion,
         to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs,
         to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup,
-        to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox`);
+        to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox, to_regclass('public.change_orders') IS NOT NULL AS change_orders`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1756,6 +1893,7 @@ async function health() {
       if (!r.rows[0].subs) throw new Error('Run supabase/migrations/0016_subcontractors.sql in the Supabase SQL Editor.');
       if (!r.rows[0].sms_signup) throw new Error('Run supabase/migrations/0017_texting_signup.sql in the Supabase SQL Editor.');
       if (!r.rows[0].sms_inbox) throw new Error('Run supabase/migrations/0018_text_inbox.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].change_orders) throw new Error('Run supabase/migrations/0019_change_orders_and_portal.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1916,6 +2054,118 @@ async function publicEstimate(req, url) {
   return redirect(`/e/${token}?msg=${encodeURIComponent(payUrl ? 'Approved! You can pay the deposit below.' : 'Approved! Thank you.')}`);
 }
 
+// ---------- The client portal (no login: the link's secret token is the key) ----------
+// One page per client with their estimates, jobs, change orders to sign, invoices to pay and job photos.
+const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|photos\/(\d+)|co\/(\d+)(?:\/(approve|decline))?))?$/;
+
+async function portalCompany(db, orgId) {
+  const company = await mailer.companyOf(db, orgId);
+  const profile = (await db.get('SELECT estimate_terms, website, license_number, logo IS NOT NULL AS has_logo FROM company_profiles WHERE org_id = ?', orgId)) || {};
+  return { company: { ...company, terms: profile.estimate_terms || '', website: profile.website || '', license_number: profile.license_number || '' }, hasLogo: !!profile.has_logo };
+}
+async function portalData(db, client) {
+  const jobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.client_id = ? ORDER BY jobs.status = 'completed', jobs.start_date DESC NULLS FIRST, jobs.id DESC`, client.id)).map(withJobMath);
+  const ids = jobs.map((j) => j.id);
+  return {
+    client, ...(await portalCompany(db, client.org_id)), jobs,
+    estimates: await db.all(`SELECT e.*, estimate_total(e.id) AS total_cents FROM estimates e
+      WHERE e.client_id = ? AND e.status <> 'draft' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.estimate_id = e.id) ORDER BY e.updated_at DESC`, client.id),
+    changeOrders: await db.all("SELECT * FROM change_orders WHERE job_id = ANY(?::bigint[]) AND status <> 'canceled' ORDER BY id", ids),
+    invoices: await db.all("SELECT * FROM invoices WHERE job_id = ANY(?::bigint[]) AND status IN ('open', 'paid') ORDER BY id DESC", ids),
+    photos: await db.all('SELECT id, job_id FROM job_photos WHERE job_id = ANY(?::bigint[]) ORDER BY created_at DESC, id DESC', ids),
+  };
+}
+async function changeOrderData(db, client, coId) {
+  const co = await db.get(`SELECT co.* FROM change_orders co JOIN jobs j ON j.id = co.job_id
+    WHERE co.id = ? AND j.client_id = ? AND co.status <> 'canceled'`, coId, client.id);
+  if (!co) return null;
+  const job = withJobMath(await db.get(`${JOB_LIST_SQL} WHERE jobs.id = ?`, co.job_id));
+  return { client, co, job, ...(await portalCompany(db, client.org_id)) };
+}
+async function notifyCompanyChange(kind, coId, base) {
+  if (!email.configured()) return;
+  try {
+    await asServer(async (db) => {
+      const co = await db.get('SELECT * FROM change_orders WHERE id = ?', coId);
+      const job = await db.get('SELECT * FROM jobs WHERE id = ?', co.job_id);
+      const client = await db.get('SELECT * FROM clients WHERE id = ?', job.client_id);
+      const company = await mailer.companyOf(db, co.org_id);
+      const t = mailer.templates[kind]({ company, client, job, co, base: mailer.appUrl() || base });
+      for (const to of await companyRecipients(db, co.org_id, company)) {
+        await mailer.deliver(db, { orgId: co.org_id, kind, to, ...t, company: { ...company, name: 'Keystone' }, jobId: job.id });
+      }
+    });
+  } catch (e) { console.error(`Could not notify the company (${kind}):`, e.message); }
+}
+
+async function clientPortal(req, url) {
+  const m = url.pathname.match(PORTAL_RE);
+  const notFoundLink = () => page(404, v.messagePage('Link not found', 'This link is not valid. Please contact the company that sent it.'));
+  if (!m) return notFoundLink();
+  const [, token, action, photoId, coId, coAction] = m;
+  const findClient = (db) => db.get('SELECT * FROM clients WHERE portal_token = ?', token);
+
+  if (req.method === 'GET' && !coAction) {
+    return asServer(async (db) => {
+      const client = await findClient(db);
+      if (!client) return notFoundLink();
+      if (action === 'logo') {
+        const r = await db.get('SELECT logo, logo_type FROM company_profiles WHERE org_id = ?', client.org_id);
+        if (!r?.logo) return page(404, 'Not found');
+        return { status: 200, body: r.logo, headers: { 'Content-Type': r.logo_type, 'Cache-Control': 'private, max-age=3600' } };
+      }
+      if (photoId) {
+        const ph = await db.get(`SELECT p.data, p.content_type FROM job_photos p JOIN jobs j ON j.id = p.job_id WHERE p.id = ? AND j.client_id = ?`, photoId, client.id);
+        if (!ph) return page(404, 'Not found');
+        return { status: 200, body: ph.data, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=604800' } };
+      }
+      if (coId) {
+        const d = await changeOrderData(db, client, coId);
+        return d ? ok(v.changeOrderPublicPage({ ...d, token, flash: url.searchParams.get('msg'), preview: url.searchParams.has('preview') })) : notFoundLink();
+      }
+      return ok(v.portalPage({ ...(await portalData(db, client)), token, flash: url.searchParams.get('msg') }));
+    });
+  }
+  if (req.method !== 'POST' || !coAction) return page(405, v.messagePage('Not allowed', 'That action is not allowed.'));
+  const f = formObj(await readBody(req));
+  const back = (msg) => redirect(`/c/${token}/co/${coId}?msg=${encodeURIComponent(msg)}`);
+
+  if (coAction === 'decline') {
+    const done = await asServer(async (db) => {
+      const client = await findClient(db);
+      const co = client && await db.get(`SELECT co.* FROM change_orders co JOIN jobs j ON j.id = co.job_id WHERE co.id = ? AND j.client_id = ? FOR UPDATE`, coId, client.id);
+      if (!co) return null;
+      if (co.status !== 'pending') return false;
+      await db.run("UPDATE change_orders SET status = 'declined', decline_reason = ?, updated_at = now() WHERE id = ?", str(f.reason, 2000), co.id);
+      return true;
+    });
+    if (done === null) return notFoundLink();
+    if (done) await notifyCompanyChange('change_order_declined', Number(coId), baseUrl(req));
+    return back(done ? 'Thanks for letting us know.' : 'This change order was already answered.');
+  }
+
+  const values = { signer_name: str(f.signer_name, 200), signature: String(f.signature || ''), agree: f.agree === 'on' };
+  const outcome = await asServer(async (db) => {
+    const client = await findClient(db);
+    const d = client && await changeOrderData(db, client, coId);
+    if (!d) return { notFound: true };
+    if (d.co.status !== 'pending') return { msg: 'This change order was already answered.' };
+    const errors = {};
+    if (!values.signer_name) errors.signer_name = 'Type your full name.';
+    if (values.signature && !/^data:image\/png;base64,[A-Za-z0-9+/=]{100,300000}$/.test(values.signature)) errors.signature = 'Please sign again.';
+    if (!values.agree) errors.agree = 'Check the box to approve the change order.';
+    if (hasErrors(errors)) return { errors, data: d };
+    const r = await attempt(db, () => db.run(`UPDATE change_orders SET status = 'approved', signer_name = ?, signature = ?, signer_ip = ?, signer_agent = ?,
+      decline_reason = NULL, updated_at = now() WHERE id = ?`, values.signer_name, values.signature || null, clientIp(req), str(req.headers['user-agent'], 300), d.co.id));
+    if (r.error) { const msg = dbMessage(r.error); if (!msg) throw r.error; return { msg }; }
+    return { approved: true };
+  });
+  if (outcome.notFound) return notFoundLink();
+  if (outcome.errors) return page(422, v.changeOrderPublicPage({ ...outcome.data, token, values, errors: outcome.errors }));
+  if (outcome.approved) await notifyCompanyChange('change_order_approved', Number(coId), baseUrl(req));
+  return back(outcome.msg || 'Approved! Thank you.');
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const cookies = parseCookies(req);
@@ -1942,6 +2192,7 @@ async function handle(req, res) {
   if (['/privacy', '/terms', '/support', '/data-deletion'].includes(url.pathname) && req.method === 'GET') return ok(v.legalPage(url.pathname.slice(1)));
   if (url.pathname === '/texting' && req.method === 'GET') return ok(v.textingPolicyPage(String(url.searchParams.get('company') || '').trim().slice(0, 100)));
   if (url.pathname.startsWith('/e/')) return publicEstimate(req, url);
+  if (url.pathname.startsWith('/c/')) return clientPortal(req, url);
   if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');
 
   const { user, setCookies = [] } = await currentUser(cookies);
