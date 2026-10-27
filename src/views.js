@@ -53,7 +53,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .appbar-spacer{flex:1}
 .page-title{font-size:30px;line-height:1.15;font-weight:750;letter-spacing:-.02em;margin:6px 2px 4px;overflow-wrap:anywhere}
 .page-sub{color:var(--text-2);margin:0 2px 14px;font-size:15px}
-.portal-crew{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.avatar.big{width:56px;height:56px;font-size:20px}.sizes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.size{display:flex;align-items:center;gap:8px;margin:0}.size span{font-weight:700;min-width:34px}.offer{border:2px solid var(--accent-soft)}
+.portal-scope{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.portal-scope summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:15px}.portal-scope .pre{margin-top:8px;font-size:15px}.avatar.big{width:56px;height:56px;font-size:20px}.sizes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.size{display:flex;align-items:center;gap:8px;margin:0}.size span{font-weight:700;min-width:34px}.offer{border:2px solid var(--accent-soft)}
 .avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
 .avatar{width:36px;height:36px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:15px}
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;
@@ -2139,7 +2139,7 @@ function changeOrderPublicPage({ client, co, job, company, hasLogo, token, value
   </div>${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${co.title} · ${company.name}` });
 }
 
-function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, crew = [], token, flash }) {
+function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, token, flash }) {
   const base = `/c/${token}`;
   const toSign = changeOrders.filter((c) => c.status === 'pending');
   const toPay = invoices.filter((i) => i.status === 'open' && i.hosted_url);
@@ -2162,12 +2162,9 @@ function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, i
     const cos = changeOrders.filter((c) => c.job_id === j.id && c.status === 'approved');
     const pics = photos.filter((p) => p.job_id === j.id);
     const paid = invoices.filter((i) => i.job_id === j.id && i.status === 'paid');
-    const team = crew.filter((c) => c.job_id === j.id);
     return html`<h2>${j.project_name}</h2><div class="card portal-job">
       <div class="row" style="justify-content:space-between">${pill(j.status, JOB_STATUS)}<span class="muted" style="font-size:14px">${dateRange(j.start_date, j.end_date)}</span></div>
-      ${team.length && j.status !== 'completed' ? html`<div class="portal-crew"><div class="muted" style="font-size:13px">Your crew</div>
-        <div class="row" style="gap:12px;flex-wrap:wrap;margin-top:6px">${team.map((c) => html`<div class="row" style="gap:8px">
-          <span class="avatar">${c.has_photo ? html`<img src="${base}/crew/${c.user_id}/photo" alt="${c.name}">` : (c.name[0] || '?').toUpperCase()}</span><strong style="font-size:15px">${c.name}</strong></div>`)}</div></div>` : ''}
+      ${j.scope ? html`<details class="portal-scope"><summary>View scope of work</summary><div class="pre">${j.scope}</div></details>` : ''}
       <table class="lines" style="margin-top:10px"><tbody>
         <tr><td>Contract${cos.length ? ` (includes ${cos.length} change order${cos.length > 1 ? 's' : ''})` : ''}</td><td class="num">${fmt(j.contract_cents)}</td></tr>
         <tr><td>Paid</td><td class="num">${fmt(j.payments_cents)}</td></tr></tbody>

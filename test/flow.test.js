@@ -1704,9 +1704,11 @@ test('crew portal: job offers, referrals, shirt and call requests, profile photo
     as('nia'); assert.match((await getPage('/team')).body, new RegExp(`/people/${oz}/photo`));
     const token = (await q('SELECT portal_token FROM clients WHERE id = $1', [ann]))[0].portal_token;
     const portal = await (await fetch(`${BASE}/c/${token}`)).text();
-    assert.match(portal, /Your crew/); assert.match(portal, /Oz Ruiz/); assert.match(portal, new RegExp(`/c/${token}/crew/${oz}/photo`));
-    assert.equal((await fetch(`${BASE}/c/${token}/crew/${oz}/photo`)).status, 200);
-    assert.equal((await fetch(`${BASE}/c/${token}/crew/${pat}/photo`)).status, 404, 'only crew on their jobs');
+    // Clients don't see who's on the crew, but can open each job's scope.
+    assert.doesNotMatch(portal, /Your crew|Oz Ruiz/);
+    assert.equal((await fetch(`${BASE}/c/${token}/crew/${oz}/photo`)).status, 404);
+    const scope = (await q('SELECT scope FROM jobs WHERE client_id = $1 AND scope <> \'\' LIMIT 1', [ann]))[0];
+    if (scope) { assert.match(portal, /View scope of work/); assert.ok(portal.includes(scope.scope.split('\n')[0].replace(/&/g, '&amp;'))); }
     as('mo'); assert.equal((await getPage(`/people/${oz}/photo`)).status, 404, 'other companies cannot see the photo');
   } finally {
     await stop(); await start(); await mail.close(); await twilio.close();

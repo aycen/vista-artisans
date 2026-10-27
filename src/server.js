@@ -2274,7 +2274,7 @@ async function publicEstimate(req, url) {
 
 // ---------- The client portal (no login: the link's secret token is the key) ----------
 // One page per client with their estimates, jobs, change orders to sign, invoices to pay and job photos.
-const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|photos\/(\d+)|crew\/([0-9a-f-]{36})\/photo|co\/(\d+)(?:\/(approve|decline))?))?$/;
+const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|photos\/(\d+)|co\/(\d+)(?:\/(approve|decline))?))?$/;
 
 async function portalCompany(db, orgId) {
   const company = await mailer.companyOf(db, orgId);
@@ -2291,10 +2291,6 @@ async function portalData(db, client) {
     changeOrders: await db.all("SELECT * FROM change_orders WHERE job_id = ANY(?::bigint[]) AND status <> 'canceled' ORDER BY id", ids),
     invoices: await db.all("SELECT * FROM invoices WHERE job_id = ANY(?::bigint[]) AND status IN ('open', 'paid') ORDER BY id DESC", ids),
     photos: await db.all('SELECT id, job_id FROM job_photos WHERE job_id = ANY(?::bigint[]) ORDER BY created_at DESC, id DESC', ids),
-    // Who's coming: crew with a name on their profile (and their photo, if they added one), and subcontractors.
-    crew: await db.all(`SELECT a.job_id, a.user_id::text AS user_id, p.full_name AS name, EXISTS (SELECT 1 FROM profile_photos ph WHERE ph.user_id = a.user_id) AS has_photo
-        FROM job_assignments a JOIN profiles p ON p.user_id = a.user_id WHERE a.job_id = ANY(?::bigint[]) AND p.full_name <> ''
-      UNION ALL SELECT a.job_id, NULL, s.name, false FROM sub_assignments a JOIN subcontractors s ON s.id = a.sub_id WHERE a.job_id = ANY(?::bigint[])`, ids, ids),
   };
 }
 async function changeOrderData(db, client, coId) {
@@ -2324,7 +2320,7 @@ async function clientPortal(req, url) {
   const m = url.pathname.match(PORTAL_RE);
   const notFoundLink = () => page(404, v.messagePage('Link not found', 'This link is not valid. Please contact the company that sent it.'));
   if (!m) return notFoundLink();
-  const [, token, action, photoId, crewId, coId, coAction] = m;
+  const [, token, action, photoId, coId, coAction] = m;
   const findClient = (db) => db.get('SELECT * FROM clients WHERE portal_token = ?', token);
 
   if (req.method === 'GET' && !coAction) {
@@ -2340,12 +2336,6 @@ async function clientPortal(req, url) {
         const ph = await db.get(`SELECT p.data, p.content_type FROM job_photos p JOIN jobs j ON j.id = p.job_id WHERE p.id = ? AND j.client_id = ?`, photoId, client.id);
         if (!ph) return page(404, 'Not found');
         return { status: 200, body: ph.data, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=604800' } };
-      }
-      if (crewId) {
-        const ph = await db.get(`SELECT ph.data, ph.content_type FROM profile_photos ph WHERE ph.user_id = ? AND EXISTS (
-          SELECT 1 FROM job_assignments a JOIN jobs j ON j.id = a.job_id WHERE a.user_id = ph.user_id AND j.client_id = ?)`, crewId, client.id);
-        if (!ph) return page(404, 'Not found');
-        return { status: 200, body: ph.data, headers: { 'Content-Type': ph.content_type, 'Cache-Control': 'private, max-age=3600' } };
       }
       if (coId) {
         const d = await changeOrderData(db, client, coId);
