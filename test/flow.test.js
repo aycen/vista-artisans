@@ -808,6 +808,7 @@ test('estimates: options, emailed link, online approval with signature and depos
     assert.equal((await q('SELECT status FROM estimates WHERE id = $1', [est]))[0].status, 'sent');
     page = (await getPage(`/estimates/${est}`)).body;
     assert.match(page, /Sent to jane@example\.com/); assert.match(page, /Not opened yet/); assert.match(page, /Estimate sent/); assert.match(page, />Failed</);
+    assert.ok(page.includes(`value="${BASE}/e/`), "the client link uses APP_URL");
 
     // The client opens the link: no login, no internal numbers
     as('anon');

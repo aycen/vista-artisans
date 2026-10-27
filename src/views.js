@@ -1573,6 +1573,8 @@ const itemRows = (list) => list.map((i) => html`<tr><td><strong style="font-weig
   <div class="muted" style="font-size:13px">${fmtQty(i.qty_hundredths)} × ${fmt(i.unit_price_cents)}</div></td>
   <td class="num">${fmt(i.line_total_cents)}</td></tr>`);
 
+// The address clients get links on (APP_URL, e.g. https://www.keystonefsm.com), whichever address the admin is using.
+const APP_BASE = () => (process.env.APP_URL || '').replace(/\/$/, '');
 function estimatePage({ estimate, client, items, totalCents, job, options = [], emails = [], sending = {}, sendForm, flash, errors }) {
   const locked = !!job;
   const profit = estimate.estimated_cost_cents == null ? null : totalCents - estimate.estimated_cost_cents;
@@ -1607,7 +1609,7 @@ function estimatePage({ estimate, client, items, totalCents, job, options = [], 
       <div class="form-actions"><button type="submit" id="send-estimate">${icon('mail')}${estimate.sent_at ? 'Send again' : 'Email estimate'}</button></div>
     </form>` : html`<div class="hint">Emailing isn't set up for this app yet. Copy the link below and text or email it yourself.</div>`}
     <label for="client-link" style="margin-top:12px">Client link</label>
-    <div class="row" style="gap:8px;flex-wrap:nowrap"><input id="client-link" readonly value="${link}" data-path="${link}" style="flex:1;min-width:0">
+    <div class="row" style="gap:8px;flex-wrap:nowrap"><input id="client-link" readonly value="${APP_BASE()}${link}" data-base="${APP_BASE()}" data-path="${link}" style="flex:1;min-width:0">
       <button type="button" class="secondary sm" id="copy-link">Copy</button></div>
     <div class="hint"><a href="${link}?preview=1" target="_blank" rel="noopener">Preview what the client sees</a></div>
   </div>
@@ -1649,7 +1651,7 @@ const COPY_LINK_JS = `
 (function () {
   var i = document.getElementById('client-link'), b = document.getElementById('copy-link');
   if (!i || !b) return;
-  i.value = location.origin + i.dataset.path;
+  i.value = (i.dataset.base || location.origin) + i.dataset.path;
   b.addEventListener('click', function () {
     i.select();
     (navigator.clipboard ? navigator.clipboard.writeText(i.value) : Promise.reject()).catch(function () { document.execCommand('copy'); });
