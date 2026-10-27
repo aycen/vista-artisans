@@ -257,7 +257,10 @@ async function runAutomations() {
 }
 
 function startAutomations(intervalMs = Number(process.env.AUTOMATION_INTERVAL_MS || 10 * 60_000)) {
-  const tick = () => runAutomations().catch((e) => console.error('Automatic emails failed:', e.message));
+  const tick = () => {
+    runAutomations().catch((e) => console.error('Automatic emails failed:', e.message));
+    require('./texting').check().catch((e) => console.error('Texting status check failed:', e.message));
+  };
   setTimeout(tick, Math.min(30_000, intervalMs)).unref();
   setInterval(tick, intervalMs).unref();
 }

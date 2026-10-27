@@ -141,16 +141,20 @@ own email. Links in automatic emails use `APP_URL`, or Render's `RENDER_EXTERNAL
 Companies can add text follow-ups (estimate follow-ups, day-before reminders, review requests) next to the emails. Every one is
 off until the company turns it on in Company profile, and texts go only to clients marked "OK to text" who haven't replied STOP.
 
-US carriers require every business that texts customers to be registered (A2P 10DLC). Keystone sends through one Twilio account
-as a software provider (ISV): each company gets its own registered brand, campaign and Messaging Service in Twilio.
+US carriers require every business that texts customers to be verified. Keystone sends through one Twilio account and
+each company sets itself up: Company profile → Automatic follow-ups → **Set up texting** (Team and Unlimited plans). The company
+enters its legal business details and EIN; Keystone buys it a toll-free number, puts it in the company's own Messaging Service
+(incoming texts go to `/twilio/inbound` for STOP/START) and files the number's toll-free verification. The server checks Twilio
+every 30 minutes (and whenever the admin opens the page); when the carriers approve, texting switches on for that company.
+Deleting a company releases its number. `/texting` is the public page explaining how consent works (sent as the opt-in proof).
 
-1. Set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in Render.
-2. For each company that wants texting, register its brand and a "Customer care" campaign in Twilio (Trust Hub → A2P 10DLC,
-   as a secondary customer profile), buy a number, and put it in a Messaging Service with that campaign.
-3. In the Messaging Service → Integration, set the incoming message webhook to `https://keystonefsm.com/twilio/inbound`.
-4. Connect the company to it in the Supabase SQL Editor:
-   `insert into sms_senders (org_id, messaging_service_sid, phone) values ('<company id>', 'MG…', '+1…');`
-   (find the company id with `select id, name from organizations;`).
+1. Upgrade the Twilio account (not trial) and set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in Render.
+2. In Twilio Trust Hub, get Keystone's own **Primary Customer Profile** approved (needs Keystone's business details) and set
+   `TWILIO_CUSTOMER_PROFILE_SID` (starts with BU) in Render. Twilio requires it for verifications filed for other businesses.
+3. Optional: `TWILIO_NOTIFICATION_EMAIL` gets Twilio's verification emails (default support@keystonefsm.com).
+
+A company can also be connected by hand (for a number registered outside Keystone):
+`insert into sms_senders (org_id, messaging_service_sid, phone) values ('<company id>', 'MG…', '+1…');`
 
 ## Tests
 

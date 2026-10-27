@@ -33,6 +33,8 @@ services:
         sync: false # text messages (optional); see README "Text messages"
       - key: TWILIO_AUTH_TOKEN
         sync: false
+      - key: TWILIO_CUSTOMER_PROFILE_SID
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, lou: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -1388,5 +1388,74 @@ test('subcontractors without accounts: on the team, assigned to jobs, work order
     assert.equal((await getPage(`/team/subs/${max}`)).status, 404);
   } finally {
     await stop(); await start(); await mail.close();
+  }
+});
+test('self-serve texting: business details, toll-free number, carrier verification, approval switches texting on', async () => {
+  const { startFakeTwilio } = require('./fake-twilio');
+  const twilio = await startFakeTwilio('ACtest', 'twilio-token');
+  const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
+  const recheck = (org) => q("UPDATE sms_registrations SET checked_at = now() - interval '2 minutes' WHERE org_id = $1", [org]);
+  await stop();
+  await start({ TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'twilio-token', TWILIO_API_BASE: twilio.url, APP_URL: BASE });
+  try {
+    as('lou'); await post('/signup', { email: 'lou@keystone.test', password: 'lou-password' });
+    await post('/org/new', { name: 'Lou Flooring' });
+    const org = (await q("SELECT id FROM organizations WHERE name = 'Lou Flooring'"))[0].id;
+    assert.match((await getPage('/settings')).body, /id="setup-texting"/);
+
+    // Free plan: texting is a paid feature
+    let page = (await getPage('/settings/texting')).body; assert.match(page, /comes with Team and Unlimited/);
+    let r = await post('/settings/texting', { business_name: 'Lou Flooring LLC' }); assert.equal(r.status, 303);
+    assert.equal(twilio.calls.length, 0);
+    await q("INSERT INTO org_subscriptions (org_id, plan, comped) VALUES ($1, 'team', true) ON CONFLICT (org_id) DO UPDATE SET plan = 'team', comped = true", [org]);
+
+    // The form: prefilled from the company, and checked
+    page = (await getPage('/settings/texting')).body; assert.match(page, /id="texting-form"/); assert.match(page, /value="Lou Flooring"/);
+    const details = { business_name: 'Lou Flooring LLC', business_type: 'PRIVATE_PROFIT', ein: '123456789', street: '5 Main St', city: 'Lancaster', state: 'pa', zip: '17601',
+      website: 'louflooring.com', contact_first_name: 'Lou', contact_last_name: 'Diaz', contact_email: 'lou@keystone.test', contact_phone: '(717) 555-0100', agree: 'on' };
+    r = await post('/settings/texting', { ...details, ein: '', agree: '' });
+    assert.equal(r.status, 422); assert.match(r.body, /9-digit EIN/); assert.match(r.body, /only text clients who agreed/);
+
+    // Twilio refuses the verification: the number and service are kept, and submitting again resumes
+    twilio.state.failVerification = 'Website is not reachable';
+    r = await post('/settings/texting', details); assert.equal(r.status, 303);
+    page = (await getPage('/settings/texting')).body; assert.match(page, /Setup didn&#39;t finish|Setup didn't finish/); assert.match(page, /Website is not reachable/);
+    delete twilio.state.failVerification;
+    r = await post('/settings/texting', details); assert.match(decodeURIComponent(r.location), /Submitted\. Your number is \+1833555/);
+    assert.equal(twilio.numbers.size, 1, 'one number bought'); assert.equal(twilio.services.size, 1);
+    const [svc] = twilio.services.values(); assert.equal(svc.inbound, `${BASE}/twilio/inbound`); assert.equal(svc.numbers.length, 1);
+    const [tv] = twilio.verifications.values();
+    assert.equal(tv.fields.get('BusinessRegistrationNumber'), '12-3456789'); assert.equal(tv.fields.get('BusinessStateProvinceRegion'), 'PA');
+    assert.equal(tv.fields.get('BusinessWebsite'), 'https://louflooring.com'); assert.equal(tv.fields.get('BusinessContactPhone'), '+17175550100');
+    assert.deepEqual(tv.fields.getAll('UseCaseCategories'), ['ACCOUNT_NOTIFICATIONS', 'CUSTOMER_CARE']);
+    assert.equal(tv.fields.get('OptInImageUrls'), `${BASE}/texting?company=Lou%20Flooring%20LLC`);
+    assert.match(tv.fields.get('ProductionMessageSample'), /^Lou Flooring LLC: .*Reply STOP to opt out\.$/);
+    page = (await getPage('/settings/texting')).body; assert.match(page, /Waiting for carrier approval/); assert.match(page, /\+1833555/);
+    r = await post('/settings/texting', details); assert.equal(twilio.verifications.size, 1, 'no second submission while in review');
+    assert.match((await getPage('/settings')).body, /waiting for carrier approval/);
+
+    // The public consent page the carriers look at
+    const res = await fetch(`${BASE}/texting?company=Lou%20Flooring%20LLC`); assert.equal(res.status, 200);
+    assert.match(await res.text(), /Lou Flooring LLC text only their own clients/);
+
+    // Rejected: the reason shows, and fixing the details edits the same verification
+    Object.assign(tv, { status: 'TWILIO_REJECTED', reasons: [{ reason: 'Business website does not match business name' }], editAllowed: true });
+    await recheck(org);
+    page = (await getPage('/settings/texting')).body; assert.match(page, /Business website does not match business name/);
+    r = await post('/settings/texting', { ...details, website: 'https://louflooringllc.com' });
+    assert.equal(twilio.verifications.size, 1); assert.equal(tv.edits, 1); assert.equal(tv.fields.get('BusinessWebsite'), 'https://louflooringllc.com');
+
+    // Approved: the sender is added and the text switches can be turned on
+    tv.status = 'TWILIO_APPROVED'; await recheck(org);
+    page = (await getPage('/settings/texting')).body; assert.match(page, /Texting is on/);
+    const sender = (await q('SELECT messaging_service_sid, phone FROM sms_senders WHERE org_id = $1', [org]))[0];
+    assert.equal(sender.messaging_service_sid, svc.sid); assert.match(sender.phone, /^\+1833555/);
+    page = (await getPage('/settings')).body; assert.doesNotMatch(page, /not set up yet/);
+
+    // Deleting the company gives the number back
+    r = await post('/settings/delete-company', { confirm: 'lou flooring' }); assert.equal(r.status, 303);
+    assert.equal(twilio.numbers.size, 0); assert.equal(twilio.services.size, 0);
+  } finally {
+    await stop(); await start(); await twilio.close();
   }
 });

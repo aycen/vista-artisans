@@ -894,7 +894,8 @@ function emailSettings(ev, errors, enabled, texting = {}) {
     ${enabled ? '' : html`<div class="notice">Emailing isn't switched on for this app yet, so nothing will be sent. You can still set these up now.</div>`}
     <div class="hint" style="margin:0 0 8px">Every follow-up is optional. Emails come from your company name, and replies go to your business email above.
       ${texting.ready ? html`Texts come from your company's number ${texting.phone} and go only to clients marked "OK to text".`
-        : html`Texting needs a one-time registration of your business with the phone carriers. To turn it on, email <a href="mailto:support@keystonefsm.com">support@keystonefsm.com</a>.`}</div>
+        : texting.pending ? html`Texting is waiting for carrier approval. <a href="/settings/texting">See status</a>.`
+        : html`Texting needs a one-time verification of your business with the phone carriers. <a href="/settings/texting" id="setup-texting">Set up texting</a>.`}</div>
     <label for="estimate_followup_days">Follow up on estimates that haven't been approved</label>
     <select id="estimate_followup_days" name="estimate_followup_days">${[['0', 'No email follow-up'], ['2', 'Email after 2 days, then 4'], ['3', 'Email after 3 days, then 6'], ['5', 'Email after 5 days, then 10'], ['7', 'Email after 7 days, then 14']]
       .map(([k, l]) => html`<option value="${k}" ${String(ev.estimate_followup_days) === k ? raw('selected') : ''}>${l}</option>`)}</select>
@@ -907,6 +908,76 @@ function emailSettings(ev, errors, enabled, texting = {}) {
     ${input('default_deposit_percent', 'Default deposit for new estimates (%)', ev, errors, { inputmode: 'numeric', hint: 'Clients pay it online when they approve, if Stripe is connected. 0 for none.' })}
     <div class="form-actions"><button type="submit" class="secondary">Save follow-up settings</button></div>
   </form>`;
+}
+
+// Self-serve texting setup (Company profile → Texting).
+const BUSINESS_TYPES = { PRIVATE_PROFIT: 'Company (LLC, corporation, partnership)', SOLE_PROPRIETOR: 'Sole proprietor (no EIN)', NON_PROFIT: 'Nonprofit' };
+const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
+function textingPage({ reg, values = {}, errors = {}, plan, configured, flash }) {
+  const back = { href: '/settings#emails', label: 'Company profile' };
+  const wrap = (body) => layout('Texting', body, { flash, back });
+  if (!configured) return wrap(html`<div class="card" id="texting-status"><strong>Texting isn't available yet.</strong><div class="hint">It hasn't been switched on for this app.</div></div>`);
+  if (reg?.status === 'approved') {
+    return wrap(html`<div class="card" id="texting-status"><div class="row" style="justify-content:space-between"><strong>Texting is on</strong><span class="pill completed">Approved</span></div>
+      <div class="hint">Your texts come from ${reg.phone}. Choose which follow-ups go out by text in <a href="/settings#emails">Automatic follow-ups</a>, and mark clients "OK to text" when they agree.</div></div>`);
+  }
+  if (reg?.status === 'pending') {
+    return wrap(html`<div class="card" id="texting-status"><div class="row" style="justify-content:space-between"><strong>Waiting for carrier approval</strong><span class="pill in_progress">In review</span></div>
+      <div class="hint">Your number is ${reg.phone}. The phone carriers are reviewing ${reg.business_name}, which usually takes a few business days.
+      Texting switches on by itself when they approve, and this page will say so. Nothing else for you to do.</div></div>`);
+  }
+  if (plan === 'free') {
+    return wrap(html`<div class="card" id="texting-status"><strong>Texting comes with Team and Unlimited</strong>
+      <div class="hint">Upgrade to send estimate follow-ups, appointment reminders and review requests by text from your own number.</div>
+      <div class="actions" style="margin:12px 0 0"><a class="btn" href="/billing">See plans</a></div></div>`);
+  }
+  const sel = (name, label, opts) => html`<label for="${name}">${label} *</label><select id="${name}" name="${name}" class="${errors[name] ? 'invalid' : ''}">
+    <option value="">Choose…</option>${Object.entries(opts).map(([k, l]) => html`<option value="${k}" ${values[name] === k ? raw('selected') : ''}>${l}</option>`)}</select>${fieldErr(errors, name)}`;
+  return wrap(html`
+  ${reg?.status === 'rejected' ? html`<div class="notice" id="texting-problem"><strong>The carriers didn't approve it yet.</strong> They said: ${reg.problem}. Fix the details below and submit again.</div>` : ''}
+  ${reg?.status === 'failed' ? html`<div class="notice" id="texting-problem"><strong>Setup didn't finish.</strong> ${reg.problem}. Submit again to pick up where it stopped.</div>` : ''}
+  ${errorBox(errors)}
+  <p class="hint" style="margin:0 2px 14px">Text clients from your own toll-free number. US phone carriers require every business that texts customers to be verified,
+    so enter your business exactly as it's registered. Keystone gets your number and files the verification for you. Approval usually takes a few business days.</p>
+  <form method="post" action="/settings/texting" novalidate id="texting-form">
+    <div class="form-card"><h3>Your business</h3>
+      ${input('business_name', 'Legal business name', values, errors, { required: true })}
+      ${sel('business_type', 'Type of business', BUSINESS_TYPES)}
+      ${input('ein', 'EIN (federal tax ID)', values, errors, { placeholder: '12-3456789', inputmode: 'numeric', hint: 'Not needed for a sole proprietor without one.' })}
+      ${input('street', 'Street address', values, errors, { required: true })}
+      <div class="two stack"><div>${input('city', 'City', values, errors, { required: true })}</div>
+      <div class="two"><div>${sel('state', 'State', Object.fromEntries(US_STATES.map((x) => [x, x])))}</div><div>${input('zip', 'ZIP', values, errors, { required: true, inputmode: 'numeric' })}</div></div></div>
+      ${input('website', 'Website', values, errors, { required: true, placeholder: 'yourcompany.com', hint: 'Or your Google, Facebook or Yelp business page.' })}
+    </div>
+    <div class="form-card"><h3>Contact for the carriers</h3>
+      <div class="two stack"><div>${input('contact_first_name', 'First name', values, errors, { required: true })}</div><div>${input('contact_last_name', 'Last name', values, errors, { required: true })}</div></div>
+      <div class="two stack"><div>${input('contact_email', 'Email', values, errors, { required: true, type: 'email' })}</div><div>${input('contact_phone', 'Phone', values, errors, { required: true, type: 'tel', inputmode: 'tel' })}</div></div>
+    </div>
+    <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''}><span>We only text clients who agreed to get texts from us, and we stop when they reply STOP.
+      <a href="/texting" target="_blank" rel="noopener">How consent works</a></span></label>${fieldErr(errors, 'agree')}
+    <div class="form-actions"><a class="btn secondary" href="/settings#emails">Cancel</a><button type="submit" id="texting-submit">Get my number and submit</button></div>
+  </form>`);
+}
+
+// Public page explaining how businesses on Keystone get consent to text (carriers' reviewers read it).
+function textingPolicyPage(company) {
+  const who = company || 'Businesses using Keystone';
+  return layout('Text messages', html`<div class="legal">
+    <a class="mark lg" href="/" aria-label="Keystone">${LOGO}</a>
+    <h1>Text messages</h1><p class="muted">Keystone · How ${company || 'businesses on Keystone'} text their clients</p>
+    <h2>Who gets texts</h2>
+    <p>${who} text only their own clients, and only clients who agreed to get texts. A client agrees when they ask the business for an estimate or schedule work,
+      in person, by phone or in writing. The business then marks that client "OK to text" in Keystone. Clients who haven't agreed are never texted.</p>
+    <h2>What the texts are about</h2>
+    <p>Only the client's own estimates and jobs: a follow-up on an estimate they received, a reminder the day before work starts, and a request for a review
+      after the job. No marketing, and phone numbers are never sold or shared for marketing.</p>
+    <h2>How often, and how to stop</h2>
+    <p>Usually one to three texts per estimate or job. Message and data rates may apply. Reply STOP at any time to stop all texts from that business,
+      or HELP for help. Replying START turns them back on.</p>
+    <p>Example: "${company || 'Rivera Painting'}: Hi Pat, a reminder that we're scheduled to start 12 Oak St tomorrow, Tuesday, March 3. Reply STOP to opt out."</p>
+    <h2>Contact</h2><p>Questions: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>. See also our <a href="/privacy">Privacy policy</a>.</p>
+    ${footerLinks()}
+  </div>`, { bare: true, docTitle: 'Text messages · Keystone' });
 }
 
 function paymentsCard({ configured, testMode, account }) {
@@ -2168,5 +2239,5 @@ function messagePage(title, message) {
 module.exports = {
   ESTIMATE_STATUS, JOB_STATUS, nav, publicEstimatePage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
-  jobsPage, jobPage, entryFormPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
+  jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
 };

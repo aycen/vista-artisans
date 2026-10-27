@@ -274,6 +274,18 @@ select pg_temp.expect(pg_temp.fails(format('select link_subcontractor(%s, %L)', 
 select link_subcontractor(current_setting('t.sub')::bigint, '00000000-0000-0000-0000-00000000000d');
 select pg_temp.expect((select count(*) from subcontractors) = 0 and (select count(*) from job_assignments where user_id = '00000000-0000-0000-0000-00000000000d' and payout_cents >= 5000) >= 1, 'linking moves the work to their account');
 
+-- Texting signup: only the server writes it; admins see only their own
+reset role;
+insert into sms_registrations (org_id, business_name, business_type, street, city, state, zip, website, contact_first_name, contact_last_name, contact_email, contact_phone)
+  values (current_setting('t.vista')::uuid, 'Vista', 'SOLE_PROPRIETOR', '1 A St', 'X', 'PA', '17601', 'https://x.com', 'A', 'B', 'a@b.c', '+15555550100');
+set role authenticated;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.expect((select count(*) from sms_registrations) = 1, 'admins see their texting signup');
+do $$ begin update sms_registrations set status = 'approved'; raise exception 'should fail'; exception when insufficient_privilege then null; end $$;
+select pg_temp.expect(true, 'companies cannot mark their own texting approved');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.expect((select count(*) from sms_registrations) = 0, 'other companies cannot see a texting signup');
+
 -- Deleting: only an admin can delete their own company; deleting your account never touches a company others are in
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
 select pg_temp.expect(pg_temp.fails(format('select delete_organization(%L)', current_setting('t.vista'))), 'other companies cannot delete a company');

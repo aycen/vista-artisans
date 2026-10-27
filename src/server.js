@@ -5,6 +5,7 @@ const auth = require('./auth');
 const { parseMoney, parseQty, plain, fmtQty, fmt } = require('./money');
 const importer = require('./importer');
 const sms = require('./sms');
+const texting = require('./texting');
 const v = require('./views');
 const pdf = require('./pdf');
 const stripe = require('./stripe');
@@ -1160,14 +1161,42 @@ route('POST', '/settings/delete-company', async ({ db, org, form }) => {
     console.error('Cancel plan failed:', e.message);
     return page(502, v.deleteCompanyPage({ org, error: 'We couldn\'t cancel the paid plan with Stripe, so nothing was deleted. Try again, or cancel it in Plan & billing first.' }));
   }
+  const smsReg = await db.get('SELECT * FROM sms_registrations WHERE org_id = ?', org.org_id);
   await db.run('SELECT delete_organization(?)', org.org_id);
+  await texting.release(smsReg);
   return redirect(`/account?msg=${encodeURIComponent(`${org.name} was deleted.`)}`);
 });
 // Texting is ready once the app has Twilio and this company's registered sender has been added (sms_senders).
 async function textingFor(db, orgId) {
   const s = await db.get('SELECT phone FROM sms_senders WHERE org_id = ?', orgId);
-  return { ready: !!(s && sms.configured()), phone: s?.phone || '' };
+  const reg = await db.get('SELECT status FROM sms_registrations WHERE org_id = ?', orgId);
+  return { ready: !!(s && sms.configured()), phone: s?.phone || '', pending: reg?.status === 'pending' };
 }
+
+// Self-serve texting setup: business details -> toll-free number + carrier verification (see texting.js).
+async function renderTexting(db, org, extra = {}, status = 200) {
+  const reg = await db.get('SELECT * FROM sms_registrations WHERE org_id = ?', org.org_id);
+  const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
+  let values = extra.values;
+  if (!values) {
+    const p = (await db.get('SELECT * FROM company_profiles WHERE org_id = ?', org.org_id)) || {};
+    values = reg || { business_name: org.name, contact_email: p.email || '', contact_phone: p.phone || '', website: p.website || '' };
+  }
+  return page(status, v.textingPage({ reg, plan, configured: sms.configured(), ...extra, values }));
+}
+route('GET', '/settings/texting', async ({ db, org, url }) => {
+  await texting.check(org.org_id);
+  return renderTexting(db, org, { flash: url.searchParams.get('msg') });
+});
+route('POST', '/settings/texting', async ({ db, org, form, req }) => {
+  const reg = await db.get('SELECT status FROM sms_registrations WHERE org_id = ?', org.org_id);
+  const plan = (await db.get('SELECT effective_plan(?) AS p', org.org_id)).p;
+  if (!sms.configured() || plan === 'free' || ['pending', 'approved'].includes(reg?.status)) return redirect('/settings/texting');
+  const { values, errors } = texting.validate(form);
+  if (hasErrors(errors)) return renderTexting(db, org, { values: { ...values, agree: form.get('agree') === 'on' }, errors }, 422);
+  const r = await texting.submit(org.org_id, values, baseUrl(req));
+  return redirect(`/settings/texting?msg=${encodeURIComponent(r.status === 'pending' ? `Submitted. Your number is ${r.phone}.` : 'Setup did not finish. See below.')}`);
+});
 route('GET', '/settings', async ({ db, org, url }) => {
   const c = await companyFor(db, org);
   const acct = await db.get('SELECT * FROM stripe_accounts WHERE org_id = ?', org.org_id);
@@ -1642,7 +1671,8 @@ async function health() {
         to_regclass('public.org_subscriptions') IS NOT NULL AS plans, to_regclass('public.email_log') IS NOT NULL AS emails,
         to_regprocedure('public.crew_jobs(uuid)') IS NOT NULL AS crew, to_regclass('public.expense_receipts') IS NOT NULL AS receipts,
         to_regclass('public.time_entries') IS NOT NULL AS time_clock, to_regprocedure('public.delete_my_data()') IS NOT NULL AS deletion,
-        to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs`);
+        to_regclass('public.sms_senders') IS NOT NULL AS texting, to_regclass('public.subcontractors') IS NOT NULL AS subs,
+        to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -1655,6 +1685,7 @@ async function health() {
       if (!r.rows[0].deletion) throw new Error('Run supabase/migrations/0014_account_deletion.sql in the Supabase SQL Editor.');
       if (!r.rows[0].texting) throw new Error('Run supabase/migrations/0015_text_messages.sql in the Supabase SQL Editor.');
       if (!r.rows[0].subs) throw new Error('Run supabase/migrations/0016_subcontractors.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].sms_signup) throw new Error('Run supabase/migrations/0017_texting_signup.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };
@@ -1839,6 +1870,7 @@ async function handle(req, res) {
   if (['/login', '/signup', '/forgot', '/reset'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) return publicRoute(req, url);
   if (url.pathname === '/healthz' && req.method === 'GET') return health();
   if (['/privacy', '/terms', '/support', '/data-deletion'].includes(url.pathname) && req.method === 'GET') return ok(v.legalPage(url.pathname.slice(1)));
+  if (url.pathname === '/texting' && req.method === 'GET') return ok(v.textingPolicyPage(String(url.searchParams.get('company') || '').trim().slice(0, 100)));
   if (url.pathname.startsWith('/e/')) return publicEstimate(req, url);
   if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');
 
