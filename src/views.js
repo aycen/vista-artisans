@@ -1344,7 +1344,7 @@ const SHIRT_SIZES = ['S', 'M', 'L', 'XL', '2XL', '3XL'];
 const offerCard = (o) => html`<div class="card offer" data-offer="${o.offer_id}">
   <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
     <a href="/offers/${o.offer_id}" style="color:inherit;min-width:0"><div class="t" style="font-weight:700">${o.project_name}</div>
-      <div class="muted" style="font-size:14px">${dateRange(o.start_date, o.end_date) || 'Dates to be set'}${o.address ? ` · ${o.address}` : ''}</div></a>
+      <div class="muted" style="font-size:14px">${dateRange(o.start_date, o.end_date) || 'Dates to be set'}${o.address && o.address !== o.project_name ? ` · ${o.address}` : ''}</div></a>
     <div class="amt" style="font-size:18px;font-weight:750">${fmt(o.payout_cents)}</div></div>
   ${o.note ? html`<div class="hint" style="margin-top:6px">${o.note}</div>` : ''}
   <div class="row" style="gap:8px;margin-top:12px">
@@ -1439,8 +1439,8 @@ function requestsSection(requests, referrals) {
     <form method="post" action="/requests/${r.id}/done"><button type="submit" class="sm secondary">Done</button></form></div>`)}
   ${referrals.map((r) => html`<div class="li" style="align-items:flex-start"><div class="main-t"><div class="t">Referral: ${r.name}</div>
     <div class="s">From ${r.by_name} · ${[r.email, r.phone].filter(Boolean).join(' · ')}${r.bonus_cents ? ` · ${fmt(r.bonus_cents)} bonus` : ''}</div>
-    ${r.about ? html`<div class="s" style="margin-top:4px;white-space:pre-line">${r.about}</div>` : ''}</div>
-    <form method="post" action="/referrals/${r.id}" class="row" style="gap:6px"><select name="status" aria-label="Referral status" style="width:auto;min-height:36px;font-size:14px" onchange="this.form.submit()">${options(REFERRAL_STATUS, r.status)}</select></form></div>`)}</div>`;
+    ${r.about ? html`<div class="s" style="margin-top:4px;white-space:pre-line">${r.about}</div>` : ''}
+    <form method="post" action="/referrals/${r.id}" style="margin-top:8px"><select name="status" aria-label="Referral status" style="min-height:38px;font-size:14px" onchange="this.form.submit()">${options(REFERRAL_STATUS, r.status)}</select></form></div></div>`)}</div>`;
 }
 
 function crewHomePage({ jobs, today, year, flash, offers = [], perks = {}, referrals = [], requests = [], hasPhoto = true, profile = {}, forms = {} }) {
