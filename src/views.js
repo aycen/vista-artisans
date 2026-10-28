@@ -100,11 +100,11 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .hero-chart .bar-col{color:rgba(255,255,255,.75)}.hero-chart .bar-col .bar{background:#fff;opacity:.35;max-width:34px}
 .hero-chart .bar-col.on .bar{opacity:1}
 .bar-stack{display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;width:100%}
-.hero-chart .bar.booked{background:transparent;border:1.5px dashed rgba(255,255,255,.85);border-bottom:0;box-sizing:border-box;opacity:.6}
-.hero-chart .bar-col.on .bar.booked{opacity:1}
+.hero-chart .bar.booked{opacity:.22;border-radius:4px 4px 0 0}.hero-chart .bar.booked+.bar{border-radius:0}
+.hero-chart .bar-col.on .bar.booked{opacity:.45}
 .hero-chart .bar-col.cur .bar-l{color:#fff;font-weight:700;border-top:2px solid #fff}
 .hero-legend{display:flex;gap:14px;margin-top:8px;font-size:11px;color:rgba(255,255,255,.8)}.hero-legend span{display:flex;align-items:center;gap:5px}
-.hero-legend i{width:10px;height:10px;border-radius:3px;background:#fff}.hero-legend i.booked{background:transparent;border:1.5px dashed #fff;box-sizing:border-box}.hero-chart .bar-l{border-top:1px solid rgba(255,255,255,.25);font-size:11px}.hero-chart .bar-col.on .bar-l{color:#fff}
+.hero-legend i{width:10px;height:10px;border-radius:3px;background:#fff}.hero-legend i.booked{opacity:.4}.hero-chart .bar-l{border-top:1px solid rgba(255,255,255,.25);font-size:11px}.hero-chart .bar-col.on .bar-l{color:#fff}
 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
 @media (min-width:640px){.stats.three{grid-template-columns:repeat(3,minmax(0,1fr))}.stats.four{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .stat{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
@@ -1589,9 +1589,9 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
   </div>
   <div class="stats four">
     <a class="stat wide-sm stat-link ${profitClass}" href="/reports" id="reports-link"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
-      <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div>
+      <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''}` : 'No jobs completed yet'}</div>
       <div class="stat-more">Reports ${chev()}</div></a>
-    <a class="stat wide-sm stat-link" href="/jobs/outstanding" id="outstanding-link"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Completed jobs, minus payments received</div>
+    <a class="stat wide-sm stat-link" href="/jobs/outstanding" id="outstanding-link"><div class="k">Outstanding payments</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div>
       <div class="stat-more">View jobs ${chev()}</div></a>
     <div class="stat"><div class="k">In progress</div><div class="v">${activeJobs.length}</div></div>
     <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
