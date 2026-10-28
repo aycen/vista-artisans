@@ -33,7 +33,7 @@ async function start(extraEnv = {}) {
 async function stop() { proc.kill(); await new Promise((r) => proc.once('exit', r)); }
 
 // One cookie jar per person.
-const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, lou: {}, mo: {}, nia: {}, oz: {}, pat: {}, anon: {} };
+const jars = { alice: {}, bob: {}, carol: {}, dave: {}, erin: {}, frank: {}, gina: {}, hank: {}, ivy: {}, june: {}, kim: {}, lou: {}, mo: {}, nia: {}, oz: {}, pat: {}, ev: {}, anon: {} };
 let who = 'alice';
 const as = (name) => { who = name; };
 // Estimates have no separate project name any more: the job address is the name. The older tests below name their
@@ -1713,4 +1713,58 @@ test('crew portal: job offers, referrals, shirt and call requests, profile photo
   } finally {
     await stop(); await start(); await mail.close(); await twilio.close();
   }
+});
+
+test('deleting a job, outstanding payments, revenue chart with booked months, calendar events', async () => {
+  const q = async (sql, p = []) => (await dbClient.query(sql, p)).rows;
+  as('ev'); await post('/signup', { email: 'ev@keystone.test', password: 'ev-password' });
+  await post('/org/new', { name: 'Ev Floors' });
+  let r = await post('/clients', { name: 'Bo Reed' }); const bo = idFrom(r.location);
+  const makeJob = async (price) => {
+    r = await post('/estimates', new URLSearchParams([['client_id', String(bo)], ['status', 'approved'], ['deposit_percent', '0'], ['address', `${price} Elm St`],
+      ['item_desc', 'Floors'], ['item_qty', '1'], ['item_price', String(price)]]));
+    return idFrom((await post(`/estimates/${idFrom(r.location)}/convert`, {})).location);
+  };
+  const done = await makeJob(3000); const next = await makeJob(5000); const gone = await makeJob(700);
+  await q("UPDATE jobs SET status = 'completed', completed_at = now() WHERE id = $1", [done]);
+  await post(`/jobs/${done}/payments`, { payment_amount: '1000', paid_on: '2026-10-01' });
+  await q("UPDATE jobs SET start_date = (date_trunc('month', now()) + interval '1 month 3 days')::date WHERE id = $1", [next]);
+
+  // The jobs list shows contract values; Outstanding lists completed jobs with money still due
+  let page = (await getPage('/jobs')).body;
+  assert.match(page, /\$5,000\.00/); assert.match(page, /\$3,000\.00/);
+  page = (await getPage('/')).body;
+  assert.match(page, /href="\/jobs\/outstanding"/); assert.match(page, /id="total-outstanding">\$2,000\.00/);
+  page = (await getPage('/jobs/outstanding')).body;
+  assert.match(page, /\$2,000\.00 due/); assert.doesNotMatch(page, /5000 Elm St/);
+  // Revenue chart: 4 months back, this month (Now) and next month, with next month's booked work
+  assert.equal((page = (await getPage('/')).body).match(/class="bar-col/g).length, 6);
+  assert.match(page, /class="bar-col on cur"/); assert.match(page, />Now</); assert.match(page, /data-b="\$5,000\.00"[^>]*data-rel="1"/);
+
+  // Deleting a job asks first and keeps its estimate
+  page = (await getPage(`/jobs/${gone}`)).body; assert.match(page, new RegExp(`href="/jobs/${gone}/delete"`));
+  page = (await getPage(`/jobs/${gone}/delete`)).body; assert.match(page, /Delete this job\?/); assert.match(page, /permanently deleted/);
+  r = await post(`/jobs/${gone}/delete`, {}); assert.equal(r.status, 303); assert.match(r.location, /Job\+deleted/);
+  assert.equal((await getPage(`/jobs/${gone}`)).status, 404);
+  assert.equal((await q("SELECT count(*)::int AS n FROM estimates WHERE address = '700 Elm St'"))[0].n, 1);
+
+  // Calendar events
+  page = (await getPage('/jobs?day=2026-11-04')).body; assert.match(page, /href="\/events\/new\?day=2026-11-04"/);
+  assert.match((await getPage('/events/new?day=2026-11-04')).body, /value="2026-11-04"/);
+  r = await post('/events', { title: '', start_date: '2026-11-04', end_date: '2026-11-03', start_time: '', end_time: '10:00' });
+  assert.equal(r.status, 422); assert.match(r.body, /Give the event a name/); assert.match(r.body, /end date is before/);
+  r = await post('/events', { title: 'Home show', start_date: '2026-11-04', end_date: '2026-11-05', start_time: '09:00', end_time: '', notes: 'Booth 12' });
+  assert.equal(r.status, 303);
+  const [ev] = await q("SELECT id FROM calendar_events WHERE title = 'Home show'");
+  page = (await getPage('/jobs?day=2026-11-04')).body; assert.match(page, /9:00 AM · Home show/); assert.match(page, /class="event"/);
+  assert.match((await getPage('/jobs?day=2026-11-05')).body, /Home show/);
+  assert.match((await getPage('/jobs?view=week&day=2026-11-04')).body, /wk-item event/);
+  r = await post(`/events/${ev.id}`, { title: 'Home show', start_date: '2026-11-04', end_date: '2026-11-04', start_time: '09:00', end_time: '12:00' });
+  assert.equal(r.status, 303);
+  assert.match((await getPage('/jobs?day=2026-11-04')).body, /9:00 AM – 12:00 PM · Home show/);
+  assert.match((await getPage(`/events/${ev.id}/delete`)).body, /Delete this event\?/);
+  await post(`/events/${ev.id}/delete`, {});
+  assert.doesNotMatch((await getPage('/jobs?day=2026-11-04')).body, /Home show/);
+  // Another company can't see or change it
+  as('mo'); assert.equal((await getPage(`/events/${ev.id}`)).status, 404);
 });

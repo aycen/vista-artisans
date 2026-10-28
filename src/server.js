@@ -317,15 +317,17 @@ route('GET', '/', async (ctx) => {
     FROM m`, APP_TIMEZONE, APP_TIMEZONE, o);
   const month = { label: m.label, prevLabel: `same days of ${m.prev_label}`, revenueCents: m.revenue, prevCents: m.prev_revenue,
     completedJobs: Number(m.completed_jobs), profitCents: m.profit };
-  // Revenue by month for the last 12 months; leading empty months are dropped (but at least 6 are shown).
-  const series = await db.all(`WITH d AS (SELECT date_trunc('month', (now() AT TIME ZONE ?)::date)::date AS cur),
-      ms AS (SELECT generate_series(cur - interval '11 months', cur, interval '1 month')::date AS start FROM d)
-    SELECT to_char(ms.start, 'Mon') AS label, to_char(ms.start, 'FMMonth YYYY') AS long_label, coalesce(sum(j.contract_cents), 0) AS cents
-    FROM ms LEFT JOIN jobs j ON j.org_id = ? AND j.status = 'completed'
-      AND date_trunc('month', j.completed_at AT TIME ZONE ?)::date = ms.start
-    GROUP BY ms.start ORDER BY ms.start`, APP_TIMEZONE, o, APP_TIMEZONE);
-  const first = series.findIndex((r) => Number(r.cents) > 0);
-  const revenueByMonth = series.slice(Math.min(first < 0 ? 6 : first, 6)).map((r) => ({ ...r, cents: Number(r.cents) }));
+  // Revenue by month: 4 months back, this month and next month. Completed = value of jobs completed that month;
+  // booked = jobs not completed yet, in the month they're scheduled to finish (end date, else start date).
+  const revenueByMonth = (await db.all(`WITH d AS (SELECT date_trunc('month', (now() AT TIME ZONE ?)::date)::date AS cur),
+      ms AS (SELECT generate_series(cur - interval '4 months', cur + interval '1 month', interval '1 month')::date AS start, cur FROM d)
+    SELECT to_char(ms.start, 'Mon') AS label, to_char(ms.start, 'FMMonth YYYY') AS long_label, sign(ms.start - ms.cur)::int AS rel,
+      (SELECT coalesce(sum(j.contract_cents), 0) FROM jobs j WHERE j.org_id = ? AND j.status = 'completed'
+        AND date_trunc('month', j.completed_at AT TIME ZONE ?)::date = ms.start) AS cents,
+      (SELECT coalesce(sum(j.contract_cents), 0) FROM jobs j WHERE j.org_id = ? AND j.status <> 'completed'
+        AND date_trunc('month', coalesce(j.end_date, j.start_date))::date = ms.start) AS booked
+    FROM ms ORDER BY ms.start`, APP_TIMEZONE, o, APP_TIMEZONE, o))
+    .map((r) => ({ ...r, cents: Number(r.cents), booked: Number(r.booked) }));
   return ok(v.homePage({ openEstimates, activeJobs, outstandingCents, month, revenueByMonth, flash: url.searchParams.get('msg') }));
 }, { worker: true });
 
@@ -528,19 +530,88 @@ route('GET', '/jobs', async ({ db, org, url }) => {
   for (const vs of visits) (byDay[vs.day] ||= []).push('visit');
   const dayVisits = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND estimates.visit_date = ?::date
     ORDER BY estimates.visit_time NULLS LAST, estimates.id`, org.org_id, day);
+  // Events (time the company blocked off) show as their own dot and list.
+  const eventSpans = await db.all(`SELECT d::date::text AS day FROM calendar_events e,
+      generate_series(greatest(e.start_date, ?::date), least(e.end_date, ?::date + 41), interval '1 day') AS d
+    WHERE e.org_id = ? ORDER BY e.start_date, e.id`, gridStart, gridStart, org.org_id);
+  for (const ev of eventSpans) (byDay[ev.day] ||= []).unshift('event');
+  const dayEvents = await db.all(`${EVENT_SQL} WHERE org_id = ? AND start_date <= ?::date AND end_date >= ?::date
+    ORDER BY start_time NULLS FIRST, id`, org.org_id, day, day);
   const dayJobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.start_date <= ?::date
     AND coalesce(jobs.end_date, jobs.start_date) >= ?::date ORDER BY jobs.start_date, jobs.id`, org.org_id, day, day)).map(withJobMath);
   const view = url.searchParams.get('view') === 'week' ? 'week' : 'month';
-  let weekJobs = []; let weekVisits = [];
+  let weekJobs = []; let weekVisits = []; let weekEvents = [];
   if (view === 'week') {
     // The week (Sunday to Saturday) that holds the chosen day.
     const ws = (await db.get('SELECT (?::date - extract(dow FROM ?::date)::int)::text AS d', day, day)).d;
     weekJobs = await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.start_date <= ?::date + 6
       AND coalesce(jobs.end_date, jobs.start_date) >= ?::date ORDER BY jobs.start_date, jobs.id`, org.org_id, ws, ws);
+    weekEvents = await db.all(`${EVENT_SQL} WHERE org_id = ? AND start_date <= ?::date + 6 AND end_date >= ?::date
+      ORDER BY start_time NULLS FIRST, id`, org.org_id, ws, ws);
     weekVisits = await db.all(`${ESTIMATE_LIST_SQL} WHERE estimates.org_id = ? AND estimates.visit_date BETWEEN ?::date AND ?::date + 6
       ORDER BY estimates.visit_date, estimates.visit_time NULLS LAST, estimates.id`, org.org_id, ws, ws);
   }
-  return ok(v.jobsPage({ jobs, status, flash: url.searchParams.get('msg'), cal: { month, day, today, byDay, dayJobs, dayVisits, view, weekJobs, weekVisits } }));
+  return ok(v.jobsPage({ jobs, status, flash: url.searchParams.get('msg'), cal: { month, day, today, byDay, dayJobs, dayVisits, dayEvents, view, weekJobs, weekVisits, weekEvents } }));
+});
+// ---------- Calendar events: time the company blocks off (shown on the Jobs calendar) ----------
+const EVENT_SQL = `SELECT id, title, notes, start_date::text AS start_date, end_date::text AS end_date,
+  to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time FROM calendar_events`;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function readEvent(f) {
+  const values = { title: str(f.title, 200), start_date: str(f.start_date, 10), end_date: str(f.end_date, 10) || str(f.start_date, 10),
+    start_time: str(f.start_time, 5), end_time: str(f.end_time, 5), notes: str(f.notes, 2000) };
+  const errors = {};
+  if (!values.title) errors.title = 'Give the event a name.';
+  if (!isDate(values.start_date)) errors.start_date = 'Choose the date.';
+  if (!isDate(values.end_date)) errors.end_date = 'Choose the end date.';
+  else if (!errors.start_date && values.end_date < values.start_date) errors.end_date = 'The end date is before the start date.';
+  else if (!errors.start_date && (new Date(values.end_date) - new Date(values.start_date)) / 864e5 > 366) errors.end_date = 'An event can last up to a year.';
+  if (values.start_time && !TIME_RE.test(values.start_time)) errors.start_time = 'Choose a time.';
+  if (values.end_time && !TIME_RE.test(values.end_time)) errors.end_time = 'Choose a time.';
+  else if (values.end_time && !values.start_time) errors.start_time = 'Add a start time, or clear the end time for an all-day event.';
+  else if (values.end_time && values.start_date === values.end_date && values.end_time <= values.start_time) errors.end_time = 'The end time is before the start time.';
+  return { values, errors };
+}
+const eventArgs = (x) => [x.title, x.start_date, x.end_date, x.start_time || null, x.end_time || null, x.notes];
+route('GET', '/events/new', ({ url }) => {
+  const day = isDate(url.searchParams.get('day') || '') ? url.searchParams.get('day') : '';
+  return ok(v.eventFormPage({ values: { start_date: day, end_date: day }, errors: {} }));
+});
+route('POST', '/events', async ({ db, org, form }) => {
+  const { values, errors } = readEvent(formObj(form));
+  if (hasErrors(errors)) return page(422, v.eventFormPage({ values, errors }));
+  await db.run(`INSERT INTO calendar_events (org_id, title, start_date, end_date, start_time, end_time, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`, org.org_id, ...eventArgs(values));
+  return redirect(`/jobs?day=${values.start_date}&msg=Event+added`);
+});
+const loadEvent = (db, org, id) => db.get(`${EVENT_SQL} WHERE id = ? AND org_id = ?`, id, org.org_id);
+route('GET', '/events/:id', async ({ db, org, id }) => {
+  const ev = await loadEvent(db, org, id); if (!ev) return notFound();
+  return ok(v.eventFormPage({ event: ev, values: ev, errors: {} }));
+});
+route('POST', '/events/:id', async ({ db, org, id, form }) => {
+  const ev = await loadEvent(db, org, id); if (!ev) return notFound();
+  const { values, errors } = readEvent(formObj(form));
+  if (hasErrors(errors)) return page(422, v.eventFormPage({ event: ev, values, errors }));
+  await db.run(`UPDATE calendar_events SET title = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?, notes = ?, updated_at = now()
+    WHERE id = ?`, ...eventArgs(values), id);
+  return redirect(`/jobs?day=${values.start_date}&msg=Event+saved`);
+});
+route('GET', '/events/:id/delete', async ({ db, org, id }) => {
+  const ev = await loadEvent(db, org, id); if (!ev) return notFound();
+  return ok(v.confirmPage({ title: 'Delete this event?', action: `/events/${id}/delete`, cancelHref: `/events/${id}`,
+    message: `"${ev.title}" will be removed from the calendar.` }));
+});
+route('POST', '/events/:id/delete', async ({ db, org, id }) => {
+  const ev = await loadEvent(db, org, id); if (!ev) return notFound();
+  await db.run('DELETE FROM calendar_events WHERE id = ?', id);
+  return redirect(`/jobs?day=${ev.start_date}&msg=Event+deleted`);
+});
+
+route('GET', '/jobs/outstanding', async ({ db, org }) => {
+  const jobs = (await db.all(`${JOB_LIST_SQL} WHERE jobs.org_id = ? AND jobs.status = 'completed' ORDER BY jobs.end_date NULLS LAST, jobs.id`, org.org_id))
+    .map(withJobMath).filter((j) => j.balance_cents > 0).sort((a, b) => b.balance_cents - a.balance_cents);
+  return ok(v.outstandingPage({ jobs }));
 });
 route('GET', '/jobs/:id', ({ db, org, id, url }) => renderJob(db, org.org_id, id, { flash: url.searchParams.get('msg') }));
 route('POST', '/jobs/:id', async ({ db, org, id, form }) => {
@@ -1230,6 +1301,31 @@ route('GET', '/schedule/:id', async (ctx) => {
   if (!job) return notFound();
   return ok(v.scheduleJobPage({ job, me: ctx.user.id, photos: await photosFor(db, id), flash: url.searchParams.get('msg') }));
 }, { worker: true });
+
+// Deleting a job (with a confirmation page first). Its estimate stays, so the job can be made again from it.
+async function jobDeleteCheck(db, org, id) {
+  const job = await db.get('SELECT id, project_name FROM jobs WHERE id = ? AND org_id = ?', id, org.org_id);
+  if (!job) return {};
+  const openInvoices = (await db.get("SELECT count(*)::int AS n FROM invoices WHERE job_id = ? AND status = 'open'", id)).n;
+  return { job, openInvoices };
+}
+route('GET', '/jobs/:id/delete', async ({ db, org, id }) => {
+  const { job, openInvoices } = await jobDeleteCheck(db, org, id);
+  if (!job) return notFound();
+  if (openInvoices) {
+    return page(409, v.messagePage('Void the invoice first', `This job has ${openInvoices} unpaid invoice${openInvoices > 1 ? 's' : ''} the client can still pay. Void ${openInvoices > 1 ? 'them' : 'it'} on the job page, then delete the job.`));
+  }
+  return ok(v.confirmPage({ title: 'Delete this job?', action: `/jobs/${id}/delete`, cancelHref: `/jobs/${id}`,
+    message: `"${job.project_name}" will be permanently deleted, with its expenses, payments, photos, change orders and crew assignments. This can't be undone. The original estimate is kept.`,
+    button: 'Yes, delete the job' }));
+});
+route('POST', '/jobs/:id/delete', async ({ db, org, id }) => {
+  const { job, openInvoices } = await jobDeleteCheck(db, org, id);
+  if (!job) return notFound();
+  if (openInvoices) return redirect(`/jobs/${id}/delete`);
+  await db.run('DELETE FROM jobs WHERE id = ?', id);
+  return redirect('/jobs?msg=Job+deleted');
+});
 
 // Deleting estimates and clients (with a confirmation page first)
 route('GET', '/estimates/:id/delete', async ({ db, org, id }) => {
@@ -2094,7 +2190,8 @@ async function health() {
         to_regclass('public.sms_registrations') IS NOT NULL AS sms_signup,
         to_regclass('public.sms_messages') IS NOT NULL AS sms_inbox, to_regclass('public.change_orders') IS NOT NULL AS change_orders,
         to_regclass('public.job_offers') IS NOT NULL AS crew_portal,
-        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'job_offers' AND column_name = 'respond_by') AS offer_deadline`);
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'job_offers' AND column_name = 'respond_by') AS offer_deadline,
+        to_regclass('public.calendar_events') IS NOT NULL AS events`);
       if (!r.rows[0].payouts) throw new Error('Run supabase/migrations/0003_payouts.sql in the Supabase SQL Editor.');
       if (!r.rows[0].join_codes) throw new Error('Run supabase/migrations/0004_join_codes_and_job_dates.sql in the Supabase SQL Editor.');
       if (!r.rows[0].profiles) throw new Error('Run supabase/migrations/0005_company_profile_and_completion.sql in the Supabase SQL Editor.');
@@ -2112,6 +2209,7 @@ async function health() {
       if (!r.rows[0].change_orders) throw new Error('Run supabase/migrations/0019_change_orders_and_portal.sql in the Supabase SQL Editor.');
       if (!r.rows[0].crew_portal) throw new Error('Run supabase/migrations/0020_crew_portal.sql in the Supabase SQL Editor.');
       if (!r.rows[0].offer_deadline) throw new Error('Run supabase/migrations/0021_offer_deadline.sql in the Supabase SQL Editor.');
+      if (!r.rows[0].events) throw new Error('Run supabase/migrations/0022_calendar_events.sql in the Supabase SQL Editor.');
     }),
     auth: await check(async () => { if ((await auth.getUser('not-a-real-token')) !== null) throw new Error('unexpected'); }),
   };

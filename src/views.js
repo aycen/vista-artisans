@@ -98,7 +98,13 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .hero .s{font-size:13px;opacity:.8}
 .hero-chart{margin-top:14px}.hero-chart .bars{height:78px;background:none;gap:6px}
 .hero-chart .bar-col{color:rgba(255,255,255,.75)}.hero-chart .bar-col .bar{background:#fff;opacity:.35;max-width:34px}
-.hero-chart .bar-col.on .bar{opacity:1}.hero-chart .bar-l{border-top:1px solid rgba(255,255,255,.25);font-size:11px}.hero-chart .bar-col.on .bar-l{color:#fff}
+.hero-chart .bar-col.on .bar{opacity:1}
+.bar-stack{display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;width:100%}
+.hero-chart .bar.booked{background:transparent;border:1.5px dashed rgba(255,255,255,.85);border-bottom:0;box-sizing:border-box;opacity:.6}
+.hero-chart .bar-col.on .bar.booked{opacity:1}
+.hero-chart .bar-col.cur .bar-l{color:#fff;font-weight:700;border-top:2px solid #fff}
+.hero-legend{display:flex;gap:14px;margin-top:8px;font-size:11px;color:rgba(255,255,255,.8)}.hero-legend span{display:flex;align-items:center;gap:5px}
+.hero-legend i{width:10px;height:10px;border-radius:3px;background:#fff}.hero-legend i.booked{background:transparent;border:1.5px dashed #fff;box-sizing:border-box}.hero-chart .bar-l{border-top:1px solid rgba(255,255,255,.25);font-size:11px}.hero-chart .bar-col.on .bar-l{color:#fff}
 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
 @media (min-width:640px){.stats.three{grid-template-columns:repeat(3,minmax(0,1fr))}.stats.four{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .stat{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px;min-width:0}
@@ -250,7 +256,7 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .cal-day.sel .n{background:var(--accent);color:var(--on-accent);box-shadow:none}
 .cal-dots{display:flex;gap:3px;height:6px}
 .cal-dots i{width:6px;height:6px;border-radius:50%;background:var(--amber)}
-.cal-dots i.in_progress{background:var(--blue)} .cal-dots i.completed{background:var(--green)} .cal-dots i.visit{background:transparent;box-shadow:inset 0 0 0 1.6px var(--accent)}
+.cal-dots i.event{background:var(--text-3)} .cal-dots i.in_progress{background:var(--blue)} .cal-dots i.completed{background:var(--green)} .cal-dots i.visit{background:transparent;box-shadow:inset 0 0 0 1.6px var(--accent)}
 .cal-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin:-4px 4px 4px}
 .cal-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
 @media (hover:hover){a.cal-day:hover{background:var(--surface-2)}}
@@ -268,6 +274,7 @@ input[type=date],input[type=time]{min-width:0;max-width:100%;-webkit-appearance:
 .wk-item small{display:block;font-weight:400;color:var(--text-2);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wk-item.in_progress{border-left-color:var(--blue)} .wk-item.completed{border-left-color:var(--green)}
 .wk-item.visit{border-left-color:var(--accent);background:var(--accent-soft)}
+.wk-item.event{border-left-color:var(--text-3);background:repeating-linear-gradient(135deg,var(--surface-2) 0 8px,var(--line) 8px 9px)}
 .wk-none{color:var(--text-3);font-size:14px;padding:8px 0}
 table.lines{width:100%;border-collapse:collapse}
 table.lines td,table.lines th{padding:12px 16px;text-align:left;font-size:15px}
@@ -720,7 +727,7 @@ function accountPage({ user, org, orgs, plan, hasPhoto = false, theme = '', valu
     <div class="li"><span class="avatar big">${hasPhoto ? html`<img src="/people/${user.id}/photo" alt="">` : initialOf(user)}</span><div class="main-t"><div class="t">${who(user)}</div>
       <div class="s">${user.name ? `${user.email} · ` : ''}${org ? `${ROLES[org.role]} at ${org.name}` : 'Not in a company yet'}</div>
       <div class="row" style="gap:14px;margin-top:4px;font-size:14px"><label class="link" style="cursor:pointer;color:var(--accent);font-weight:600" id="photo-btn">${hasPhoto ? 'Change photo' : 'Add photo'}<input type="file" accept="image/*" hidden data-avatar-upload></label>
-        ${hasPhoto ? html`<form method="post" action="/account/photo/delete"><button type="submit" class="link" style="font-size:14px">Remove</button></form>` : ''}</div></div></div>
+        ${hasPhoto ? html`<form method="post" action="/account/photo/delete" data-confirm="Remove your profile photo?"><button type="submit" class="link" style="font-size:14px">Remove</button></form>` : ''}</div></div></div>
   </div>
   <script>${raw(AVATAR_JS)}</script>
   ${errorBox(errors)}
@@ -1535,18 +1542,27 @@ function growthBadge(m) {
   return html`<span class="delta" id="revenue-growth" title="Compared with the ${m.prevLabel}">${pct >= 0 ? "▲" : "▼"} ${shown} vs last month</span>`;
 }
 
-// Revenue by month inside the revenue box: tap a month to see it in the big number.
-function heroChart(rows, month) {
-  const max = Math.max(...rows.map((r) => r.cents));
+// Revenue by month inside the revenue box: 4 months back, this month (highlighted) and next month.
+// Each bar is the value of jobs completed that month, with jobs booked for that month stacked on top (outlined).
+// Tap a month to see it in the big number.
+function heroChart(rows) {
+  const max = Math.max(...rows.map((r) => r.cents + r.booked));
   const top = max > 0 ? niceCeil(max) : 100000;
+  const pct = (c) => (c ? Math.max(3, (c / top) * 100).toFixed(1) : 0);
   return html`<div class="hero-chart" id="revenue-chart">
-    <div class="bars">${rows.map((r, i) => html`<button type="button" class="bar-col${i === rows.length - 1 ? ' on' : ''}" data-v="${fmt(r.cents)}" data-l="${r.long_label}" aria-label="${r.long_label}: ${fmt(r.cents)}">
-      <span class="bar-area"><span class="bar" style="height:${r.cents ? Math.max(3, (r.cents / top) * 100).toFixed(1) : 0}%"></span></span><span class="bar-l">${r.label}</span></button>`)}</div>
-    <table class="sr-only"><caption>Revenue by month</caption><tbody>${rows.map((r) => html`<tr><th scope="row">${r.long_label}</th><td>${fmt(r.cents)}</td></tr>`)}</tbody></table>
-    <script>${raw(`(function(){var c=document.getElementById('revenue-chart'),h=c.closest('.hero'),v=h.querySelector('#month-revenue'),k=h.querySelector('.hero-k'),s=h.querySelector('.hero-s'),d=h.querySelector('.delta'),cols=c.querySelectorAll('.bar-col'),last=cols[cols.length-1];
-      function show(b){cols.forEach(function(x){x.classList.remove('on')});b.classList.add('on');var cur=b===last;
-        v.textContent=b.dataset.v;k.textContent='Revenue · '+b.dataset.l;s.textContent=cur?${JSON.stringify('Value of jobs completed this month')}:'Value of jobs completed that month';if(d)d.style.visibility=cur?'':'hidden';}
-      cols.forEach(function(b){b.addEventListener('click',function(){show(b)});b.addEventListener('focus',function(){show(b)});});})();`)}</script>
+    <div class="bars">${rows.map((r) => html`<button type="button" class="bar-col${r.rel === 0 ? ' on cur' : ''}" data-v="${fmt(r.cents)}" data-b="${r.booked ? fmt(r.booked) : ''}" data-l="${r.long_label}" data-rel="${r.rel}"
+        aria-label="${r.long_label}: ${fmt(r.cents)} completed${r.booked ? `, ${fmt(r.booked)} booked` : ''}">
+      <span class="bar-area"><span class="bar-stack">${r.booked ? html`<span class="bar booked" style="height:${pct(r.booked)}%"></span>` : ''}<span class="bar" style="height:${pct(r.cents)}%"></span></span></span>
+      <span class="bar-l">${r.rel === 0 ? 'Now' : r.label}</span></button>`)}</div>
+    ${rows.some((r) => r.booked) ? html`<div class="hero-legend"><span><i></i>Completed</span><span><i class="booked"></i>Booked</span></div>` : ''}
+    <table class="sr-only"><caption>Revenue by month</caption><tbody>${rows.map((r) => html`<tr><th scope="row">${r.long_label}</th><td>${fmt(r.cents)} completed${r.booked ? `, ${fmt(r.booked)} booked` : ''}</td></tr>`)}</tbody></table>
+    <script>${raw(`(function(){var c=document.getElementById('revenue-chart'),h=c.closest('.hero'),v=h.querySelector('#month-revenue'),k=h.querySelector('.hero-k'),s=h.querySelector('.hero-s'),d=h.querySelector('.delta'),cols=c.querySelectorAll('.bar-col');
+      function show(b){cols.forEach(function(x){x.classList.remove('on')});b.classList.add('on');var rel=+b.dataset.rel,bk=b.dataset.b;
+        if(rel>0){v.textContent=bk||'$0.00';k.textContent='Booked · '+b.dataset.l;s.textContent='Value of jobs scheduled to finish that month';}
+        else{v.textContent=b.dataset.v;k.textContent='Revenue · '+b.dataset.l;s.textContent=(rel===0?'Value of jobs completed this month':'Value of jobs completed that month')+(bk?' · '+bk+' more booked':'');}
+        if(d)d.style.visibility=rel===0?'':'hidden';}
+      cols.forEach(function(b){b.addEventListener('click',function(){show(b)});b.addEventListener('focus',function(){show(b)});});
+      var cur=c.querySelector('.bar-col.cur');if(cur&&cur.dataset.b)s.textContent+=' · '+cur.dataset.b+' more booked';})();`)}</script>
   </div>`;
 }
 // Rounds up to 1, 2, 2.5 or 5 times a power of ten, so the gridlines land on round dollars.
@@ -1569,13 +1585,14 @@ function homePage({ openEstimates, activeJobs, outstandingCents, month, revenueB
     <div class="hero-top"><div class="k hero-k">Revenue · ${month.label}</div>${growthBadge(month)}</div>
     <div class="v" id="month-revenue">${fmt(month.revenueCents)}</div>
     <div class="s hero-s">Value of jobs completed this month</div>
-    ${revenueByMonth?.length > 1 ? heroChart(revenueByMonth, month) : ''}
+    ${revenueByMonth?.length ? heroChart(revenueByMonth) : ''}
   </div>
   <div class="stats four">
     <a class="stat wide-sm stat-link ${profitClass}" href="/reports" id="reports-link"><div class="k">Gross profit · ${month.label}</div><div class="v" id="month-profit">${fmt(month.profitCents)}</div>
       <div class="s">${month.completedJobs ? `From ${month.completedJobs} job${month.completedJobs > 1 ? 's' : ''} completed this month` : 'No jobs completed this month yet'}</div>
       <div class="stat-more">Reports ${chev()}</div></a>
-    <div class="stat wide-sm"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Completed jobs, minus payments received</div></div>
+    <a class="stat wide-sm stat-link" href="/jobs/outstanding" id="outstanding-link"><div class="k">Outstanding</div><div class="v" id="total-outstanding">${fmt(outstandingCents)}</div><div class="s">Completed jobs, minus payments received</div>
+      <div class="stat-more">View jobs ${chev()}</div></a>
     <div class="stat"><div class="k">In progress</div><div class="v">${activeJobs.length}</div></div>
     <div class="stat"><div class="k">Open estimates</div><div class="v">${openEstimates.length}</div></div>
   </div>
@@ -1599,12 +1616,13 @@ function estimateList(rows, empty, { showClient = true } = {}) {
   </a>`)}</div>`;
 }
 
-function jobList(rows, empty, { showClient = true } = {}) {
+// Shows each job's contract value; `owed: true` shows what's still owed on it instead.
+function jobList(rows, empty, { showClient = true, owed = false } = {}) {
   if (!rows.length) return html`<div class="empty">${empty}</div>`;
   return html`<div class="list">${rows.map((j) => html`<a class="li" href="/jobs/${j.id}">
     <div class="main-t"><div class="t">${j.project_name}</div>
       <div class="s">${showClient ? j.client_name : ''}${showClient && (j.start_date || j.end_date) ? ' · ' : ''}${dateRange(j.start_date, j.end_date)}</div></div>
-    <div class="r"><span class="amt">${fmt(j.balance_cents)}</span>${pill(j.status, JOB_STATUS)}</div>${chev()}
+    <div class="r"><span class="amt">${owed ? html`${fmt(j.balance_cents)} due` : fmt(j.contract_cents)}</span>${pill(j.status, JOB_STATUS)}</div>${chev()}
   </a>`)}</div>`;
 }
 
@@ -2248,13 +2266,45 @@ function weekView({ day, today, base, items }) {
   </div>`;
 }
 
+// "9:00 AM – 11:00 AM · " on the days an event has times (its first day only, for a start time), "" for all-day events.
+const eventWhen = (e, d) => {
+  if (!e.start_time || (d && d !== e.start_date)) return '';
+  return `${fmtTime(e.start_time)}${e.end_time && e.start_date === e.end_date ? ` – ${fmtTime(e.end_time)}` : ''} · `;
+};
+function eventFormPage({ event, values, errors }) {
+  const action = event ? `/events/${event.id}` : '/events';
+  return layout(event ? 'Edit event' : 'Add event', html`
+  ${errorBox(errors)}
+  <form method="post" action="${action}" class="form-card" id="event-form" novalidate>
+    <div class="hint" style="margin-top:12px">Block off time on the calendar for things like networking events or inspections.</div>
+    ${input('title', 'Event', values, errors, { required: true, placeholder: 'Building inspection' })}
+    <div class="two">
+      <div>${input('start_date', 'Date', values, errors, { type: 'date', required: true })}</div>
+      <div>${input('end_date', 'Ends', values, errors, { type: 'date', hint: 'For events over several days' })}</div>
+    </div>
+    <div class="two">
+      <div>${input('start_time', 'Start time', values, errors, { type: 'time' })}</div>
+      <div>${input('end_time', 'End time', values, errors, { type: 'time' })}</div>
+    </div>
+    <div class="hint">Leave the times blank for an all-day event.</div>
+    ${textarea('notes', 'Notes (optional)', values, errors, { placeholder: 'Where, who is going…' })}
+    <div class="form-actions"><button type="submit">${event ? 'Save event' : 'Add event'}</button> <a class="btn secondary" href="/jobs${values.start_date ? `?day=${values.start_date}` : ''}">Cancel</a></div>
+  </form>
+  ${event ? html`<p class="hint" style="text-align:center"><a href="/events/${event.id}/delete" id="delete-event" style="color:var(--red);font-weight:600">Delete event</a></p>` : ''}`,
+  { back: { href: `/jobs${event ? `?day=${event.start_date}` : ''}`, label: 'Jobs' } });
+}
+
 function jobsPage({ jobs, status, cal, flash }) {
   const [y, m, d] = cal.day.split('-').map(Number);
   const dayName = DOW[new Date(cal.day + 'T00:00:00Z').getUTCDay()];
   const legend = html`<div class="cal-legend"><span><i style="background:var(--amber)"></i>Not started</span><span><i style="background:var(--blue)"></i>In progress</span>
-    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate</span></div>`;
+    <span><i style="background:var(--green)"></i>Completed</span><span><i style="box-shadow:inset 0 0 0 1.6px var(--accent)"></i>Estimate</span>
+    <span><i style="background:var(--text-3)"></i>Event</span></div>`;
+  const addEvent = html`<div class="actions" style="margin-top:4px"><a class="btn secondary" href="/events/new?day=${cal.day}" id="add-event">${icon('plus')}Add event</a></div>`;
   if (cal.view === 'week') {
     const items = (d) => [
+      ...(cal.weekEvents || []).filter((e) => e.start_date <= d && e.end_date >= d).map((e) => ({ href: `/events/${e.id}`, cls: 'event',
+        title: `${eventWhen(e, d)}${e.title}`, sub: e.notes || 'Blocked off' })),
       ...cal.weekVisits.filter((e) => e.visit_date === d).map((e) => ({ href: `/estimates/${e.id}`, cls: 'visit',
         title: `${e.visit_time ? `${fmtTime(e.visit_time)} · ` : ''}Estimate: ${e.project_name}`, sub: `${e.client_name}${e.address ? ` · ${e.address}` : ''}` })),
       ...cal.weekJobs.filter((j) => j.start_date <= d && (j.end_date || j.start_date) >= d).map((j) => ({ href: `/jobs/${j.id}`, cls: j.status,
@@ -2263,22 +2313,35 @@ function jobsPage({ jobs, status, cal, flash }) {
     return layout('Jobs', html`
     ${viewSwitch('/jobs', 'week', cal.day)}
     ${weekView({ day: cal.day, today: cal.today, base: '/jobs', items })}
-    ${legend}
+    ${legend}${addEvent}
     <h2>All jobs</h2>
     ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
   }
   return layout('Jobs', html`
   ${viewSwitch('/jobs', 'month', cal.day)}
   ${calendar(cal)}
-  ${legend}
+  ${legend}${addEvent}
   <h2 id="day-jobs">${cal.day === cal.today ? 'Today' : dayName}, ${MONTHS[m - 1]} ${d}${y !== Number(cal.today.slice(0, 4)) ? `, ${y}` : ''}</h2>
+  ${cal.dayEvents?.length ? html`<div class="list" id="day-events">${cal.dayEvents.map((e) => html`<a class="li" href="/events/${e.id}">
+    <span class="icon-bubble" style="background:var(--surface-2);color:var(--text-2)">${icon('calendar')}</span>
+    <div class="main-t"><div class="t">${eventWhen(e, cal.day)}${e.title}</div>
+      <div class="s">${e.start_date !== e.end_date ? `${fmtDate(e.start_date)} – ${fmtDate(e.end_date)}` : 'Event'}${e.notes ? ` · ${e.notes}` : ''}</div></div>${chev()}</a>`)}</div>` : ''}
   ${cal.dayVisits?.length ? html`<div class="list" id="day-visits">${cal.dayVisits.map((e) => html`<a class="li" href="/estimates/${e.id}">
     <span class="icon-bubble" style="background:var(--accent-soft);color:var(--accent)">${icon('file')}</span>
     <div class="main-t"><div class="t">${e.visit_time ? `${fmtTime(e.visit_time)} · ` : ''}Estimate: ${e.project_name}</div>
       <div class="s">${e.client_name}${e.address ? ` · ${e.address}` : ''}</div></div>${pill(e.status, ESTIMATE_STATUS)}${chev()}</a>`)}</div>` : ''}
-  ${cal.dayJobs.length || !cal.dayVisits?.length ? jobList(cal.dayJobs, 'No jobs scheduled this day.') : ''}
+  ${cal.dayJobs.length || (!cal.dayVisits?.length && !cal.dayEvents?.length) ? jobList(cal.dayJobs, 'No jobs scheduled this day.') : ''}
   <h2>All jobs</h2>
   ${chips('/jobs', JOB_STATUS, status)}${jobList(jobs, 'No jobs.')}`, { flash });
+}
+
+// Completed jobs that still have money owed on them (from the Outstanding box on Home).
+function outstandingPage({ jobs }) {
+  const total = jobs.reduce((a, j) => a + j.balance_cents, 0);
+  return layout('Outstanding', html`
+  <div class="stats"><div class="stat wide-sm"><div class="k">Total outstanding</div><div class="v" id="owed-total">${fmt(total)}</div>
+    <div class="s">${jobs.length} completed job${jobs.length === 1 ? '' : 's'} with payments still due</div></div></div>
+  ${jobList(jobs, 'Every completed job is paid in full.', { owed: true })}`, { back: { href: '/', label: 'Home' } });
 }
 
 function jobPage({ job, client, changeOrders = [], offers = [], expenses, payments, crew = [], members = [], subCrew = [], subs = [], canEmail = false, invoices = [], invoicing = {}, photos = [], time = [], forms = {}, emails = [], flash }) {
@@ -2401,7 +2464,8 @@ function jobPage({ job, client, changeOrders = [], offers = [], expenses, paymen
     <div class="hint">For cash, checks and other payments received outside the app. Invoices paid online are recorded automatically.</div>
     <div class="form-actions"><button type="submit" class="secondary">Record payment</button></div>
   </form>
-  ${emailHistory(emails)}`, { flash, back: { href: '/jobs', label: 'Jobs' } });
+  ${emailHistory(emails)}
+  <p class="hint" style="text-align:center;margin-top:22px"><a href="/jobs/${job.id}/delete" id="delete-job" style="color:var(--red);font-weight:600">Delete this job</a></p>`, { flash, back: { href: '/jobs', label: 'Jobs' } });
 }
 
 // ---------- Change orders (on the job page) ----------
@@ -2673,7 +2737,7 @@ function messagePage(title, message) {
     <a class="btn secondary block" href="/">Back to home</a>`);
 }
 
-module.exports = {
+module.exports = { outstandingPage, eventFormPage,
   ESTIMATE_STATUS, JOB_STATUS, REFERRAL_STATUS, offerPage, nav, publicEstimatePage, changeOrderPublicPage, portalPage, reportsPage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, textsPage, textThreadPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,
