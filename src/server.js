@@ -2224,8 +2224,15 @@ async function health() {
 const PUBLIC_RE = /^\/e\/([0-9a-f]{64})(?:\/(logo|pdf|approve|decline))?$/;
 const clientIp = (req) => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().slice(0, 64);
 
+// The client ticked the optional "text me" box (estimate page or their project page): save their number and their consent.
+async function saveTextOptIn(db, clientId, phone) {
+  await db.run(`UPDATE clients SET phone = ?, sms_consent = true, sms_opted_out_at = NULL, updated_at = now() WHERE id = ?`, sms.e164(phone), clientId);
+}
+// Whether the company texts clients (or is setting texting up), so clients are offered the optional "text me" checkbox.
+const offersTexts = async (db, orgId) => !!(await db.get('SELECT 1 FROM sms_senders WHERE org_id = ? UNION ALL SELECT 1 FROM sms_registrations WHERE org_id = ? LIMIT 1', orgId, orgId));
 async function publicEstimateData(db, estimate) {
   const company = await mailer.companyOf(db, estimate.org_id);
+  company.offers_texts = await offersTexts(db, estimate.org_id);
   const profile = (await db.get('SELECT estimate_terms, website, license_number, logo IS NOT NULL AS has_logo FROM company_profiles WHERE org_id = ?', estimate.org_id)) || {};
   const job = await db.get('SELECT id FROM jobs WHERE estimate_id = ?', estimate.id);
   return {
@@ -2317,7 +2324,7 @@ async function publicEstimate(req, url) {
 
   // Approve: choose an option, sign, agree. The estimate becomes a job right away.
   const values = { option: str(f.option, 60), signer_name: str(f.signer_name, 200), signature: String(f.signature || ''),
-    agree: f.agree === 'on', deposit_email: str(f.deposit_email, 200) };
+    agree: f.agree === 'on', deposit_email: str(f.deposit_email, 200), sms_optin: f.sms_optin === 'on', sms_phone: str(f.sms_phone, 30) };
   const outcome = await asServer(async (db) => {
     const e = await db.get('SELECT * FROM estimates WHERE public_token = ? FOR UPDATE', token);
     if (!e) return { notFound: true };
@@ -2329,7 +2336,9 @@ async function publicEstimate(req, url) {
     if (values.signature && !/^data:image\/png;base64,[A-Za-z0-9+/=]{100,300000}$/.test(values.signature)) errors.signature = 'Please sign again.';
     if (!values.agree) errors.agree = 'Check the box to approve the estimate.';
     if (values.deposit_email && !email.validEmail(values.deposit_email)) errors.deposit_email = 'Email address does not look valid.';
+    if (values.sms_optin && !sms.e164(values.sms_phone)) errors.sms_phone = 'Enter a US mobile number for texts, or uncheck the box.';
     if (hasErrors(errors)) return { errors, data: await publicEstimateData(db, e) };
+    if (values.sms_optin) await saveTextOptIn(db, e.client_id, values.sms_phone);
     await db.run(`UPDATE estimates SET status = 'approved', chosen_option = ?, approved_at = now(), signer_name = ?, signature = ?,
       signer_ip = ?, signer_agent = ?, decline_reason = NULL, updated_at = now() WHERE id = ?`,
     totals.options.length ? values.option : null, values.signer_name, values.signature || null, clientIp(req),
@@ -2372,10 +2381,11 @@ async function publicEstimate(req, url) {
 
 // ---------- The client portal (no login: the link's secret token is the key) ----------
 // One page per client with their estimates, jobs, change orders to sign, invoices to pay and job photos.
-const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|photos\/(\d+)|co\/(\d+)(?:\/(approve|decline))?))?$/;
+const PORTAL_RE = /^\/c\/([0-9a-f]{64})(?:\/(logo|texts|photos\/(\d+)|co\/(\d+)(?:\/(approve|decline))?))?$/;
 
 async function portalCompany(db, orgId) {
   const company = await mailer.companyOf(db, orgId);
+  company.offers_texts = await offersTexts(db, orgId);
   const profile = (await db.get('SELECT estimate_terms, website, license_number, logo IS NOT NULL AS has_logo FROM company_profiles WHERE org_id = ?', orgId)) || {};
   return { company: { ...company, terms: profile.estimate_terms || '', website: profile.website || '', license_number: profile.license_number || '' }, hasLogo: !!profile.has_logo };
 }
@@ -2442,6 +2452,24 @@ async function clientPortal(req, url) {
       return ok(v.portalPage({ ...(await portalData(db, client)), token, flash: url.searchParams.get('msg') }));
     });
   }
+  if (req.method === 'POST' && action === 'texts') {
+    // Text updates on the client's project page: optional, on or off.
+    const f = formObj(await readBody(req));
+    const on = f.sms_optin === 'on'; const phone = str(f.sms_phone, 30);
+    const r = await asServer(async (db) => {
+      const client = await findClient(db);
+      if (!client) return null;
+      if (on && !sms.e164(phone)) {
+        return { errors: { sms_phone: 'Enter a US mobile number for texts.' }, data: await portalData(db, client) };
+      }
+      if (on) await saveTextOptIn(db, client.id, phone);
+      else await db.run('UPDATE clients SET sms_consent = false, updated_at = now() WHERE id = ?', client.id);
+      return { on };
+    });
+    if (!r) return notFoundLink();
+    if (r.errors) return page(422, v.portalPage({ ...r.data, token, smsForm: { values: { sms_optin: true, sms_phone: phone }, errors: r.errors } }));
+    return redirect(`/c/${token}?msg=${encodeURIComponent(r.on ? "You're signed up for text updates. Reply STOP any time to stop." : "You won't get text updates.")}#texts`);
+  }
   if (req.method !== 'POST' || !coAction) return page(405, v.messagePage('Not allowed', 'That action is not allowed.'));
   const f = formObj(await readBody(req));
   const back = (msg) => redirect(`/c/${token}/co/${coId}?msg=${encodeURIComponent(msg)}`);
@@ -2507,6 +2535,7 @@ async function handle(req, res) {
   if (url.pathname === '/healthz' && req.method === 'GET') return health();
   if (['/privacy', '/terms', '/support', '/data-deletion'].includes(url.pathname) && req.method === 'GET') return ok(v.legalPage(url.pathname.slice(1)));
   if (url.pathname === '/texting' && req.method === 'GET') return ok(v.textingPolicyPage(String(url.searchParams.get('company') || '').trim().slice(0, 100)));
+  if (url.pathname === '/texting/opt-in' && req.method === 'GET') return ok(v.textingOptInSample(String(url.searchParams.get('company') || '').trim().slice(0, 100)));
   if (url.pathname.startsWith('/e/')) return publicEstimate(req, url);
   if (url.pathname.startsWith('/c/')) return clientPortal(req, url);
   if (url.pathname.startsWith('/static/') && req.method === 'GET') return staticFile(url.pathname.slice(8)) || page(404, 'Not found');

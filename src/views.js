@@ -53,7 +53,7 @@ h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
 .appbar-spacer{flex:1}
 .page-title{font-size:30px;line-height:1.15;font-weight:750;letter-spacing:-.02em;margin:6px 2px 4px;overflow-wrap:anywhere}
 .page-sub{color:var(--text-2);margin:0 2px 14px;font-size:15px}
-.portal-scope{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.portal-scope summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:15px}.portal-scope .pre{margin-top:8px;font-size:15px}.avatar.big{width:56px;height:56px;font-size:20px}.sizes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.size{display:flex;align-items:center;gap:8px;margin:0}.size span{font-weight:700;min-width:34px}.offer{border:2px solid var(--accent-soft)}
+.sms-optin{margin-top:6px}.sms-optin .hint a{color:inherit;text-decoration:underline}.portal-scope{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.portal-scope summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:15px}.portal-scope .pre{margin-top:8px;font-size:15px}.avatar.big{width:56px;height:56px;font-size:20px}.sizes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.size{display:flex;align-items:center;gap:8px;margin:0}.size span{font-weight:700;min-width:34px}.offer{border:2px solid var(--accent-soft)}
 .avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
 .avatar{width:36px;height:36px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:15px}
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;
@@ -1062,14 +1062,47 @@ function textThreadPage({ client, messages, canText, why, values = {}, errors = 
 }
 
 // Public page explaining how businesses on Keystone get consent to text (carriers' reviewers read it).
+// The optional "text me" checkbox clients tick themselves (estimate approval, project page, and the public example
+// carriers review). Unchecked by default; texting is never required to get an estimate or service.
+function smsOptIn({ company, values = {}, errors = {}, disabled = false }) {
+  const name = company || 'This business';
+  return html`<div class="sms-optin" id="sms-optin">
+    <label class="check"><input type="checkbox" name="sms_optin" ${values.sms_optin ? raw('checked') : ''} ${disabled ? raw('disabled') : ''}>
+      <span>Text me updates about my project (optional)</span></label>
+    ${input('sms_phone', 'Mobile number', values, errors, { type: 'tel', inputmode: 'tel', autocomplete: 'tel' })}
+    <div class="hint">By checking this box, you agree to receive text messages from ${name} about your estimate and project: follow-ups,
+      scheduling reminders and a review request after the job. About 1 to 3 messages per project. Message and data rates may apply.
+      Reply STOP to opt out at any time, HELP for help. Consent is not a condition of purchase or service.
+      <a href="/privacy#text-messages">Privacy policy</a> · <a href="/terms#text-messages">Terms</a></div>
+  </div>`;
+}
+// A public example of that checkbox, for carriers reviewing a company's texting registration.
+function textingOptInSample(company) {
+  const name = company || 'Rivera Painting';
+  return layout('How clients opt in to texts', html`<div class="legal">
+    <a class="mark lg" href="/" aria-label="Keystone">${LOGO}</a>
+    <h1>How clients opt in to texts</h1>
+    <p class="muted">${name} · sent through Keystone</p>
+    <p>Clients choose to get texts themselves. When a client reviews and approves their estimate online, or opens their project page,
+      they see the optional checkbox below. It is unchecked by default, and they don't need to check it to get an estimate or hire ${name}.
+      Only clients who check it (or who say yes when asked directly, recorded by ${name}) are texted. Replying STOP ends all texts.</p>
+    <h2>The form clients see (example)</h2>
+    <div class="form-card" style="margin-top:8px">${smsOptIn({ company: name, values: { sms_phone: '(717) 555-0142' }, disabled: true })}</div>
+    <p class="hint">Example only. <a href="/texting${company ? `?company=${encodeURIComponent(company)}` : ''}">How texts are used</a></p>
+    ${footerLinks()}
+  </div>`, { bare: true, docTitle: 'Text opt-in · Keystone' });
+}
+
 function textingPolicyPage(company) {
   const who = company || 'Businesses using Keystone';
   return layout('Text messages', html`<div class="legal">
     <a class="mark lg" href="/" aria-label="Keystone">${LOGO}</a>
     <h1>Text messages</h1><p class="muted">Keystone · How ${company || 'businesses on Keystone'} text their clients</p>
     <h2>Who gets texts</h2>
-    <p>${who} text only their own clients, and only clients who agreed to get texts. A client agrees when they ask the business for an estimate or schedule work,
-      in person, by phone or in writing. The business then marks that client "OK to text" in Keystone. Clients who haven't agreed are never texted.</p>
+    <p>${who} text only their own clients, and only clients who chose to get texts. Texting is optional: clients don't have to agree to texts
+      to get an estimate or hire the business. A client opts in by checking the unchecked "Text me updates about my project" box when they approve
+      their estimate online or on their project page (<a href="/texting/opt-in${company ? `?company=${encodeURIComponent(company)}` : ''}">see the form</a>),
+      or by saying yes when the business asks them directly. Clients who haven't opted in are never texted.</p>
     <h2>What the texts are about</h2>
     <p>Only the client's own estimates and jobs: a follow-up on an estimate they received, a reminder the day before work starts, and a request for a review
       after the job. No marketing, and phone numbers are never sold or shared for marketing.</p>
@@ -1650,7 +1683,7 @@ function clientFields(values, errors, prefix = '') {
     <div>${input(prefix + 'email', 'Email', v, er, { type: 'email', inputmode: 'email' })}</div></div>
     ${input(prefix + 'address', 'Property address', v, er)}
     <label class="check"><input type="checkbox" name="${prefix}sms_consent" ${values[prefix + 'sms_consent'] ? raw('checked') : ''}>
-      <span>OK to text<div class="hint" style="font-weight:400;margin:2px 0 0">The client agreed to get texts from you, like reminders and follow-ups. They can reply STOP any time.</div></span></label>
+      <span>OK to text<div class="hint" style="font-weight:400;margin:2px 0 0">Check only if the client said yes to texts from you, like reminders and follow-ups. Clients can also opt in themselves when they approve an estimate or on their project page. They can reply STOP any time.</div></span></label>
     ${values[prefix + 'sms_opted_out_at'] ? html`<div class="hint">This client replied STOP, so they won't get texts unless they reply START.</div>` : ''}`;
 }
 
@@ -2026,6 +2059,7 @@ function publicEstimatePage({ estimate, company, hasLogo, client, items, totals,
       ${estimate.deposit_percent && canPayOnline ? input('deposit_email', 'Email for the deposit invoice', { deposit_email: values.deposit_email ?? client.email ?? '' }, errors, { type: 'email', inputmode: 'email' }) : ''}
       <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''}> <span>I approve this estimate and agree to the terms above.</span></label>
       ${fieldErr(errors, 'agree')}
+      ${company.offers_texts && !(client.sms_consent && !client.sms_opted_out_at) ? smsOptIn({ company: company.name, values: { sms_optin: values.sms_optin, sms_phone: values.sms_phone ?? client.phone ?? '' }, errors }) : ''}
       <div class="form-actions"><button type="submit" class="block" id="approve" ${preview ? raw('disabled') : ''}>${icon('check')}Approve estimate</button></div>
       ${estimate.deposit_percent && canPayOnline ? html`<div class="hint">Next, you'll be taken to a secure Stripe page to pay the deposit.</div>` : ''}
     </div>` : ''}
@@ -2157,7 +2191,7 @@ function changeOrderPublicPage({ client, co, job, company, hasLogo, token, value
   </div>${open ? html`<script>${raw(SIGNATURE_JS)}</script>` : ''}`, { bare: true, flash, docTitle: `${co.title} · ${company.name}` });
 }
 
-function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, token, flash }) {
+function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, invoices, photos, token, flash, smsForm }) {
   const base = `/c/${token}`;
   const toSign = changeOrders.filter((c) => c.status === 'pending');
   const toPay = invoices.filter((i) => i.status === 'open' && i.hosted_url);
@@ -2195,6 +2229,11 @@ function portalPage({ client, company, hasLogo, jobs, estimates, changeOrders, i
   ${estimates.filter((e) => e.status !== 'sent').length ? html`<h2>Other estimates</h2><div class="list">${estimates.filter((e) => e.status !== 'sent').map((e) => html`<a class="li" href="/e/${e.public_token}">
     <div class="main-t"><div class="t">${e.project_name}</div><div class="s">${fmt(e.total_cents)}</div></div>${pill(e.status, ESTIMATE_STATUS)}${chev()}</a>`)}</div>` : ''}
   ${!jobs.length && !estimates.length ? html`<div class="empty">Nothing here yet.</div>` : ''}
+  ${company.offers_texts ? html`<h2 id="texts">Text updates</h2>
+  <form method="post" action="${base}/texts" class="form-card" novalidate>
+    ${smsOptIn({ company: company.name, ...(smsForm || { values: { sms_optin: client.sms_consent && !client.sms_opted_out_at, sms_phone: client.phone || '' } }) })}
+    <div class="form-actions"><button type="submit" class="secondary">Save</button></div>
+  </form>` : ''}
   ${company.phone || company.email ? html`<p class="hint" style="text-align:center;margin-top:18px">Questions? ${company.phone ? html`Call <a href="tel:${company.phone}">${company.phone}</a>` : ''}${company.phone && company.email ? ' or ' : ''}${company.email ? html`email <a href="mailto:${company.email}">${company.email}</a>` : ''}</p>` : ''}
   <p class="pub-foot">Sent with Keystone</p>
   </div>`, { bare: true, flash, docTitle: `Your projects · ${company.name}` });
@@ -2737,7 +2776,7 @@ function messagePage(title, message) {
     <a class="btn secondary block" href="/">Back to home</a>`);
 }
 
-module.exports = { outstandingPage, eventFormPage,
+module.exports = { outstandingPage, eventFormPage, textingOptInSample,
   ESTIMATE_STATUS, JOB_STATUS, REFERRAL_STATUS, offerPage, nav, publicEstimatePage, changeOrderPublicPage, portalPage, reportsPage, schedulePage, scheduleJobPage, crewHomePage, crewJobsPage, confirmPage, loginPage, signupPage, welcomePage,
   legalPage, accountPage, descriptionsPage, billingPage, teamPage, memberPage, settingsPage, homePage, clientsPage, clientFormPage, clientPage, estimatesPage, estimateFormPage, estimatePage,
   jobsPage, jobPage, entryFormPage, textingPage, textingPolicyPage, textsPage, textThreadPage, confirmDeletePage, messagePage, landingPage, forgotPage, resetPage, deleteAccountPage, deleteCompanyPage, importPage, subPage,

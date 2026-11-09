@@ -1434,7 +1434,9 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     assert.equal(tv.fields.has('CustomerProfileSid'), false, "filed under the company's own details, not Keystone's profile"); assert.equal(tv.fields.get('BusinessCity'), 'Lancaster'); assert.equal(tv.fields.get('BusinessStateProvinceRegion'), 'PA');
     assert.equal(tv.fields.get('BusinessWebsite'), 'https://louflooring.com'); assert.equal(tv.fields.get('BusinessContactPhone'), '+17175550100');
     assert.deepEqual(tv.fields.getAll('UseCaseCategories'), ['ACCOUNT_NOTIFICATIONS', 'CUSTOMER_CARE']);
-    assert.equal(tv.fields.get('OptInImageUrls'), `${BASE}/texting?company=Lou%20Flooring%20LLC`);
+    assert.deepEqual(tv.fields.getAll('OptInImageUrls'), [`${BASE}/texting/opt-in?company=Lou%20Flooring%20LLC`, `${BASE}/texting?company=Lou%20Flooring%20LLC`]);
+    assert.equal(tv.fields.get('OptInType'), 'WEB_FORM'); assert.match(tv.fields.get('AdditionalInformation'), /not a condition of purchase or service/);
+    assert.match(tv.fields.get('UseCaseSummary'), /only those who opted in/);
     assert.match(tv.fields.get('ProductionMessageSample'), /^Lou Flooring LLC: .*Reply STOP to opt out\.$/);
     page = (await getPage('/settings/texting')).body; assert.match(page, /Waiting for carrier approval/); assert.match(page, /\+1833555/);
     // While in review: edit and resubmit replaces the request (same number)
@@ -1457,7 +1459,10 @@ test('self-serve texting: business details, toll-free number, carrier verificati
 
     // The public consent page the carriers look at
     const res = await fetch(`${BASE}/texting?company=Lou%20Flooring%20LLC`); assert.equal(res.status, 200);
-    assert.match(await res.text(), /Lou Flooring LLC text only their own clients/);
+    assert.match(await res.text(), /Lou Flooring LLC text only their own clients[\s\S]*Texting is optional/);
+    const optin = await (await fetch(`${BASE}/texting/opt-in?company=Lou%20Flooring%20LLC`)).text();
+    assert.match(optin, /Text me updates about my project \(optional\)/); assert.match(optin, /Consent is not a condition of purchase or service/);
+    assert.match(optin, /name="sms_optin"\s+disabled/); assert.doesNotMatch(optin, /name="sms_optin" checked/);
     for (const pg of ['/privacy', '/terms']) assert.match(await (await fetch(BASE + pg)).text(), /id="text-messages"[\s\S]*Reply STOP/);
 
     // Rejected: the reason shows, and fixing the details edits the same verification
@@ -1500,6 +1505,24 @@ test('self-serve texting: business details, toll-free number, carrier verificati
     assert.ok(page.indexOf('Does 8am work?') < page.indexOf('Yes 8 is great'), 'oldest first');
     assert.match(page, /id="send-text"/);
     assert.doesNotMatch((await getPage('/texts')).body, /1 new/, 'opening the conversation marks it read');
+
+    // Clients opt in themselves: an optional, unchecked box on their project page and when approving an estimate
+    const anonPost = (p, form) => fetch(BASE + p, { method: 'POST', redirect: 'manual', body: new URLSearchParams(form), headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    const qTok = (await q('SELECT portal_token FROM clients WHERE id = $1', [quinn]))[0].portal_token;
+    page = await (await fetch(`${BASE}/c/${qTok}`)).text();
+    assert.match(page, /id="texts"/); assert.match(page, /Text me updates about my project \(optional\)/); assert.doesNotMatch(page, /name="sms_optin" checked/);
+    assert.equal((await anonPost(`/c/${qTok}/texts`, { sms_optin: 'on', sms_phone: '12' })).status, 422);
+    r = await anonPost(`/c/${qTok}/texts`, { sms_optin: 'on', sms_phone: '717-555-0456' }); assert.equal(r.status, 303);
+    assert.deepEqual(await q('SELECT sms_consent, phone FROM clients WHERE id = $1', [quinn]), [{ sms_consent: true, phone: '+17175550456' }]);
+    assert.match((await getPage('/texts')).body, /Quinn Diaz/);
+    await anonPost(`/c/${qTok}/texts`, { sms_phone: '717-555-0456' });
+    assert.equal((await q('SELECT sms_consent FROM clients WHERE id = $1', [quinn]))[0].sms_consent, false, 'and can turn it off');
+    r = await post('/clients', { name: 'Rae Kim', phone: '' }); const rae = idFrom(r.location);
+    r = await post('/estimates', new URLSearchParams([['client_id', String(rae)], ['status', 'sent'], ['deposit_percent', '0'], ['item_desc', 'Floors'], ['item_qty', '1'], ['item_price', '900']]));
+    const eTok = (await q('SELECT public_token FROM estimates WHERE id = $1', [idFrom(r.location)]))[0].public_token;
+    page = await (await fetch(`${BASE}/e/${eTok}`)).text(); assert.match(page, /id="sms-optin"/);
+    r = await anonPost(`/e/${eTok}/approve`, { signer_name: 'Rae Kim', agree: 'on', sms_optin: 'on', sms_phone: '(717) 555-0789' }); assert.equal(r.status, 303);
+    assert.deepEqual(await q('SELECT sms_consent, phone FROM clients WHERE id = $1', [rae]), [{ sms_consent: true, phone: '+17175550789' }]);
 
     // Deleting the company gives the number back
     r = await post('/settings/delete-company', { confirm: 'lou flooring' }); assert.equal(r.status, 303);
